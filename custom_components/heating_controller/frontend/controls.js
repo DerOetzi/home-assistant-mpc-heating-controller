@@ -237,12 +237,14 @@ export const ecoStepper = (stateObj, { hass, effectiveValue, setNumber }) => {
   return box;
 };
 
-// Maps supply_status straight to what the row shows. Three of the five states
+// Maps supply_status straight to what the row shows. Four of the six states
 // can never mean "this is the temperature the source must hit" -- no
-// requirement exists, it could never bind, or there is no source running to
-// judge against -- so those read as words rather than a misleading number.
+// requirement exists, the room is coasting on stored heat, it could never
+// bind, or there is no source running to judge against -- so those read as
+// words rather than a misleading number.
 const SUPPLY_PRESENTATION = {
   no_requirement: { textKey: "supply_no_requirement", verdict: "" },
+  surplus: { textKey: "supply_surplus", verdict: "idle" },
   below_threshold: { textKey: "supply_below_threshold", verdict: "idle" },
   source_inactive: { textKey: "supply_source_inactive", verdict: "idle" },
   undersupplied: { verdict: "low" },
@@ -251,6 +253,7 @@ const SUPPLY_PRESENTATION = {
 
 const SUPPLY_HINT_KEYS = {
   no_requirement: "supply_hint_no_requirement",
+  surplus: "supply_hint_surplus",
   below_threshold: "supply_hint_below_threshold",
   source_inactive: "supply_hint_source_inactive",
   undersupplied: "supply_hint_undersupplied",

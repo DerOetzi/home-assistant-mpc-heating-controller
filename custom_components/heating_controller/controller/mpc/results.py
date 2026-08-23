@@ -55,3 +55,5 @@ class RoomMpcResult:
     requested_heating_power_w: float
     available_heating_power_w: float
     recommended_flow_temperature_c: float | None
+    hold_flow_temperature_c: float | None = None
+    flow_gate_closed: bool = False

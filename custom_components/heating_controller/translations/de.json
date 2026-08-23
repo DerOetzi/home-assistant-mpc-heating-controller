@@ -62,6 +62,9 @@
           "mpc_hold_time_s": "Haltezeit (s)",
           "mpc_hold_override_demand_pct": "Haltezeit-Override-Anforderung (%)",
           "mpc_max_demand_step_pct": "Max. Anforderungsänderung je Zyklus (%)",
+          "flow_gate_close_surplus_c": "Überschuss-Gate: schließen ab Soll + (K)",
+          "flow_gate_open_surplus_c": "Überschuss-Gate: öffnen unter Soll + (K)",
+          "flow_gate_hold_time_s": "Überschuss-Gate: Haltezeit vor dem Schließen (s)",
           "max_sensor_age_s": "Max. Sensoralter (s)",
           "flow_threshold_c": "Wärmeerzeuger-Vorlaufschwelle (°C)"
         }
@@ -126,6 +129,9 @@
           "mpc_hold_time_s": "Haltezeit (s)",
           "mpc_hold_override_demand_pct": "Haltezeit-Override-Anforderung (%)",
           "mpc_max_demand_step_pct": "Max. Anforderungsänderung je Zyklus (%)",
+          "flow_gate_close_surplus_c": "Überschuss-Gate: schließen ab Soll + (K)",
+          "flow_gate_open_surplus_c": "Überschuss-Gate: öffnen unter Soll + (K)",
+          "flow_gate_hold_time_s": "Überschuss-Gate: Haltezeit vor dem Schließen (s)",
           "max_sensor_age_s": "Max. Sensoralter (s)",
           "flow_threshold_c": "Wärmeerzeuger-Vorlaufschwelle (°C)"
         }
@@ -191,6 +197,9 @@
     "sensor": {
       "min_flow_temperature": {
         "name": "Mindestvorlauftemperatur"
+      },
+      "hold_flow_temperature": {
+        "name": "Haltevorlauftemperatur"
       },
       "heating_demand": {
         "name": "Heizleistungsanforderung"

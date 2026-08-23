@@ -64,8 +64,6 @@ def _seed_entities(
         "input_boolean.comfort_release", "on" if comfort_release else "off"
     )
     hass.states.async_set("sensor.outdoor_temperature", "-3.0")
-    # The heat source is a climate entity: state == "heat" means space heating
-    # is enabled, current_temperature is the leaving-water (flow) temperature.
     hass.states.async_set(
         "climate.heat_source",
         "heat" if heat_available else "off",
@@ -114,11 +112,6 @@ async def test_setup_seeds_state_and_computes_result(hass: HomeAssistant) -> Non
 async def test_periodic_sensor_poll_keeps_room_temperature_fresh(
     hass: HomeAssistant, freezer
 ) -> None:
-    # Regression: a physical sensor that only reports every ~60 minutes (no
-    # state-changed event in between) must not go stale within
-    # max_sensor_age_s (1800s here) -- the coordinator has to actively
-    # re-read it periodically (matching the Node-RED original's 5-minute
-    # poll-state nodes), not rely solely on state-changed events.
     _seed_entities(hass)
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
     entry.add_to_hass(hass)
@@ -129,7 +122,7 @@ async def test_periodic_sensor_poll_keeps_room_temperature_fresh(
 
     assert coordinator.mpc.get_room_temperature_result().valid is True
 
-    for _ in range(7):  # 7 x 5 min = 35 min, past the 1800s (30 min) max age
+    for _ in range(7):
         freezer.tick(timedelta(minutes=5))
         async_fire_time_changed(hass)
         await hass.async_block_till_done()
@@ -157,8 +150,6 @@ async def test_window_open_forces_frost_protection(hass: HomeAssistant) -> None:
 async def test_manual_selection_bypasses_forced_frost_protection_for_eco(
     hass: HomeAssistant,
 ) -> None:
-    # Scenario 1: Frostschutz erzwungen -> Absenk gedrueckt -> Absenk
-    # einstellen und Automatik deaktivieren.
     _seed_entities(hass, heat_available=False)
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
     entry.add_to_hass(hass)
@@ -179,11 +170,6 @@ async def test_manual_selection_bypasses_forced_frost_protection_for_eco(
 async def test_manual_selection_bypasses_forced_frost_protection_for_comfort(
     hass: HomeAssistant,
 ) -> None:
-    # Scenario 2: Frostschutz erzwungen -> Komfort gedrueckt -> Komfort
-    # einstellen und Automatik deaktivieren. Regression: comfort_release=on
-    # means automatic selection would pick COMFORT anyway -- picking the same
-    # mode automatic would choose must not make any difference to whether the
-    # manual selection wins over forced frost protection.
     _seed_entities(hass, heat_available=False)
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
     entry.add_to_hass(hass)
@@ -204,9 +190,6 @@ async def test_manual_selection_bypasses_forced_frost_protection_for_comfort(
 async def test_manual_frost_protection_selection_keeps_automation_deactivated(
     hass: HomeAssistant,
 ) -> None:
-    # Scenario 3: Komfort manuell eingestellt und Automatik deswegen
-    # deaktiviert -> Frostschutz gedrueckt -> Frostschutz einstellen,
-    # Automatik bleibt aus.
     _seed_entities(hass, heat_available=False)
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
     entry.add_to_hass(hass)
@@ -228,9 +211,6 @@ async def test_manual_frost_protection_selection_keeps_automation_deactivated(
 async def test_unblock_reactivates_automation_and_reasserts_forced_frost_protection(
     hass: HomeAssistant,
 ) -> None:
-    # Scenario 4: Komfort manuell eingestellt und Automatik deswegen
-    # deaktiviert -> Automatik-Button gedrueckt -> Automatik reaktivieren,
-    # Frostschutz erzwingen (heat_available ist immer noch aus).
     _seed_entities(hass, heat_available=False)
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
     entry.add_to_hass(hass)
@@ -291,9 +271,6 @@ async def test_heating_unavailable_disables_learning(hass: HomeAssistant) -> Non
 async def test_heat_source_off_with_hot_flow_forces_frost_protection(
     hass: HomeAssistant,
 ) -> None:
-    # DHW case: heat source in "off" mode but leaving water is hot (49C).
-    # Correctly "not available" -- a flow-only threshold would wrongly say
-    # available. This is the concrete case observed live.
     _seed_entities(hass, heat_available=False, flow_temp=49.0)
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
     entry.add_to_hass(hass)
@@ -311,7 +288,6 @@ async def test_heat_source_off_with_hot_flow_forces_frost_protection(
 async def test_heat_source_heat_mode_but_flow_below_threshold_is_inactive(
     hass: HomeAssistant,
 ) -> None:
-    # Space heating enabled but flow still cold (warm-up): not usable yet.
     _seed_entities(hass, flow_temp=25.0)
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
     entry.add_to_hass(hass)
@@ -346,10 +322,6 @@ async def test_heat_source_heat_mode_and_hot_flow_is_active(
 async def test_min_flow_reports_normal_mode_demand_while_forced_frost(
     hass: HomeAssistant,
 ) -> None:
-    # Forced frost (heat source off) while the room is cold and wants comfort:
-    # the minimum-flow sensor must report the NORMAL-mode requirement (the
-    # demand signalled towards the heat pump), decoupled from forced frost,
-    # while the actual applied result drives the TRV to frost protection.
     _seed_entities(hass, heat_available=False)
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
     entry.add_to_hass(hass)
@@ -359,20 +331,15 @@ async def test_min_flow_reports_normal_mode_demand_while_forced_frost(
     await coordinator.async_setup()
 
     assert coordinator.current_heat_mode == HeatMode.FROST_PROTECTION
-    # Forced frost drives the room, but the recorded basis stays on the mode
-    # the automation picked -- that is the whole point of the separate value.
     assert coordinator.normal_heat_mode == HeatMode.COMFORT
     assert coordinator.normal_target_temperature_c == 22.0
     assert coordinator.normal_result is not None
     assert coordinator.normal_min_flow_temperature_c is not None
     assert coordinator.normal_min_flow_temperature_c > 0
-    # Actual applied target is frost protection, not the normal comfort target.
     assert (
         coordinator.base_temperature_c
         == ENTRY_DATA["frost_protection_temperature_c"]
     )
-    # Heat source off but the requirement is real and above the threshold:
-    # whether it is met cannot be judged from a source that isn't running.
     assert coordinator.trv_active is False
     assert coordinator.flow_supply_status == FlowSupplyStatus.SOURCE_INACTIVE
 
@@ -382,9 +349,6 @@ async def test_min_flow_reports_normal_mode_demand_while_forced_frost(
 async def test_flow_supply_status_undersupplied_when_running_below_requirement(
     hass: HomeAssistant,
 ) -> None:
-    # Room already at target and outdoor cold: the hold branch alone decides,
-    # so the requirement is stable regardless of the current flow -- unlike the
-    # requested branch, which reacts to the room still catching up.
     _seed_entities(hass, flow_temp=31.0)
     hass.states.async_set("sensor.outdoor_temperature", "5.0")
     hass.states.async_set("sensor.wohnzimmer_temperatur", "22.0")
@@ -406,7 +370,6 @@ async def test_flow_supply_status_undersupplied_when_running_below_requirement(
 async def test_flow_supply_status_sufficient_when_flow_covers_requirement(
     hass: HomeAssistant,
 ) -> None:
-    # Same stable requirement as the undersupplied case, but with flow above it.
     _seed_entities(hass, flow_temp=60.0)
     hass.states.async_set("sensor.outdoor_temperature", "5.0")
     hass.states.async_set("sensor.wohnzimmer_temperatur", "22.0")
@@ -428,13 +391,8 @@ async def test_flow_supply_status_sufficient_when_flow_covers_requirement(
 async def test_flow_supply_status_below_threshold_for_a_never_binding_requirement(
     hass: HomeAssistant,
 ) -> None:
-    # Mild weather: the room still has a requirement, but one the heat source
-    # is always above whenever it runs at all. Below-threshold outranks
-    # whether the source happens to be running.
     _seed_entities(hass)
     hass.states.async_set("sensor.outdoor_temperature", "19.5")
-    # At target, so the hold branch alone decides and the requested branch
-    # (which reflects catching up, not holding) stays out of the way.
     hass.states.async_set("sensor.wohnzimmer_temperatur", "22.5")
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
     entry.add_to_hass(hass)
@@ -447,7 +405,6 @@ async def test_flow_supply_status_below_threshold_for_a_never_binding_requiremen
     assert required is not None
     assert 0 < required < ENTRY_DATA["flow_threshold_c"]
     assert coordinator.flow_supply_status == FlowSupplyStatus.BELOW_THRESHOLD
-    # The basis the value was computed from must be readable alongside it.
     assert coordinator.normal_heat_mode == HeatMode.COMFORT
     assert coordinator.normal_target_temperature_c == 22.0
 
@@ -469,6 +426,51 @@ async def test_flow_supply_status_no_requirement_when_ambient_holds_target(
 
     assert coordinator.normal_min_flow_temperature_c == 0
     assert coordinator.flow_supply_status == FlowSupplyStatus.NO_REQUIREMENT
+
+    coordinator.async_unload()
+
+
+async def test_flow_supply_status_surplus_while_the_room_coasts_above_target(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set("sensor.outdoor_temperature", "12.0")
+    hass.states.async_set("sensor.wohnzimmer_temperatur", "25.0")
+    hass.states.async_set(
+        "climate.heizung_wohnzimmer", "heat", {"current_temperature": 25.0}
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN, data={**ENTRY_DATA, "flow_gate_hold_time_s": 0.0}
+    )
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+
+    assert coordinator.normal_flow_gate_closed is True
+    assert coordinator.normal_min_flow_temperature_c == 0
+    assert coordinator.flow_supply_status == FlowSupplyStatus.SURPLUS
+    assert coordinator.normal_hold_flow_temperature_c > 0
+
+    coordinator.async_unload()
+
+
+async def test_entries_without_flow_gate_settings_fall_back_to_defaults(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set("sensor.outdoor_temperature", "12.0")
+    hass.states.async_set("sensor.wohnzimmer_temperatur", "25.0")
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+
+    assert coordinator.normal_flow_gate_closed is False
+    assert coordinator.normal_min_flow_temperature_c > 0
 
     coordinator.async_unload()
 
@@ -508,10 +510,6 @@ async def test_trv_active_switch_turned_off_when_unavailable(
 async def test_setup_tolerates_missing_heat_source_climate_entity(
     hass: HomeAssistant,
 ) -> None:
-    # A config entry created before heat_source_climate_entity existed must
-    # still load (degraded: no heat source -> trv_active False -> forced frost,
-    # correct in summer) instead of crashing, so it survives a restart until
-    # re-configured via the options flow.
     _seed_entities(hass)
     legacy_data = {
         key: value
@@ -576,7 +574,6 @@ async def test_room_comfort_conditions_gate_comfort_like_global_ones(
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
 
-    # Global condition is on, room-specific one is off -> no comfort.
     assert coordinator.state.is_comfort() is False
 
     hass.states.async_set("switch.arbeitszimmer_aktiv", "on")

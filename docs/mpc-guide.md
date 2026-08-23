@@ -91,3 +91,41 @@ Each room independently reports its own required minimum flow temperature (see t
 several rooms, the room asking for the highest flow temperature at any moment is the one
 actually determining what the shared source needs to deliver — worth keeping in mind when
 tuning any individual room's design values.
+
+## The surplus gate
+
+A room's minimum flow temperature has a floor: the flow needed to *hold* its setpoint at
+the current outdoor temperature. That floor is what keeps the source from dropping its
+flow the moment a room reaches its setpoint, which would only cool it down again.
+
+The floor is computed at the setpoint, though, not at the room's actual temperature — so
+on its own it would keep reporting a requirement for a room sitting well above setpoint on
+stored heat, typically after a warm spell in spring or autumn. The surplus gate suppresses
+the floor in exactly that case. It closes only when both signals agree:
+
+- the model wants no heat over its prediction horizon (heating demand at 0 %), **and**
+- the room is above its current target by more than **"close above setpoint"**
+
+Both are needed. Demand alone also reads 0 % for a room sitting exactly at setpoint, which
+is precisely where the floor must stay.
+
+Closing waits for **"hold time"** to pass with the condition continuously true, because
+closing withdraws a heat requirement and can be what keeps a heat source from starting.
+Reopening has no such delay and happens on the first cycle where demand appears or the
+surplus falls below **"reopen below setpoint"** — restoring a requirement is the safe
+direction. The two different thresholds are what stops a room drifting around the
+deadband from flapping the requirement on and off.
+
+While the gate is closed the card's minimum-flow row reads "Coasting on stored heat" and
+the `sensor.<room>_min_flow_temperature` entity reads 0. That is distinct from "No
+requirement", which means the outdoor temperature alone holds the setpoint — the surplus
+case will come back once the stored heat is used up, the no-requirement case will not until
+the weather turns.
+
+Because the gated value reads 0 for much of the shoulder season, the underlying number
+stays available separately as `sensor.<room>_hold_flow_temperature`. It reports the
+ungated hold requirement — what the room would need to hold its setpoint at the current
+outdoor temperature, regardless of stored heat — and keeps accruing long-term statistics
+throughout. It depends only on the setpoint and the outdoor temperature, which makes it
+the useful one for judging where your building's heating limit actually sits; the gated
+entity is the one to act on.

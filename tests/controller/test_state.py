@@ -97,10 +97,6 @@ def test_resolve_display_mode_shows_frost_protection_when_forced():
 
 
 def test_blocked_bypasses_forced_frost_protection_regardless_of_chosen_mode():
-    # Any manual selection (blocked=True) wins over forced frost protection,
-    # whether the window is open, heating is unavailable, or both -- and
-    # regardless of which mode was actually picked (including frost
-    # protection itself, scenario 3 in the reported spec).
     controller = make_controller()
     controller.update_window_state("a", True)
     controller.set_trv_active(False)
@@ -116,9 +112,6 @@ def test_blocked_bypasses_forced_frost_protection_regardless_of_chosen_mode():
 
 
 def test_unblocking_reasserts_forced_frost_protection_if_still_applicable():
-    # Scenario 4: reactivating hands control back to automatic selection,
-    # which re-forces frost protection if window/heating conditions still
-    # call for it.
     controller = make_controller()
     controller.set_trv_active(False)
     controller.set_active_heat_mode(HeatMode.COMFORT)

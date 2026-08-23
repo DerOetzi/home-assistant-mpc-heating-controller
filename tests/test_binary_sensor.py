@@ -37,7 +37,6 @@ async def test_exposes_configured_window_contacts(hass: HomeAssistant) -> None:
 
 
 async def test_window_contacts_empty_when_room_has_none(hass: HomeAssistant) -> None:
-    # Arbeitszimmer-style room: no window contacts configured at all.
     data = {**ENTRY_DATA, "window_contact_entities": []}
     await _setup(hass, data)
 
@@ -47,7 +46,6 @@ async def test_window_contacts_empty_when_room_has_none(hass: HomeAssistant) -> 
 
 
 async def test_window_contacts_present_when_key_missing(hass: HomeAssistant) -> None:
-    # Entries created before the key existed must not break the card.
     data = {k: v for k, v in ENTRY_DATA.items() if k != "window_contact_entities"}
     await _setup(hass, data)
 
@@ -59,8 +57,6 @@ async def test_window_contacts_present_when_key_missing(hass: HomeAssistant) -> 
 async def test_exposes_only_room_specific_comfort_conditions(
     hass: HomeAssistant,
 ) -> None:
-    # The house-wide switch lives in comfort_condition_entities and must not
-    # show up in the card; only the room-specific one does.
     data = {
         **ENTRY_DATA,
         "room_comfort_condition_entities": ["input_boolean.gast_zu_besuch"],
@@ -75,7 +71,6 @@ async def test_exposes_only_room_specific_comfort_conditions(
 
 
 async def test_comfort_conditions_empty_when_key_missing(hass: HomeAssistant) -> None:
-    # Entries created before the split have no room-specific list at all.
     assert "room_comfort_condition_entities" not in ENTRY_DATA
     await _setup(hass, ENTRY_DATA)
 

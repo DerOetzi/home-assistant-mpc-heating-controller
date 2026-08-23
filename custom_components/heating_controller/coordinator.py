@@ -18,6 +18,9 @@ from .const import (
     CONF_DESIGN_INDOOR_TEMPERATURE,
     CONF_DESIGN_OUTDOOR_TEMPERATURE,
     CONF_DESIGN_TEMPERATURE_SYSTEM,
+    CONF_FLOW_GATE_CLOSE_SURPLUS,
+    CONF_FLOW_GATE_HOLD_TIME,
+    CONF_FLOW_GATE_OPEN_SURPLUS,
     CONF_FLOW_THRESHOLD,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
     CONF_MAX_SENSOR_AGE,
@@ -47,6 +50,9 @@ from .const import (
     CONF_WINDOW_CONTACT_ENTITIES,
     CONF_BOOST_TEMPERATURE_OFFSET,
     CONF_FROST_PROTECTION_TEMPERATURE,
+    DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C,
+    DEFAULT_FLOW_GATE_HOLD_TIME_S,
+    DEFAULT_FLOW_GATE_OPEN_SURPLUS_C,
     DEFAULT_FLOW_THRESHOLD_C,
     HEAT_SOURCE_ACTIVE_STATE,
     DesignTemperatureSystem,
@@ -56,7 +62,11 @@ from .const import (
     LEARNING_CYCLE_INTERVAL_MINUTES,
     PanelRadiatorType,
 )
-from .controller.mpc.controller import MpcRateLimitConfig, RoomMpcController
+from .controller.mpc.controller import (
+    FlowGateConfig,
+    MpcRateLimitConfig,
+    RoomMpcController,
+)
 from .controller.mpc.results import RoomMpcResult
 from .controller.mpc.types import LearningFactors, RoomThermalConfig, TrvConfig
 from .controller.state import HeatingStateConfig, HeatingStateController
@@ -152,11 +162,23 @@ class HeatingRoomCoordinator:
             hold_override_demand_pct=self.data[CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT],
             max_demand_step_pct=self.data[CONF_MPC_MAX_DEMAND_STEP_PCT],
         )
+        flow_gate_config = FlowGateConfig(
+            close_surplus_c=self.data.get(
+                CONF_FLOW_GATE_CLOSE_SURPLUS, DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C
+            ),
+            open_surplus_c=self.data.get(
+                CONF_FLOW_GATE_OPEN_SURPLUS, DEFAULT_FLOW_GATE_OPEN_SURPLUS_C
+            ),
+            hold_time_s=self.data.get(
+                CONF_FLOW_GATE_HOLD_TIME, DEFAULT_FLOW_GATE_HOLD_TIME_S
+            ),
+        )
         self.mpc = RoomMpcController(
             thermal_config=thermal_config,
             trvs=_build_trv_configs(self._trv_entries),
             rate_limit_config=rate_limit_config,
             max_sensor_age_s=self.data[CONF_MAX_SENSOR_AGE],
+            flow_gate_config=flow_gate_config,
         )
 
         self.store = LearningFactorsStore(hass, self.room_name, entry.entry_id)
@@ -397,9 +419,6 @@ class HeatingRoomCoordinator:
         else:
             self.mpc.disable_learning()
 
-        # Recorded, not re-derived on read: the minimum flow temperature is only
-        # interpretable together with the mode and target it was computed from,
-        # and both can move between a compute and someone reading the sensor.
         self.normal_heat_mode = self.state.current_heat_mode
         normal_target = self.state.effective_target_temperature(
             self.state.determine_base_target_temperature(self.normal_heat_mode)
@@ -485,10 +504,28 @@ class HeatingRoomCoordinator:
         return result.recommended_flow_temperature_c if result else None
 
     @property
+    def normal_hold_flow_temperature_c(self) -> float | None:
+        """The ungated hold requirement -- what the room would need at setpoint.
+
+        Unlike normal_min_flow_temperature_c this keeps following the weather
+        while the surplus gate is closed, which is what makes the gate's effect
+        (and the seasonal heating limit behind it) observable.
+        """
+        result = self.normal_result
+        return result.hold_flow_temperature_c if result else None
+
+    @property
+    def normal_flow_gate_closed(self) -> bool | None:
+        result = self.normal_result
+        return result.flow_gate_closed if result else None
+
+    @property
     def flow_supply_status(self) -> FlowSupplyStatus:
 
         required = self.normal_min_flow_temperature_c
         if required is None or required <= 0:
+            if self.normal_flow_gate_closed:
+                return FlowSupplyStatus.SURPLUS
             return FlowSupplyStatus.NO_REQUIREMENT
         
         if required < self._flow_threshold_c:

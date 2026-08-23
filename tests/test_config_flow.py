@@ -182,9 +182,6 @@ async def test_duplicate_room_name_is_aborted(hass: HomeAssistant) -> None:
 async def test_options_flow_writes_entry_data_and_covers_trvs(
     hass: HomeAssistant,
 ) -> None:
-    # The coordinator reads entry.data, so the options flow must update
-    # entry.data (not entry.options). It must also walk the TRV steps so
-    # per-TRV settings like trv_active_switch can be reconfigured.
     _seed_entities(hass)
 
     async def climate_handler(call: ServiceCall) -> None:

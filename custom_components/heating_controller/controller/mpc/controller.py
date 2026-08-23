@@ -32,6 +32,62 @@ class MpcRateLimitConfig:
 
 
 @dataclass
+class FlowGateConfig:
+    close_surplus_c: float = 0.5
+    open_surplus_c: float = 0.2
+    hold_time_s: float = 900.0
+
+
+class _SurplusFlowGate:
+    """Suppresses the hold-flow requirement while the room is coasting.
+
+    The hold-flow branch answers "what flow holds the setpoint", computed from
+    the *target* temperature, so it stays positive all through the shoulder
+    season even for a room sitting well above setpoint on stored heat. That is
+    the right steady-state floor at setpoint -- without it the source would
+    drop its flow the moment demand hits zero and the room would oscillate --
+    but it is a phantom requirement while a real surplus exists.
+
+    So the gate closes only on both signals together: the optimizer wants no
+    heat over its horizon (demand zero), and the room is above target by more
+    than a deadband. The deadband is what keeps the gate off the steady-state
+    case, where demand is also zero but the floor must stay.
+
+    Hysteresis is asymmetric and time-guarded in one direction only: closing
+    withdraws a heat requirement and can gate a heat-source start, so it must
+    be deliberate; reopening restores one and happens immediately.
+    """
+
+    def __init__(self, config: FlowGateConfig) -> None:
+        self._config = config
+        self._closed = False
+        self._surplus_since_ts: float | None = None
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def update(self, surplus_c: float, demand_pct: float, now_ts: float) -> bool:
+        if self._closed:
+            if demand_pct > 0 or surplus_c < self._config.open_surplus_c:
+                self._closed = False
+                self._surplus_since_ts = None
+            return self._closed
+
+        if demand_pct > 0 or surplus_c <= self._config.close_surplus_c:
+            self._surplus_since_ts = None
+            return self._closed
+
+        if self._surplus_since_ts is None:
+            self._surplus_since_ts = now_ts
+
+        if now_ts - self._surplus_since_ts >= self._config.hold_time_s:
+            self._closed = True
+
+        return self._closed
+
+
+@dataclass
 class _DemandPrediction:
     demand_pct: float
     predicted_temperature_c: float
@@ -52,8 +108,13 @@ class RoomMpcController:
         trvs: list[TrvConfig],
         rate_limit_config: MpcRateLimitConfig,
         max_sensor_age_s: float,
+        flow_gate_config: FlowGateConfig | None = None,
     ) -> None:
         self._rate_limit_config = rate_limit_config
+
+        gate_config = flow_gate_config or FlowGateConfig()
+        self._live_flow_gate = _SurplusFlowGate(gate_config)
+        self._preview_flow_gate = _SurplusFlowGate(gate_config)
 
         self._sensors = RoomMpcSensors(trvs, max_sensor_age_s)
         self._emitter_model = HeatEmitterModel(thermal_config, trvs)
@@ -122,8 +183,16 @@ class RoomMpcController:
             available_heating_power_w * (stabilized_demand_pct / 100), 0.01
         )
 
+        flow_gate = self._live_flow_gate if apply_side_effects else self._preview_flow_gate
+        flow_gate_closed = flow_gate.update(
+            surplus_c=mpc_input.room_temp_c - mpc_input.target_temp_c,
+            demand_pct=stabilized_demand_pct,
+            now_ts=mpc_input.now_ts,
+        )
+
+        hold_flow_temperature_c = self._calculate_hold_flow_temperature_c(mpc_input)
         recommended_flow_temperature_c = self._calculate_recommended_flow_temperature_c(
-            mpc_input, requested_heating_power_w
+            mpc_input, requested_heating_power_w, hold_flow_temperature_c, flow_gate_closed
         )
 
         if apply_side_effects:
@@ -142,27 +211,37 @@ class RoomMpcController:
             requested_heating_power_w=requested_heating_power_w,
             available_heating_power_w=available_heating_power_w,
             recommended_flow_temperature_c=recommended_flow_temperature_c,
+            hold_flow_temperature_c=hold_flow_temperature_c,
+            flow_gate_closed=flow_gate_closed,
         )
         return RoomMpcComputeResult(valid=True, result=result)
 
-    def _calculate_recommended_flow_temperature_c(
-        self, mpc_input: RoomMpcInput, requested_heating_power_w: float
-    ) -> float:
+    def _calculate_hold_flow_temperature_c(self, mpc_input: RoomMpcInput) -> float | None:
+        """Flow needed to hold the setpoint -- ungated, weather-driven only."""
         hold_power_w = max(
             0.0,
             self._loss_model.calculate_heat_loss_w(
                 mpc_input.target_temp_c, mpc_input.outdoor_temp_c
             ),
         )
-        hold_flow_c = self._emitter_model.calculate_recommended_flow_temperature_c(
+        return self._emitter_model.calculate_recommended_flow_temperature_c(
             hold_power_w, mpc_input.target_temp_c
         )
+
+    def _calculate_recommended_flow_temperature_c(
+        self,
+        mpc_input: RoomMpcInput,
+        requested_heating_power_w: float,
+        hold_flow_temperature_c: float | None,
+        flow_gate_closed: bool,
+    ) -> float:
+        hold_flow_c = 0.0 if flow_gate_closed else (hold_flow_temperature_c or 0.0)
 
         requested_flow_c = self._emitter_model.calculate_recommended_flow_temperature_c(
             requested_heating_power_w, mpc_input.room_temp_c
         )
 
-        return max(hold_flow_c, requested_flow_c)
+        return max(hold_flow_c, requested_flow_c or 0.0)
 
     def _find_optimal_demand_prediction(self, mpc_input: RoomMpcInput) -> _DemandPrediction:
         best = _DemandPrediction(

@@ -21,8 +21,6 @@ from heating_controller import frontend
 
 _FRONTEND_DIR = Path(frontend._FRONTEND_DIR)
 
-# Dependency order, leaves first. The entry point is deliberately absent: it
-# registers custom elements, which is a side effect the tests do not want.
 _MODULES = [
     "translations.js",
     "const.js",
@@ -65,7 +63,6 @@ def ctx() -> "quickjs.Context":
     context = quickjs.Context()
     context.eval(_DOM_STUBS)
     for name in _MODULES:
-        # A syntax error here means the browser could not load the card either.
         context.eval(_flatten((_FRONTEND_DIR / name).read_text(encoding="utf-8")))
     return context
 
@@ -74,11 +71,6 @@ def _json(ctx, expression: str):
     import json
 
     return json.loads(ctx.eval(f"JSON.stringify({expression})"))
-
-
-# ---------------------------------------------------------------------------
-# Module wiring
-# ---------------------------------------------------------------------------
 
 
 def _imports_of(path: Path) -> list[tuple[str, list[str]]]:
@@ -127,11 +119,6 @@ def test_flatten_order_covers_every_module() -> None:
     assert on_disk == set(_MODULES) | {frontend.CARD_FILENAME}
 
 
-# ---------------------------------------------------------------------------
-# Translations
-# ---------------------------------------------------------------------------
-
-
 def test_translations_cover_the_same_keys(ctx) -> None:
     """A key present in one language and missing in another falls back
     silently to English, which reads as a bug rather than a gap."""
@@ -153,11 +140,6 @@ def test_translation_falls_back_and_substitutes(ctx) -> None:
         )
         == "This device is missing entities (mode)."
     )
-
-
-# ---------------------------------------------------------------------------
-# Config round-trip
-# ---------------------------------------------------------------------------
 
 
 def test_normalize_accepts_both_forms(ctx) -> None:
@@ -224,10 +206,6 @@ def test_normalize_detail_keeps_key_and_entity_entries(ctx) -> None:
         {"entity": "sensor.y", "name": "Y"},
     ]
 
-
-# ---------------------------------------------------------------------------
-# Entity resolution and seeded rows
-# ---------------------------------------------------------------------------
 
 _HASS_FIXTURE = """
 var hass = {
@@ -300,7 +278,6 @@ def test_managed_row_defaults(ctx) -> None:
     assert by_key["room_sensor"]["value"] == "21.4 °C"
     assert by_key["room_sensor"]["name"] == "Sensor"
     assert by_key["trv:climate.gross"]["name"] == "Heizung groß"
-    # Trailing zeros are dropped: the digits argument is a maximum, not a width.
     assert by_key["trv:climate.gross"]["value"] == "21.1 °C → 5 °C"
     assert by_key["window:binary_sensor.fenster_a"]["value"] == "Closed"
 
@@ -315,10 +292,6 @@ def test_managed_rows_follow_the_language(ctx) -> None:
 
 
 def test_managed_header_rows_seed_the_room_temperature(ctx) -> None:
-    # The room-temperature entity is a managed header row: present with the
-    # room's actual entity/icon, but no on-card label of its own (that comes
-    # only from a config override) -- `label` here is purely the editor
-    # list's own caption, never rendered on the card.
     ctx.eval(_HASS_FIXTURE)
     rows = _json(ctx, "managedHeaderRows(hass, roles)")
     assert rows == [
@@ -343,11 +316,6 @@ def test_managed_header_rows_follow_the_language(ctx) -> None:
     rows = _json(ctx, "managedHeaderRows(hass, roles)")
     assert rows[0]["label"] == "Raumtemperatur"
     ctx.eval('hass.locale.language = "en";')
-
-
-# ---------------------------------------------------------------------------
-# Supply status presentation
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -382,13 +350,7 @@ def test_supply_presentation_survives_an_unknown_status(ctx) -> None:
     )
     assert result["value"] == "34.5 °C"
     assert result["verdict"] == ""
-    # JSON.stringify omits undefined, so an absent key is the "no hint" case.
     assert "hint" not in result
-
-
-# ---------------------------------------------------------------------------
-# Number formatting
-# ---------------------------------------------------------------------------
 
 
 def test_number_formatting_drops_trailing_zeros(ctx) -> None:
@@ -403,10 +365,6 @@ def test_number_formatting_survives_bad_input(ctx) -> None:
     assert ctx.eval('num("unavailable")') == "–"
     assert ctx.eval("num(undefined)") == "–"
 
-
-# ---------------------------------------------------------------------------
-# Boost button: no click-to-toggle-off while active
-# ---------------------------------------------------------------------------
 
 _BUTTON_STUB = """
 var makeButtonStub = function () {
@@ -524,7 +482,6 @@ def test_comfort_condition_toggle_uses_editor_overrides(ctx) -> None:
     )
     assert ctx.eval("row.children[0].innerHTML") == '<ha-icon icon="mdi:briefcase"></ha-icon>Homeoffice'
     assert ctx.eval("row.children[1].innerHTML") == '<ha-icon icon="mdi:home"></ha-icon>Zuhause'
-    # Off is on: the active segment must be the one matching current state.
     assert ctx.eval("row.children[1]._class") == "segment active"
 
 
@@ -552,7 +509,7 @@ def test_comfort_condition_toggle_read_only_shows_single_active_state(ctx) -> No
         """
     )
     assert ctx.eval("el._class") == "value condition-indicator"
-    assert ctx.eval("el.children.length") == 0  # a single element, not a row of segments
+    assert ctx.eval("el.children.length") == 0
     assert ctx.eval("el.innerHTML") == '<span class="num">On</span>'
     ctx.eval('el._listeners.click({ stopPropagation: function () {} });')
     assert _json(ctx, "seen") == ["binary_sensor.homeoffice"]

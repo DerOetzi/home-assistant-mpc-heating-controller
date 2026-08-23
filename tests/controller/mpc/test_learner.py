@@ -53,14 +53,11 @@ def test_full_cycle_learns_ua_factor_when_room_cools_more_than_predicted():
     learner.enable()
 
     start_ts = 1_000_000.0
-    # low applied power -> UA-factor learning branch (< UA_LEARNING_THRESHOLD_W)
     for i in range(6):
         learner.append_history(
             make_input(start_ts + i * 300, room_temp_c=19.0), applied_heating_power_w=100.0
         )
 
-    # set a prediction that undershoots the actual cooling (room ends up colder
-    # than predicted -> positive prediction error -> ua_factor should increase)
     learner.set_prediction(
         LearnerPrediction(
             timestamp=start_ts,
@@ -68,7 +65,6 @@ def test_full_cycle_learns_ua_factor_when_room_cools_more_than_predicted():
             prediction_horizon_s=1800,
         )
     )
-    # rotate so the prediction we just set becomes "active" for the next cycle
     learner.run_learning_cycle()
     assert learner.get_learning_state().status == LearningStatus.WAITING_INTERVAL
 

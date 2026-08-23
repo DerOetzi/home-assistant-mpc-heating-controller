@@ -38,7 +38,10 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
 - **Minimum flow temperature per room** — reports the flow temperature this room's emitters
   need to meet current demand, so a shared heat source's setpoint can be driven by whichever
   room actually needs it (see `sensor.<room>_mindestvorlauftemperatur` /
-  `_minimum_flow_temperature`).
+  `_minimum_flow_temperature`). A surplus gate suppresses the requirement while a room is
+  coasting above its setpoint on stored heat, so the value stays usable as a "does this
+  room need heat now" signal; `sensor.<room>_hold_flow_temperature` keeps reporting the
+  ungated requirement for diagnosis. See [docs/mpc-guide.md](docs/mpc-guide.md).
 - **Persisted learning** — each room's learned `ua_factor`/`capacity_factor` survive
   restarts (`homeassistant.helpers.storage.Store`, one file per room) and are removed
   cleanly if the room's config entry is deleted.

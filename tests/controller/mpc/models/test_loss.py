@@ -14,7 +14,6 @@ def test_base_ua_from_design_heat_load_and_delta():
             room_heat_load_w=1000,
         )
     )
-    # 1000W / (20 - -12)K = 31.25 W/K
     assert model.effective_ua_w_per_k == 31.25
 
 
@@ -43,5 +42,4 @@ def test_design_temperature_delta_is_floored_to_avoid_division_by_zero():
             room_heat_load_w=1000,
         )
     )
-    # delta clamped to 0.1 => 1000 / 0.1 = 10000
     assert model.effective_ua_w_per_k == 10000

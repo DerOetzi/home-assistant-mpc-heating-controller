@@ -62,6 +62,9 @@
           "mpc_hold_time_s": "Hold time (s)",
           "mpc_hold_override_demand_pct": "Hold override demand (%)",
           "mpc_max_demand_step_pct": "Max demand step per cycle (%)",
+          "flow_gate_close_surplus_c": "Surplus gate: close above setpoint + (K)",
+          "flow_gate_open_surplus_c": "Surplus gate: reopen below setpoint + (K)",
+          "flow_gate_hold_time_s": "Surplus gate: hold time before closing (s)",
           "max_sensor_age_s": "Max sensor age (s)",
           "flow_threshold_c": "Heat-source flow threshold (°C)"
         }
@@ -126,6 +129,9 @@
           "mpc_hold_time_s": "Hold time (s)",
           "mpc_hold_override_demand_pct": "Hold override demand (%)",
           "mpc_max_demand_step_pct": "Max demand step per cycle (%)",
+          "flow_gate_close_surplus_c": "Surplus gate: close above setpoint + (K)",
+          "flow_gate_open_surplus_c": "Surplus gate: reopen below setpoint + (K)",
+          "flow_gate_hold_time_s": "Surplus gate: hold time before closing (s)",
           "max_sensor_age_s": "Max sensor age (s)",
           "flow_threshold_c": "Heat-source flow threshold (°C)"
         }
@@ -191,6 +197,9 @@
     "sensor": {
       "min_flow_temperature": {
         "name": "Minimum flow temperature"
+      },
+      "hold_flow_temperature": {
+        "name": "Hold flow temperature"
       },
       "heating_demand": {
         "name": "Heating demand"

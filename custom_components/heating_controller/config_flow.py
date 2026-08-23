@@ -15,6 +15,9 @@ from .const import (
     CONF_DESIGN_INDOOR_TEMPERATURE,
     CONF_DESIGN_OUTDOOR_TEMPERATURE,
     CONF_DESIGN_TEMPERATURE_SYSTEM,
+    CONF_FLOW_GATE_CLOSE_SURPLUS,
+    CONF_FLOW_GATE_HOLD_TIME,
+    CONF_FLOW_GATE_OPEN_SURPLUS,
     CONF_FLOW_THRESHOLD,
     CONF_FROST_PROTECTION_TEMPERATURE,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
@@ -44,6 +47,9 @@ from .const import (
     CONF_TRV_WIDTH_MM,
     CONF_TRVS,
     CONF_WINDOW_CONTACT_ENTITIES,
+    DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C,
+    DEFAULT_FLOW_GATE_HOLD_TIME_S,
+    DEFAULT_FLOW_GATE_OPEN_SURPLUS_C,
     DEFAULT_FLOW_THRESHOLD_C,
     DOMAIN,
     DesignTemperatureSystem,
@@ -263,6 +269,24 @@ def _mpc_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_MPC_MAX_DEMAND_STEP_PCT,
                 default=defaults.get(CONF_MPC_MAX_DEMAND_STEP_PCT, 20.0),
+            ): vol.Coerce(float),
+            vol.Required(
+                CONF_FLOW_GATE_CLOSE_SURPLUS,
+                default=defaults.get(
+                    CONF_FLOW_GATE_CLOSE_SURPLUS, DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C
+                ),
+            ): vol.Coerce(float),
+            vol.Required(
+                CONF_FLOW_GATE_OPEN_SURPLUS,
+                default=defaults.get(
+                    CONF_FLOW_GATE_OPEN_SURPLUS, DEFAULT_FLOW_GATE_OPEN_SURPLUS_C
+                ),
+            ): vol.Coerce(float),
+            vol.Required(
+                CONF_FLOW_GATE_HOLD_TIME,
+                default=defaults.get(
+                    CONF_FLOW_GATE_HOLD_TIME, DEFAULT_FLOW_GATE_HOLD_TIME_S
+                ),
             ): vol.Coerce(float),
             vol.Required(
                 CONF_MAX_SENSOR_AGE, default=defaults.get(CONF_MAX_SENSOR_AGE, 1800.0)

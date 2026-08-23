@@ -20,6 +20,7 @@ async def async_setup_entry(
     async_add_entities(
         [
             MinFlowTemperatureSensor(coordinator),
+            HoldFlowTemperatureSensor(coordinator),
             HeatingDemandSensor(coordinator),
             RequestedHeatingPowerSensor(coordinator),
             AvailableHeatingPowerSensor(coordinator),
@@ -61,6 +62,51 @@ class MinFlowTemperatureSensor(_DiagnosticSensor):
             ),
             "calculation_target_temperature_c": (
                 self._coordinator.normal_target_temperature_c
+            ),
+            "flow_gate_closed": self._coordinator.normal_flow_gate_closed,
+            "hold_flow_temperature_c": (
+                self._coordinator.normal_hold_flow_temperature_c
+            ),
+        }
+
+
+class HoldFlowTemperatureSensor(_DiagnosticSensor):
+    """The hold requirement before the surplus gate.
+
+    Same number the minimum-flow sensor used to report unconditionally: what
+    this room would need to hold its setpoint at the current outdoor
+    temperature, regardless of how much stored heat it is currently sitting
+    on. Carries a state class so it keeps accruing long-term statistics
+    through the shoulder season, when the gated sensor reads zero.
+    """
+
+    _attr_translation_key = "hold_flow_temperature"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+
+    def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
+        super().__init__(coordinator, "hold_flow_temperature")
+
+    @property
+    def native_value(self) -> float | None:
+        return self._coordinator.normal_hold_flow_temperature_c
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        result = self._coordinator.normal_result
+        return {
+            "flow_gate_closed": self._coordinator.normal_flow_gate_closed,
+            "gated_min_flow_temperature_c": (
+                self._coordinator.normal_min_flow_temperature_c
+            ),
+            "calculation_target_temperature_c": (
+                self._coordinator.normal_target_temperature_c
+            ),
+            "room_surplus_c": (
+                round(result.input.room_temp_c - result.input.target_temp_c, 2)
+                if result
+                else None
             ),
         }
 

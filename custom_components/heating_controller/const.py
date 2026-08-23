@@ -8,6 +8,10 @@ DEFAULT_COMFORT_TEMPERATURE_C = 22.0
 DEFAULT_ECO_TEMPERATURE_OFFSET_C = -2.0
 DEFAULT_FLOW_THRESHOLD_C = 30.0
 
+DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C = 0.5
+DEFAULT_FLOW_GATE_OPEN_SURPLUS_C = 0.2
+DEFAULT_FLOW_GATE_HOLD_TIME_S = 900.0
+
 MAX_TRV_COUNT = 3
 
 HEAT_SOURCE_ACTIVE_STATE = "heat"
@@ -49,6 +53,9 @@ CONF_MPC_DEMAND_HYSTERESIS_PCT = "mpc_demand_hysteresis_pct"
 CONF_MPC_HOLD_TIME = "mpc_hold_time_s"
 CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT = "mpc_hold_override_demand_pct"
 CONF_MPC_MAX_DEMAND_STEP_PCT = "mpc_max_demand_step_pct"
+CONF_FLOW_GATE_CLOSE_SURPLUS = "flow_gate_close_surplus_c"
+CONF_FLOW_GATE_OPEN_SURPLUS = "flow_gate_open_surplus_c"
+CONF_FLOW_GATE_HOLD_TIME = "flow_gate_hold_time_s"
 CONF_MAX_SENSOR_AGE = "max_sensor_age_s"
 
 SERVICE_UNBLOCK = "unblock"
@@ -72,6 +79,7 @@ class FlowSupplyStatus(StrEnum):
     """
 
     NO_REQUIREMENT = "no_requirement"
+    SURPLUS = "surplus"
     BELOW_THRESHOLD = "below_threshold"
     SOURCE_INACTIVE = "source_inactive"
     UNDERSUPPLIED = "undersupplied"

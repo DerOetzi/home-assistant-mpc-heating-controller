@@ -26,10 +26,13 @@ export const TRANSLATIONS = {
 
     // Card — minimum flow supply status
     supply_no_requirement: "No requirement",
+    supply_surplus: "Coasting on stored heat",
     supply_below_threshold: "Below operating threshold",
     supply_source_inactive: "Source inactive",
     supply_hint_no_requirement:
       "Ambient temperature alone holds the target, no flow needed",
+    supply_hint_surplus:
+      "Room is above target on stored heat – the requirement returns once that is used up",
     supply_hint_below_threshold:
       "Requirement is below the heat pump's operating threshold – can never become binding",
     supply_hint_source_inactive: "Heat pump is not running – cannot be judged",
@@ -98,10 +101,13 @@ export const TRANSLATIONS = {
     row_min_flow: "Mindestvorlauftemperatur",
 
     supply_no_requirement: "Keine Anforderung",
+    supply_surplus: "Zehrt von gespeicherter Wärme",
     supply_below_threshold: "Unter Betriebsschwelle",
     supply_source_inactive: "Quelle inaktiv",
     supply_hint_no_requirement:
       "Außentemperatur allein hält das Ziel, kein Vorlauf nötig",
+    supply_hint_surplus:
+      "Raum liegt über Soll und zehrt vom Wärmepuffer – die Anforderung kommt zurück, sobald der aufgebraucht ist",
     supply_hint_below_threshold:
       "Anforderung liegt unter der Betriebsschwelle der Wärmepumpe – kann nie bestimmend werden",
     supply_hint_source_inactive: "Wärmepumpe läuft gerade nicht – nicht bewertbar",

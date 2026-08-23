@@ -33,10 +33,6 @@ def _expected_power_per_meter(radiator_type, height_mm):
 
 
 def _available_power_at_design_delta(radiator_type, width_mm, height_mm):
-    # At the 75/65 system the design/reference overtemperature ratio is 1, so a
-    # room 50 K below the design mean temperature (70 - 20 = 50) sees the raw
-    # table power per meter directly, with no temperature-exponent scaling to
-    # account for.
     model = make_model(
         [
             TrvConfig(
@@ -53,7 +49,6 @@ def _available_power_at_design_delta(radiator_type, width_mm, height_mm):
 
 def test_available_power_is_zero_when_room_at_or_above_mean_temperature():
     model = make_model([TrvConfig(name="trv1")])
-    # design system 55/45 has a mean temperature of 50C; room at 50C -> no delta
     assert model.calculate_available_heating_power_w(50, flow_temperature_c=55) == 0
 
 
@@ -93,7 +88,6 @@ def test_two_trvs_split_demand_by_distribution_weight():
     )
     model = make_model([big, small])
     targets = model.calculate_target_temperatures(80)
-    # the larger emitter should be asked to run hotter than the smaller one
     assert targets[0] >= targets[1]
 
 
@@ -122,13 +116,11 @@ def test_recommended_flow_uses_part_load_spread():
     model = HeatEmitterModel(
         RoomThermalConfig(room_heat_load_w=1200), [TrvConfig(name="trv1")]
     )
-    required_w = 300  # a quarter of the design load -> spread 2.5 K, not 10 K
+    required_w = 300
 
     flow_c = model.calculate_recommended_flow_temperature_c(required_w, 20)
 
     assert model.calculate_available_heating_power_w(20, flow_c, 2.5) >= required_w
-    # With the design spread the same flow would look insufficient, which is
-    # what used to push the recommendation several kelvin too high.
     assert model.calculate_available_heating_power_w(20, flow_c) < required_w
 
 
@@ -143,7 +135,6 @@ def test_forward_direction_keeps_design_spread():
 
 
 def test_panel_radiator_at_reference_height_matches_the_table_value():
-    # No scaling should apply at exactly REFERENCE_HEIGHT_MM.
     power = _available_power_at_design_delta(PanelRadiatorType.TYPE_10, 1000, 600)
     assert power == PANEL_RADIATOR_REFERENCE_POWER_W_PER_METER[PanelRadiatorType.TYPE_10]
 

@@ -1,4 +1,5 @@
 from heating_controller.controller.mpc.controller import (
+    FlowGateConfig,
     MpcRateLimitConfig,
     RoomMpcController,
 )
@@ -6,13 +7,27 @@ from heating_controller.controller.mpc.results import RoomMpcErrorCode
 from heating_controller.controller.mpc.types import RoomThermalConfig, TrvConfig
 
 
-def make_controller(**rate_limit_overrides):
+def make_controller(flow_gate_config=None, **rate_limit_overrides):
     return RoomMpcController(
         thermal_config=RoomThermalConfig(room_heat_load_w=1200),
         trvs=[TrvConfig(name="trv1")],
         rate_limit_config=MpcRateLimitConfig(**rate_limit_overrides),
         max_sensor_age_s=1800,
+        flow_gate_config=flow_gate_config,
     )
+
+
+def make_gated_controller(**gate_overrides):
+    """Controller whose surplus gate closes on the first cycle that qualifies."""
+    overrides = {"hold_time_s": 0.0, **gate_overrides}
+    return make_controller(flow_gate_config=FlowGateConfig(**overrides))
+
+
+def feed_coasting_room(controller):
+    """Room coasting well above target on stored heat; outdoor below target."""
+    controller.set_room_sensor_temperature(27.5)
+    controller.set_outdoor_temperature(21.1)
+    controller.set_flow_temperature(26.0)
 
 
 def test_compute_fails_without_sensor_data():
@@ -65,9 +80,6 @@ def test_hysteresis_suppresses_small_demand_changes():
 
 
 def test_compute_returns_zero_result_instead_of_error_when_no_heating_power_available():
-    # room already warmer than the emitter's mean temperature at this flow
-    # temp (e.g. summer, heating switched off) -- a normal, valid state, not
-    # an error: demand/power/flow-temperature should read 0, not "unknown".
     controller = make_controller()
     controller.set_room_sensor_temperature(26.9)
     controller.set_outdoor_temperature(26.2)
@@ -82,9 +94,6 @@ def test_compute_returns_zero_result_instead_of_error_when_no_heating_power_avai
 
 
 def test_recommended_flow_floored_at_heat_loss_when_current_flow_too_cold():
-    # Below target, but the current flow is too cold to extract anything right
-    # now (available power 0). The recommended flow must still report the flow
-    # needed to hold the target (floored at the heat loss at target), not 0.
     controller = make_controller()
     controller.set_room_sensor_temperature(19.0)
     controller.set_outdoor_temperature(-5.0)
@@ -98,9 +107,6 @@ def test_recommended_flow_floored_at_heat_loss_when_current_flow_too_cold():
 
 
 def test_recommended_flow_is_the_hold_flow_independent_of_current_room_temp():
-    # The floored (hold-the-target) flow is evaluated at the target operating
-    # point, so it depends only on (target, outdoor) -- two rooms at different
-    # current temperatures but the same target/outdoor get the same flow.
     colder = make_controller()
     colder.set_room_sensor_temperature(18.0)
     colder.set_outdoor_temperature(-5.0)
@@ -121,8 +127,6 @@ def test_recommended_flow_is_the_hold_flow_independent_of_current_room_temp():
 
 
 def test_recommended_flow_zero_when_ambient_alone_holds_target():
-    # Outdoor warmer than the target: heat loss at target is non-positive, so
-    # no heat-source flow is required to hold the target.
     controller = make_controller()
     controller.set_room_sensor_temperature(19.0)
     controller.set_outdoor_temperature(24.0)
@@ -135,27 +139,18 @@ def test_recommended_flow_zero_when_ambient_alone_holds_target():
 
 
 def test_recommended_flow_reported_while_room_coasts_above_target_and_outdoor():
-    # Regression (live, summer): room well above target from solar gain while
-    # outdoor sits below target. The recommended flow states what the heat
-    # source must be able to supply to hold the target -- that requirement does
-    # not disappear just because the room is momentarily warm, so it must not
-    # read 0 here.
     controller = make_controller()
-    controller.set_room_sensor_temperature(27.5)
-    controller.set_outdoor_temperature(21.1)
-    controller.set_flow_temperature(26.0)
+    feed_coasting_room(controller)
 
     result = controller.compute(target_temperature_c=23.0)
 
     assert result.valid
     assert result.result.demand_pct == 0
+    assert result.result.flow_gate_closed is False
     assert result.result.recommended_flow_temperature_c > 0
 
 
 def test_recommended_flow_unchanged_when_room_drops_to_target():
-    # Same target/outdoor, room now exactly at target: the steady-state
-    # requirement is a function of (target, outdoor) only, so cooling down must
-    # not change it.
     coasting = make_controller()
     coasting.set_room_sensor_temperature(27.5)
     coasting.set_outdoor_temperature(21.1)
@@ -176,16 +171,6 @@ def test_recommended_flow_unchanged_when_room_drops_to_target():
 
 
 def test_recommended_flow_combines_hold_and_requested_branches_independently():
-    # Regression: hold_power_w (evaluated at target) and requested_heating_power_w
-    # (evaluated at the actual, much colder room) must each be converted to a
-    # flow using their OWN reference and then maximised -- picking a single
-    # power+reference pair by "whichever power is larger" is wrong, because the
-    # emitter's power/flow relationship depends heavily on the reference room
-    # temperature: converting the (larger) requested power at the cold actual
-    # room (5C) alone yields a much lower flow than converting the (smaller)
-    # hold power at the warmer target (22C) -- if only the larger-power branch
-    # were kept, the flow actually needed to hold the target would be
-    # under-reported.
     controller = make_controller()
     controller.set_room_sensor_temperature(5.0)
     controller.set_outdoor_temperature(18.0)
@@ -195,17 +180,115 @@ def test_recommended_flow_combines_hold_and_requested_branches_independently():
 
     assert result.valid
     assert result.result.requested_heating_power_w > 0
-    # The hold branch must win even though requested_heating_power_w is larger
-    # in magnitude, because it is evaluated at the much colder actual room (5C)
-    # where far less flow suffices for that power. Compared against the
-    # requested branch alone rather than a fixed temperature, so the assertion
-    # survives changes to the emitter reference data.
     requested_branch_flow_c = (
         controller._emitter_model.calculate_recommended_flow_temperature_c(
             result.result.requested_heating_power_w, result.result.input.room_temp_c
         )
     )
     assert result.result.recommended_flow_temperature_c > requested_branch_flow_c
+
+
+def test_surplus_gate_zeroes_the_requirement_while_the_room_coasts():
+    controller = make_gated_controller()
+    feed_coasting_room(controller)
+
+    result = controller.compute(target_temperature_c=23.0)
+
+    assert result.valid
+    assert result.result.demand_pct == 0
+    assert result.result.flow_gate_closed is True
+    assert result.result.recommended_flow_temperature_c == 0
+    assert result.result.hold_flow_temperature_c > 0
+
+
+def test_surplus_gate_stays_open_for_a_room_sitting_at_its_setpoint():
+    controller = make_gated_controller()
+    controller.set_room_sensor_temperature(23.0)
+    controller.set_outdoor_temperature(21.1)
+    controller.set_flow_temperature(26.0)
+
+    result = controller.compute(target_temperature_c=23.0)
+
+    assert result.valid
+    assert result.result.demand_pct == 0
+    assert result.result.flow_gate_closed is False
+    assert result.result.recommended_flow_temperature_c > 0
+
+
+def test_surplus_gate_does_not_close_within_the_deadband():
+    controller = make_gated_controller(close_surplus_c=0.5)
+    controller.set_room_sensor_temperature(23.4)
+    controller.set_outdoor_temperature(21.1)
+    controller.set_flow_temperature(26.0)
+
+    result = controller.compute(target_temperature_c=23.0)
+
+    assert result.result.flow_gate_closed is False
+    assert result.result.recommended_flow_temperature_c > 0
+
+
+def test_surplus_gate_reopens_immediately_once_the_surplus_is_used_up():
+    controller = make_gated_controller(hold_time_s=0.0, open_surplus_c=0.2)
+    feed_coasting_room(controller)
+    closed = controller.compute(target_temperature_c=23.0)
+    assert closed.result.flow_gate_closed is True
+
+    controller.set_room_sensor_temperature(23.1)
+    reopened = controller.compute(target_temperature_c=23.0)
+
+    assert reopened.result.flow_gate_closed is False
+    assert reopened.result.recommended_flow_temperature_c > 0
+
+
+def test_surplus_gate_keeps_hysteresis_between_close_and_open_thresholds():
+    controller = make_gated_controller(close_surplus_c=0.5, open_surplus_c=0.2)
+    feed_coasting_room(controller)
+    assert controller.compute(target_temperature_c=23.0).result.flow_gate_closed
+
+    controller.set_room_sensor_temperature(23.3)
+    assert controller.compute(target_temperature_c=23.0).result.flow_gate_closed
+
+
+def test_surplus_gate_waits_out_the_hold_time_before_closing():
+    controller = make_controller(flow_gate_config=FlowGateConfig(hold_time_s=900.0))
+    feed_coasting_room(controller)
+
+    assert controller.compute(target_temperature_c=23.0).result.flow_gate_closed is False
+    assert controller.compute(target_temperature_c=23.0).result.flow_gate_closed is False
+
+
+def test_surplus_gate_state_is_separate_per_compute_path():
+    controller = make_gated_controller()
+    controller.set_room_sensor_temperature(19.0)
+    controller.set_outdoor_temperature(-5.0)
+    controller.set_flow_temperature(35.0)
+
+    frost = controller.compute(target_temperature_c=8.0)
+    normal = controller.compute(target_temperature_c=21.0, apply_side_effects=False)
+
+    assert frost.result.flow_gate_closed is True
+    assert frost.result.recommended_flow_temperature_c == 0
+    assert normal.result.flow_gate_closed is False
+    assert normal.result.recommended_flow_temperature_c > 0
+
+
+def test_hold_flow_temperature_is_reported_regardless_of_the_gate():
+    coasting = make_gated_controller()
+    feed_coasting_room(coasting)
+    coasting_result = coasting.compute(target_temperature_c=23.0)
+
+    settled = make_gated_controller()
+    settled.set_room_sensor_temperature(23.0)
+    settled.set_outdoor_temperature(21.1)
+    settled.set_flow_temperature(26.0)
+    settled_result = settled.compute(target_temperature_c=23.0)
+
+    assert coasting_result.result.flow_gate_closed is True
+    assert settled_result.result.flow_gate_closed is False
+    assert (
+        coasting_result.result.hold_flow_temperature_c
+        == settled_result.result.hold_flow_temperature_c
+    )
 
 
 def test_enable_learning_and_run_learning_cycle_does_not_raise():
