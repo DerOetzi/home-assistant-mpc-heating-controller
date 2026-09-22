@@ -60,6 +60,7 @@ from .const import (
     HeatEmitterType,
     HeatMode,
     LEARNING_CYCLE_INTERVAL_MINUTES,
+    SENSOR_POLL_INTERVAL_MINUTES,
     PanelRadiatorType,
 )
 from .controller.mpc.controller import (
@@ -76,7 +77,6 @@ _LOGGER = logging.getLogger(__name__)
 
 LEARNING_CYCLE_INTERVAL = timedelta(minutes=LEARNING_CYCLE_INTERVAL_MINUTES)
 
-SENSOR_POLL_INTERVAL_MINUTES = 5
 SENSOR_POLL_INTERVAL = timedelta(minutes=SENSOR_POLL_INTERVAL_MINUTES)
 
 WINDOW_OPEN_SUPPRESS_LEARNING_S = 60 * 60

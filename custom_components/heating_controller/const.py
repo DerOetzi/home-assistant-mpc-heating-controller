@@ -61,6 +61,7 @@ CONF_MAX_SENSOR_AGE = "max_sensor_age_s"
 SERVICE_UNBLOCK = "unblock"
 
 LEARNING_CYCLE_INTERVAL_MINUTES = 30
+SENSOR_POLL_INTERVAL_MINUTES = 5
 
 
 class HeatMode(StrEnum):

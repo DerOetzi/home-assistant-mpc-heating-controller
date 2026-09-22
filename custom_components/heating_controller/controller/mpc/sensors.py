@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import logging
 import time
 
-from ...const import MAX_TRV_COUNT, RoomTemperatureStrategy
+from ...const import MAX_TRV_COUNT, SENSOR_POLL_INTERVAL_MINUTES, RoomTemperatureStrategy
 from .results import (
     RoomMpcError,
     RoomMpcErrorCode,
@@ -12,28 +13,38 @@ from .results import (
 )
 from .types import TrvConfig
 
+_LOGGER = logging.getLogger(__name__)
+
 SENSOR_OUTLIER_MIN_SAMPLES = 3
 SENSOR_OUTLIER_MAX_DELTA_C = 5.0
 SENSOR_OUTLIER_WINDOW_SIZE = 10
 SENSOR_OUTLIER_DRIFT_REPEAT_COUNT = 3
 SENSOR_OUTLIER_DRIFT_MATCH_DELTA_C = 1.0
-SENSOR_OUTLIER_DRIFT_MAX_INTERVAL_S = 5 * 60
+# Must exceed the coordinator's poll interval: the poll re-feeds an unchanged
+# state every SENSOR_POLL_INTERVAL_MINUTES, and with an equal window any jitter
+# expires the drift candidate before it can be confirmed.
+SENSOR_OUTLIER_DRIFT_MAX_INTERVAL_S = 2 * SENSOR_POLL_INTERVAL_MINUTES * 60
 
 
 class SensorEntry:
-    def __init__(self, max_age_s: float) -> None:
+    def __init__(
+        self, max_age_s: float, name: str = "sensor", outlier_filter: bool = True
+    ) -> None:
         self._value: float | None = None
         self._timestamp = 0.0
         self._max_age_s = max_age_s
+        self._name = name
+        self._outlier_filter = outlier_filter
         self._accepted_values: list[float] = []
         self._pending_outlier_value: float | None = None
         self._pending_outlier_count = 0
         self._pending_outlier_last_ts = 0.0
 
-    def set_value(self, new_value: float | None) -> None:
-        if self._should_ignore_value(new_value):
+    def set_value(self, new_value: float | None, now_ts: float | None = None) -> None:
+        now_ts = time.time() if now_ts is None else now_ts
+        if self._should_ignore_value(new_value, now_ts):
             return
-        self._store_value(new_value)
+        self._store_value(new_value, now_ts)
 
     def get_fresh_value(self, now_ts: float | None = None) -> float | None:
         now_ts = time.time() if now_ts is None else now_ts
@@ -46,13 +57,29 @@ class SensorEntry:
             return True
         return now_ts - self._timestamp <= self._max_age_s
 
-    def _should_ignore_value(self, new_value: float | None) -> bool:
+    def _should_ignore_value(self, new_value: float | None, now_ts: float) -> bool:
+        if not self._outlier_filter:
+            return False
         if new_value is None or self._value is None:
             return False
         if not self._is_outlier(new_value):
             return False
-        if self._should_accept_outlier_as_drift(new_value, time.time()):
+        if self._should_accept_outlier_as_drift(new_value, now_ts):
+            _LOGGER.debug(
+                "%s: accepting %.2f as drift after %d repeats",
+                self._name,
+                new_value,
+                self._pending_outlier_count,
+            )
             return False
+        _LOGGER.debug(
+            "%s: ignoring outlier %.2f (median %.2f, candidate %d/%d)",
+            self._name,
+            new_value,
+            self._calculate_median(self._accepted_values),
+            self._pending_outlier_count,
+            SENSOR_OUTLIER_DRIFT_REPEAT_COUNT,
+        )
         return True
 
     def _is_outlier(self, new_value: float) -> bool:
@@ -69,13 +96,13 @@ class SensorEntry:
             return (sorted_values[middle - 1] + sorted_values[middle]) / 2
         return sorted_values[middle]
 
-    def _store_value(self, new_value: float | None) -> None:
+    def _store_value(self, new_value: float | None, now_ts: float) -> None:
         self._value = new_value
         if new_value is None:
             return
 
         self._reset_outlier_drift_candidate()
-        self._timestamp = time.time()
+        self._timestamp = now_ts
         self._accepted_values.append(new_value)
         self._trim_accepted_values()
 
@@ -123,25 +150,39 @@ class RoomMpcSensors:
         max_age_s = max(0.0, max_sensor_age_s)
 
         self._trv_temperatures = [
-            SensorEntry(max_age_s) for _ in trvs[:MAX_TRV_COUNT]
+            SensorEntry(max_age_s, name=f"trv{index}")
+            for index, _ in enumerate(trvs[:MAX_TRV_COUNT])
         ]
-        self._room_sensor = SensorEntry(max_age_s)
-        self._outdoor_temperature_sensor = SensorEntry(max_age_s)
-        self._flow_temperature_sensor = SensorEntry(max_age_s)
+        self._room_sensor = SensorEntry(max_age_s, name="room")
+        self._outdoor_temperature_sensor = SensorEntry(max_age_s, name="outdoor")
+        # Flow temperature jumps are physical (compressor start, defrost, a DHW
+        # charge seen on a shared leaving-water sensor), not measurement noise.
+        # Filtering them held stale values until they aged out.
+        self._flow_temperature_sensor = SensorEntry(
+            max_age_s, name="flow", outlier_filter=False
+        )
 
-    def set_trv_temperature(self, index: int, value: float | None) -> None:
+    def set_trv_temperature(
+        self, index: int, value: float | None, now_ts: float | None = None
+    ) -> None:
         if index >= len(self._trv_temperatures):
             return
-        self._trv_temperatures[index].set_value(value)
+        self._trv_temperatures[index].set_value(value, now_ts)
 
-    def set_room_sensor_temperature(self, value: float | None) -> None:
-        self._room_sensor.set_value(value)
+    def set_room_sensor_temperature(
+        self, value: float | None, now_ts: float | None = None
+    ) -> None:
+        self._room_sensor.set_value(value, now_ts)
 
-    def set_outdoor_temperature(self, value: float | None) -> None:
-        self._outdoor_temperature_sensor.set_value(value)
+    def set_outdoor_temperature(
+        self, value: float | None, now_ts: float | None = None
+    ) -> None:
+        self._outdoor_temperature_sensor.set_value(value, now_ts)
 
-    def set_flow_temperature(self, value: float | None) -> None:
-        self._flow_temperature_sensor.set_value(value)
+    def set_flow_temperature(
+        self, value: float | None, now_ts: float | None = None
+    ) -> None:
+        self._flow_temperature_sensor.set_value(value, now_ts)
 
     def get_room_temperature(self, now_ts: float | None = None) -> RoomTemperatureResult:
         now_ts = time.time() if now_ts is None else now_ts
