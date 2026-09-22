@@ -15,7 +15,13 @@ from .results import (
     RoomTemperatureResult,
 )
 from .sensors import RoomMpcSensors
-from .types import LearningFactors, RoomModelLearningState, RoomThermalConfig, TrvConfig
+from .types import (
+    FlowGateState,
+    LearningFactors,
+    RoomModelLearningState,
+    RoomThermalConfig,
+    TrvConfig,
+)
 
 MPC_PREDICTION_HORIZON_S = 1800
 MPC_SIMULATION_STEP_S = 150
@@ -66,6 +72,10 @@ class _SurplusFlowGate:
     @property
     def closed(self) -> bool:
         return self._closed
+
+    def restore(self, closed: bool) -> None:
+        self._closed = closed
+        self._surplus_since_ts = None
 
     def update(self, surplus_c: float, demand_pct: float, now_ts: float) -> bool:
         if self._closed:
@@ -136,6 +146,17 @@ class RoomMpcController:
     @property
     def learned_capacity_factor(self) -> float:
         return self._capacity_model.learned_capacity_factor
+
+    @property
+    def flow_gate_state(self) -> FlowGateState:
+        return FlowGateState(
+            live_closed=self._live_flow_gate.closed,
+            preview_closed=self._preview_flow_gate.closed,
+        )
+
+    def restore_flow_gate_state(self, state: FlowGateState) -> None:
+        self._live_flow_gate.restore(state.live_closed)
+        self._preview_flow_gate.restore(state.preview_closed)
 
     def get_room_temperature_result(self) -> RoomTemperatureResult:
         return self._sensors.get_room_temperature()

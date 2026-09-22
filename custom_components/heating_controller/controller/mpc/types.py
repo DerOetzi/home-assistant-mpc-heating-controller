@@ -43,6 +43,19 @@ class LearningFactors:
 
 
 @dataclass
+class FlowGateState:
+    """Open/closed state of both surplus gates, persisted across restarts.
+
+    Only the closed flag is kept, not the pending close timer: a closed gate
+    reopens immediately if the surplus is gone, so restoring it is safe, while
+    a restored timer could close the gate on a surplus nobody observed.
+    """
+
+    live_closed: bool = False
+    preview_closed: bool = False
+
+
+@dataclass
 class RoomModelLearningState:
     status: LearningStatus
     learned_factors: LearningFactors

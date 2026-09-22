@@ -4,7 +4,11 @@ from heating_controller.controller.mpc.controller import (
     RoomMpcController,
 )
 from heating_controller.controller.mpc.results import RoomMpcErrorCode
-from heating_controller.controller.mpc.types import RoomThermalConfig, TrvConfig
+from heating_controller.controller.mpc.types import (
+    FlowGateState,
+    RoomThermalConfig,
+    TrvConfig,
+)
 
 
 def make_controller(flow_gate_config=None, **rate_limit_overrides):
@@ -301,3 +305,39 @@ def test_enable_learning_and_run_learning_cycle_does_not_raise():
 
     controller.run_learning_cycle()
     controller.disable_learning()
+
+
+def test_restored_closed_gate_stays_closed_within_the_hysteresis_band():
+    controller = make_controller(
+        flow_gate_config=FlowGateConfig(
+            close_surplus_c=0.5, open_surplus_c=0.2, hold_time_s=900.0
+        )
+    )
+    controller.restore_flow_gate_state(
+        FlowGateState(live_closed=True, preview_closed=True)
+    )
+    controller.set_room_sensor_temperature(23.3)
+    controller.set_outdoor_temperature(21.1)
+    controller.set_flow_temperature(26.0)
+
+    live = controller.compute(target_temperature_c=23.0)
+    preview = controller.compute(target_temperature_c=23.0, apply_side_effects=False)
+
+    assert live.result.flow_gate_closed is True
+    assert preview.result.flow_gate_closed is True
+    assert controller.flow_gate_state == FlowGateState(
+        live_closed=True, preview_closed=True
+    )
+
+
+def test_restored_closed_gate_reopens_once_the_surplus_is_gone():
+    controller = make_gated_controller(open_surplus_c=0.2)
+    controller.restore_flow_gate_state(FlowGateState(live_closed=True))
+    controller.set_room_sensor_temperature(23.1)
+    controller.set_outdoor_temperature(21.1)
+    controller.set_flow_temperature(26.0)
+
+    result = controller.compute(target_temperature_c=23.0)
+
+    assert result.result.flow_gate_closed is False
+    assert controller.flow_gate_state.live_closed is False

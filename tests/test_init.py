@@ -74,3 +74,10 @@ async def test_remove_entry_deletes_learning_factors_store(hass: HomeAssistant) 
 
     leftover_store = LearningFactorsStore(hass, ENTRY_DATA["room_name"], entry.entry_id)
     assert await leftover_store.async_load() is None
+
+    from heating_controller.store import FlowGateStateStore
+
+    leftover_gate_store = FlowGateStateStore(
+        hass, ENTRY_DATA["room_name"], entry.entry_id
+    )
+    assert await leftover_gate_store.async_load() is None

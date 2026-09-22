@@ -7,7 +7,10 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from heating_controller.const import DOMAIN, FlowSupplyStatus, HeatMode
-from heating_controller.coordinator import HeatingRoomCoordinator
+from heating_controller.coordinator import (
+    ROOM_SENSOR_STARTUP_GRACE_S,
+    HeatingRoomCoordinator,
+)
 
 ENTRY_DATA = {
     "room_name": "Wohnzimmer",
@@ -583,5 +586,93 @@ async def test_room_comfort_conditions_gate_comfort_like_global_ones(
     hass.states.async_set("switch.arbeitszimmer_aktiv", "off")
     await hass.async_block_till_done()
     assert coordinator.state.is_comfort() is False
+
+    coordinator.async_unload()
+
+
+async def test_closed_flow_gate_survives_a_restart(hass: HomeAssistant) -> None:
+    """A restart must not reopen the gate for a room coasting in the band
+    between the open and close thresholds."""
+    _seed_entities(hass)
+    hass.states.async_set("sensor.outdoor_temperature", "21.0")
+    hass.states.async_set("sensor.wohnzimmer_temperatur", "25.0")
+    _register_fake_climate_set_temperature(hass)
+
+    closing_entry = MockConfigEntry(
+        domain=DOMAIN, data={**ENTRY_DATA, "flow_gate_hold_time_s": 0.0}
+    )
+    closing_entry.add_to_hass(hass)
+    before_restart = HeatingRoomCoordinator(hass, closing_entry)
+    await before_restart.async_setup()
+    assert before_restart.normal_flow_gate_closed is True
+    before_restart.async_unload()
+
+    hass.states.async_set("sensor.wohnzimmer_temperatur", "22.4")
+
+    # Same entry (same store), now with the default close hold time, so the
+    # gate cannot simply close again on the first cycle.
+    restarted_entry = MockConfigEntry(
+        domain=DOMAIN, data=ENTRY_DATA, entry_id=closing_entry.entry_id
+    )
+    after_restart = HeatingRoomCoordinator(hass, restarted_entry)
+    await after_restart.async_setup()
+
+    assert after_restart.normal_flow_gate_closed is True
+    assert after_restart.flow_supply_status == FlowSupplyStatus.SURPLUS
+    after_restart.async_unload()
+
+    fresh_entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    fresh_entry.add_to_hass(hass)
+    without_stored_state = HeatingRoomCoordinator(hass, fresh_entry)
+    await without_stored_state.async_setup()
+
+    assert without_stored_state.normal_flow_gate_closed is False
+    without_stored_state.async_unload()
+
+
+async def test_compute_waits_for_the_room_sensor_after_startup(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set("sensor.wohnzimmer_temperatur", "unavailable")
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    calls = _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+
+    assert coordinator.last_result is None
+    assert coordinator.normal_result is None
+    assert not calls
+
+    hass.states.async_set("sensor.wohnzimmer_temperatur", "21.0")
+    await hass.async_block_till_done()
+
+    assert coordinator.last_result is not None
+    assert coordinator.last_result.input.room_temp_c == 21.0
+
+    coordinator.async_unload()
+
+
+async def test_compute_falls_back_to_trvs_when_room_sensor_stays_silent(
+    hass: HomeAssistant, freezer
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set("sensor.wohnzimmer_temperatur", "unavailable")
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+    assert coordinator.last_result is None
+
+    freezer.tick(timedelta(seconds=ROOM_SENSOR_STARTUP_GRACE_S + 1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    assert coordinator.last_result is not None
+    assert coordinator.last_result.input.room_temp_c == 18.0
 
     coordinator.async_unload()

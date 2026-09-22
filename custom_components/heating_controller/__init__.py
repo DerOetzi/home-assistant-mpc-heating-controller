@@ -8,7 +8,7 @@ from homeassistant.helpers import entity_registry as er, target
 from . import frontend
 from .const import CONF_ROOM_NAME, DOMAIN, SERVICE_UNBLOCK
 from .coordinator import HeatingRoomCoordinator
-from .store import LearningFactorsStore
+from .store import FlowGateStateStore, LearningFactorsStore
 
 __all__ = ["DOMAIN"]
 
@@ -51,8 +51,9 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    store = LearningFactorsStore(hass, entry.data[CONF_ROOM_NAME], entry.entry_id)
-    await store.async_remove()
+    room_name = entry.data[CONF_ROOM_NAME]
+    await LearningFactorsStore(hass, room_name, entry.entry_id).async_remove()
+    await FlowGateStateStore(hass, room_name, entry.entry_id).async_remove()
 
 
 def _async_register_services(hass: HomeAssistant) -> None:

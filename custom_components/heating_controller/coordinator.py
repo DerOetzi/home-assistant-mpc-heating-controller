@@ -8,6 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
 from homeassistant.helpers.event import (
+    async_call_later,
     async_track_state_change_event,
     async_track_time_interval,
 )
@@ -69,9 +70,14 @@ from .controller.mpc.controller import (
     RoomMpcController,
 )
 from .controller.mpc.results import RoomMpcResult
-from .controller.mpc.types import LearningFactors, RoomThermalConfig, TrvConfig
+from .controller.mpc.types import (
+    FlowGateState,
+    LearningFactors,
+    RoomThermalConfig,
+    TrvConfig,
+)
 from .controller.state import HeatingStateConfig, HeatingStateController
-from .store import LearningFactorsStore
+from .store import FlowGateStateStore, LearningFactorsStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -81,6 +87,12 @@ SENSOR_POLL_INTERVAL = timedelta(minutes=SENSOR_POLL_INTERVAL_MINUTES)
 
 WINDOW_OPEN_SUPPRESS_LEARNING_S = 60 * 60
 WINDOW_CLOSED_SUPPRESS_LEARNING_S = 30 * 60
+
+# After startup a configured room sensor often reports a few seconds after the
+# TRVs. Computing in between falls back to the TRV average, which can sit well
+# below the room sensor and reopen a restored surplus gate. Wait this long for
+# the room sensor before accepting the fallback.
+ROOM_SENSOR_STARTUP_GRACE_S = 5 * 60
 
 
 def _build_trv_configs(trv_entries: list[dict[str, Any]]) -> list[TrvConfig]:
@@ -182,6 +194,9 @@ class HeatingRoomCoordinator:
         )
 
         self.store = LearningFactorsStore(hass, self.room_name, entry.entry_id)
+        self.flow_gate_store = FlowGateStateStore(hass, self.room_name, entry.entry_id)
+        self._persisted_flow_gate_state: FlowGateState | None = None
+        self._awaiting_room_sensor = bool(self.data.get(CONF_ROOM_SENSOR_ENTITY))
 
         self.blocked = False
         self.trv_active = True
@@ -208,6 +223,11 @@ class HeatingRoomCoordinator:
         else:
             await self._async_import_legacy_learning_factors()
 
+        flow_gate_state = await self.flow_gate_store.async_load()
+        if flow_gate_state is not None:
+            self.mpc.restore_flow_gate_state(flow_gate_state)
+            self._persisted_flow_gate_state = flow_gate_state
+
         for entity_id in self._comfort_condition_entities:
             self.state.set_comfort_condition(entity_id, self._is_on(entity_id))
 
@@ -219,6 +239,14 @@ class HeatingRoomCoordinator:
         self._refresh_temperature_inputs()
 
         room_sensor_entity = self.data.get(CONF_ROOM_SENSOR_ENTITY)
+        if self._awaiting_room_sensor:
+            self._unsub.append(
+                async_call_later(
+                    self.hass,
+                    ROOM_SENSOR_STARTUP_GRACE_S,
+                    self._async_handle_room_sensor_grace_expired,
+                )
+            )
 
         tracked_entities = list(self._trv_entity_ids)
         tracked_entities.extend(self._comfort_condition_entities)
@@ -290,12 +318,27 @@ class HeatingRoomCoordinator:
 
         room_sensor_entity = self.data.get(CONF_ROOM_SENSOR_ENTITY)
         if room_sensor_entity:
-            self.mpc.set_room_sensor_temperature(self._float_state(room_sensor_entity))
+            room_sensor_temp_c = self._float_state(room_sensor_entity)
+            self.mpc.set_room_sensor_temperature(room_sensor_temp_c)
+            if room_sensor_temp_c is not None:
+                self._awaiting_room_sensor = False
 
         self.mpc.set_outdoor_temperature(
             self._float_state(self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY])
         )
         self.mpc.set_flow_temperature(self.current_flow_temperature_c)
+
+    async def _async_handle_room_sensor_grace_expired(self, _now: Any) -> None:
+        if not self._awaiting_room_sensor:
+            return
+        _LOGGER.warning(
+            "Room sensor for room %s did not report within %s s after startup; "
+            "falling back to TRV temperatures",
+            self.room_name,
+            ROOM_SENSOR_STARTUP_GRACE_S,
+        )
+        self._awaiting_room_sensor = False
+        await self._async_recompute()
 
     async def _async_handle_sensor_poll(self, _now: Any) -> None:
         self._refresh_temperature_inputs()
@@ -366,7 +409,10 @@ class HeatingRoomCoordinator:
             )
 
         elif entity_id == self.data.get(CONF_ROOM_SENSOR_ENTITY):
-            self.mpc.set_room_sensor_temperature(self._float_from_state(new_state))
+            room_sensor_temp_c = self._float_from_state(new_state)
+            self.mpc.set_room_sensor_temperature(room_sensor_temp_c)
+            if room_sensor_temp_c is not None:
+                self._awaiting_room_sensor = False
 
         elif entity_id == self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY]:
             self.mpc.set_outdoor_temperature(self._float_from_state(new_state))
@@ -419,6 +465,11 @@ class HeatingRoomCoordinator:
         else:
             self.mpc.disable_learning()
 
+        if self._awaiting_room_sensor:
+            await self._async_apply_trv_active_switches(self.trv_active)
+            self._notify_listeners()
+            return
+
         self.normal_heat_mode = self.state.current_heat_mode
         normal_target = self.state.effective_target_temperature(
             self.state.determine_base_target_temperature(self.normal_heat_mode)
@@ -444,7 +495,15 @@ class HeatingRoomCoordinator:
 
         await self._async_apply_trv_active_switches(self.trv_active)
         await self._async_persist_learning_factors()
+        await self._async_persist_flow_gate_state()
         self._notify_listeners()
+
+    async def _async_persist_flow_gate_state(self) -> None:
+        flow_gate_state = self.mpc.flow_gate_state
+        if flow_gate_state == self._persisted_flow_gate_state:
+            return
+        await self.flow_gate_store.async_save(flow_gate_state)
+        self._persisted_flow_gate_state = flow_gate_state
 
     async def _async_apply_result(self, result: RoomMpcResult) -> None:
         for entity_id, target_temperature_c in zip(
