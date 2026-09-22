@@ -37,8 +37,10 @@ MIN_ACTIVE_DEMAND = 0.05
 
 DISTRIBUTION_ALPHA = 0.7
 
-FLOW_SEARCH_MIN_C = 20.0
-FLOW_SEARCH_MAX_C = 75.0
+# The search starts this far below the room's flow threshold so a requirement
+# below what the heat source delivers at minimum stays visible, and ends at the
+# design flow temperature: the radiators are sized to cover the heat load there.
+FLOW_SEARCH_BELOW_THRESHOLD_C = 10.0
 FLOW_SEARCH_PRECISION_C = 0.1
 FLOW_SEARCH_ROUND_STEP_C = 0.5
 
@@ -73,6 +75,10 @@ class HeatEmitterModel:
             thermal_config.design_temperature_system
         ]
         self._room_heat_load_w = thermal_config.room_heat_load_w
+        self._flow_search_min_c = (
+            thermal_config.flow_threshold_c - FLOW_SEARCH_BELOW_THRESHOLD_C
+        )
+        self._flow_search_max_c = self._design_temperatures.flow_temperature_c
         prepared = [self._create_prepared_emitter(trv) for trv in trvs]
         self._emitters = self._calculate_distribution_weights(prepared)
 
@@ -212,7 +218,22 @@ class HeatEmitterModel:
             trv.max_target_temperature_c,
         )
 
-    def _part_load_spread_c(self, heating_power_w: float) -> float:
+    @property
+    def flow_search_min_c(self) -> float:
+        return self._flow_search_min_c
+
+    @property
+    def flow_search_max_c(self) -> float:
+        return self._flow_search_max_c
+
+    @staticmethod
+    def round_up_flow_temperature_c(flow_temperature_c: float) -> float:
+        return (
+            ceil(flow_temperature_c / FLOW_SEARCH_ROUND_STEP_C)
+            * FLOW_SEARCH_ROUND_STEP_C
+        )
+
+    def part_load_spread_c(self, heating_power_w: float) -> float:
         if self._room_heat_load_w <= 0:
             return self._design_temperatures.spread_c
         return (
@@ -227,9 +248,9 @@ class HeatEmitterModel:
         if required_heating_power_w <= 0:
             return 0.0
 
-        spread_c = self._part_load_spread_c(required_heating_power_w)
+        spread_c = self.part_load_spread_c(required_heating_power_w)
 
-        low, high = FLOW_SEARCH_MIN_C, FLOW_SEARCH_MAX_C
+        low, high = self._flow_search_min_c, self._flow_search_max_c
 
         if (
             self.calculate_available_heating_power_w(
@@ -251,4 +272,6 @@ class HeatEmitterModel:
             else:
                 low = mid
 
-        return ceil(optimal_flow / FLOW_SEARCH_ROUND_STEP_C) * FLOW_SEARCH_ROUND_STEP_C
+        return min(
+            self.round_up_flow_temperature_c(optimal_flow), self._flow_search_max_c
+        )

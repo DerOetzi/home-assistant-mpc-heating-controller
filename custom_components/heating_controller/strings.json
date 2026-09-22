@@ -198,6 +198,9 @@
       "min_flow_temperature": {
         "name": "Minimum flow temperature"
       },
+      "gated_hold_flow_temperature": {
+        "name": "Gated hold flow temperature"
+      },
       "hold_flow_temperature": {
         "name": "Hold flow temperature"
       },

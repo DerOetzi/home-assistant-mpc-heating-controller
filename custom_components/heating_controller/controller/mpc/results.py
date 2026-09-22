@@ -56,4 +56,7 @@ class RoomMpcResult:
     available_heating_power_w: float
     recommended_flow_temperature_c: float | None
     hold_flow_temperature_c: float | None = None
+    gated_hold_flow_temperature_c: float | None = None
+    recovery_flow_temperature_c: float | None = None
+    recovery_flow_saturated: bool = False
     flow_gate_closed: bool = False

@@ -1,3 +1,4 @@
+from heating_controller.const import DesignTemperatureSystem
 from heating_controller.controller.mpc.controller import (
     FlowGateConfig,
     MpcRateLimitConfig,
@@ -18,6 +19,15 @@ def make_controller(flow_gate_config=None, **rate_limit_overrides):
         rate_limit_config=MpcRateLimitConfig(**rate_limit_overrides),
         max_sensor_age_s=1800,
         flow_gate_config=flow_gate_config,
+    )
+
+
+def make_thermal_controller(thermal_config):
+    return RoomMpcController(
+        thermal_config=thermal_config,
+        trvs=[TrvConfig(name="trv1")],
+        rate_limit_config=MpcRateLimitConfig(),
+        max_sensor_age_s=1800,
     )
 
 
@@ -110,24 +120,48 @@ def test_recommended_flow_floored_at_heat_loss_when_current_flow_too_cold():
     assert result.result.recommended_flow_temperature_c > 22.0
 
 
-def test_recommended_flow_is_the_hold_flow_independent_of_current_room_temp():
-    colder = make_controller()
-    colder.set_room_sensor_temperature(18.0)
-    colder.set_outdoor_temperature(-5.0)
-    colder.set_flow_temperature(20.0)
-    colder_result = colder.compute(target_temperature_c=22.0)
+def test_recommended_flow_rises_with_the_room_deficit():
+    flows = []
+    for room_temp_c in (21.0, 20.9, 20.7, 20.5, 20.0):
+        controller = make_controller()
+        controller.set_room_sensor_temperature(room_temp_c)
+        controller.set_outdoor_temperature(10.0)
+        controller.set_flow_temperature(35.0)
+        result = controller.compute(target_temperature_c=21.0).result
+        flows.append(result.recommended_flow_temperature_c)
 
-    warmer = make_controller()
-    warmer.set_room_sensor_temperature(21.0)
-    warmer.set_outdoor_temperature(-5.0)
-    warmer.set_flow_temperature(20.0)
-    warmer_result = warmer.compute(target_temperature_c=22.0)
+    assert flows == sorted(flows)
+    assert flows[-1] > flows[0]
 
-    assert colder_result.valid and warmer_result.valid
-    assert (
-        colder_result.result.recommended_flow_temperature_c
-        == warmer_result.result.recommended_flow_temperature_c
-    )
+
+def test_recommended_flow_is_the_hold_flow_within_the_recovery_tolerance():
+    controller = make_controller()
+    controller.set_room_sensor_temperature(20.95)
+    controller.set_outdoor_temperature(10.0)
+    controller.set_flow_temperature(35.0)
+
+    result = controller.compute(target_temperature_c=21.0).result
+
+    assert result.recovery_flow_temperature_c == 0
+    assert result.recommended_flow_temperature_c == result.hold_flow_temperature_c
+
+
+def test_recommended_flow_is_independent_of_the_measured_flow_temperature():
+    # 2026-09-22: a DHW charge on the shared leaving-water sensor (58 degC) and
+    # a stale reading (None) drove the requirement to the design flow.
+    results = []
+    for flow_temp_c in (29.0, 58.0, None):
+        controller = make_controller()
+        controller.set_room_sensor_temperature(20.5)
+        controller.set_outdoor_temperature(10.4)
+        if flow_temp_c is not None:
+            controller.set_flow_temperature(flow_temp_c)
+        results.append(controller.compute(target_temperature_c=21.0).result)
+
+    recommended = {r.recommended_flow_temperature_c for r in results}
+    assert len(recommended) == 1
+    assert results[0].recovery_flow_temperature_c > results[0].hold_flow_temperature_c
+    assert results[0].recovery_flow_saturated is False
 
 
 def test_recommended_flow_zero_when_ambient_alone_holds_target():
@@ -174,22 +208,49 @@ def test_recommended_flow_unchanged_when_room_drops_to_target():
     )
 
 
-def test_recommended_flow_combines_hold_and_requested_branches_independently():
-    controller = make_controller()
-    controller.set_room_sensor_temperature(5.0)
-    controller.set_outdoor_temperature(18.0)
-    controller.set_flow_temperature(45.0)
-
-    result = controller.compute(target_temperature_c=22.0)
-
-    assert result.valid
-    assert result.result.requested_heating_power_w > 0
-    requested_branch_flow_c = (
-        controller._emitter_model.calculate_recommended_flow_temperature_c(
-            result.result.requested_heating_power_w, result.result.input.room_temp_c
+def test_recommended_flow_saturates_at_the_design_flow_temperature():
+    controller = make_thermal_controller(
+        RoomThermalConfig(
+            room_heat_load_w=1200,
+            design_temperature_system=DesignTemperatureSystem.SYSTEM_45_35,
         )
     )
-    assert result.result.recommended_flow_temperature_c > requested_branch_flow_c
+    controller.set_room_sensor_temperature(15.0)
+    controller.set_outdoor_temperature(-5.0)
+    controller.set_flow_temperature(35.0)
+
+    result = controller.compute(target_temperature_c=22.0).result
+
+    assert result.recovery_flow_saturated is True
+    assert result.recovery_flow_temperature_c == 45.0
+    assert result.recommended_flow_temperature_c == 45.0
+
+
+def test_flow_search_starts_below_the_flow_threshold():
+    def hold_flow(flow_threshold_c):
+        controller = make_thermal_controller(
+            RoomThermalConfig(room_heat_load_w=1200, flow_threshold_c=flow_threshold_c)
+        )
+        controller.set_room_sensor_temperature(21.0)
+        controller.set_outdoor_temperature(20.0)
+        controller.set_flow_temperature(35.0)
+        result = controller.compute(target_temperature_c=21.0).result
+        return result.hold_flow_temperature_c
+
+    assert hold_flow(30.0) < 30.0
+    assert hold_flow(40.0) >= 30.0
+
+
+def test_no_recovery_flow_when_outdoor_is_above_target():
+    controller = make_controller()
+    controller.set_room_sensor_temperature(18.0)
+    controller.set_outdoor_temperature(25.0)
+    controller.set_flow_temperature(35.0)
+
+    result = controller.compute(target_temperature_c=21.0).result
+
+    assert result.recovery_flow_temperature_c == 0
+    assert result.recommended_flow_temperature_c == 0
 
 
 def test_surplus_gate_zeroes_the_requirement_while_the_room_coasts():
@@ -341,3 +402,27 @@ def test_restored_closed_gate_reopens_once_the_surplus_is_gone():
 
     assert result.result.flow_gate_closed is False
     assert controller.flow_gate_state.live_closed is False
+
+
+def test_gated_hold_flow_is_zero_while_the_room_coasts():
+    controller = make_gated_controller()
+    feed_coasting_room(controller)
+
+    result = controller.compute(target_temperature_c=23.0).result
+
+    assert result.flow_gate_closed is True
+    assert result.hold_flow_temperature_c > 0
+    assert result.gated_hold_flow_temperature_c == 0
+
+
+def test_gated_hold_flow_ignores_the_recovery_part():
+    controller = make_controller()
+    controller.set_room_sensor_temperature(19.0)
+    controller.set_outdoor_temperature(10.0)
+    controller.set_flow_temperature(35.0)
+
+    result = controller.compute(target_temperature_c=21.0).result
+
+    assert result.flow_gate_closed is False
+    assert result.gated_hold_flow_temperature_c == result.hold_flow_temperature_c
+    assert result.recommended_flow_temperature_c > result.gated_hold_flow_temperature_c

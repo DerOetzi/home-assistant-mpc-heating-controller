@@ -82,7 +82,11 @@ Room and outdoor temperature readings are checked against **max sensor age (s)**
 reading is older than that, it's treated as unavailable rather than trusted indefinitely, and
 the room pauses its calculation until a fresh reading arrives. Implausible single-sample
 jumps are also filtered rather than acted on immediately, so one noisy reading doesn't swing
-a room's demand.
+a room's demand; a jump that repeats over a few polls is accepted as a real change.
+
+The heat source's flow temperature is exempt from that filter. Its jumps are physical —
+compressor start, defrost, or a hot-water charge showing up on a shared leaving-water sensor
+— and it only feeds the valve demand, never the minimum flow temperature (see below).
 
 ## Multiple rooms sharing one heat source
 
@@ -91,6 +95,30 @@ Each room independently reports its own required minimum flow temperature (see t
 several rooms, the room asking for the highest flow temperature at any moment is the one
 actually determining what the shared source needs to deliver — worth keeping in mind when
 tuning any individual room's design values.
+
+## How the minimum flow temperature is computed
+
+The minimum flow temperature is the larger of two requirements:
+
+- **Hold** — the flow needed to hold the setpoint at the current outdoor temperature (see
+  the surplus gate below).
+- **Recovery** — for a room below its setpoint, the lowest flow that brings it back within
+  six hours with its valves fully open. It is found by simulating the room with the same
+  radiator, heat-loss and capacity model the valve demand uses, including the learned
+  factors. A room within 0.1 K of its setpoint counts as there, and a room whose outdoor
+  temperature is above its setpoint asks for no recovery at all.
+
+Neither depends on the measured flow temperature, so a stale reading or a hot-water charge
+cannot move the requirement. Six hours is deliberately slow: a heat pump recovers more
+efficiently at a lower flow over a longer time, and the shared source serves whichever room
+asks for the most, so one slightly cool room must not pull the whole house up.
+
+The search runs from 10 K below the room's **flow threshold** up to the flow temperature of
+the configured **design temperature system** (55 °C for 55/45). A requirement below the
+threshold stays visible as such rather than being rounded up to what the source delivers at
+minimum. If even the design flow cannot bring the room back within six hours, the
+requirement reads the design flow and the `recovery_flow_saturated` attribute is set. The
+recovery part on its own is exposed as `recovery_flow_temperature_c`.
 
 ## The surplus gate
 
@@ -121,6 +149,12 @@ the `sensor.<room>_min_flow_temperature` entity reads 0. That is distinct from "
 requirement", which means the outdoor temperature alone holds the setpoint — the surplus
 case will come back once the stored heat is used up, the no-requirement case will not until
 the weather turns.
+
+The gated hold on its own — without the recovery part — is exposed as
+`sensor.<room>_gated_hold_flow_temperature`. It is the signal for deciding whether the
+heating season is on: it rises with the weather, drops to 0 while a room coasts on stored
+heat, and ignores a room that is merely below setpoint after airing, which the minimum flow
+temperature does count.
 
 Because the gated value reads 0 for much of the shoulder season, the underlying number
 stays available separately as `sensor.<room>_hold_flow_temperature`. It reports the

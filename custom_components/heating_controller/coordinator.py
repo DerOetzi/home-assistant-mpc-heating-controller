@@ -167,6 +167,7 @@ class HeatingRoomCoordinator:
                 self.data[CONF_DESIGN_TEMPERATURE_SYSTEM]
             ),
             room_heat_load_w=self.data[CONF_ROOM_HEAT_LOAD],
+            flow_threshold_c=self._flow_threshold_c,
         )
         rate_limit_config = MpcRateLimitConfig(
             demand_hysteresis_pct=self.data[CONF_MPC_DEMAND_HYSTERESIS_PCT],
@@ -572,6 +573,27 @@ class HeatingRoomCoordinator:
         """
         result = self.normal_result
         return result.hold_flow_temperature_c if result else None
+
+    @property
+    def normal_gated_hold_flow_temperature_c(self) -> float | None:
+        """The hold requirement after the surplus gate, without recovery.
+
+        Depends on the weather and on whether the room coasts on stored heat,
+        not on a deficit the room would recover from once heating runs -- the
+        signal for deciding whether the heating season is on.
+        """
+        result = self.normal_result
+        return result.gated_hold_flow_temperature_c if result else None
+
+    @property
+    def normal_recovery_flow_temperature_c(self) -> float | None:
+        result = self.normal_result
+        return result.recovery_flow_temperature_c if result else None
+
+    @property
+    def normal_recovery_flow_saturated(self) -> bool | None:
+        result = self.normal_result
+        return result.recovery_flow_saturated if result else None
 
     @property
     def normal_flow_gate_closed(self) -> bool | None:

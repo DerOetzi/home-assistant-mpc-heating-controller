@@ -198,6 +198,9 @@
       "min_flow_temperature": {
         "name": "Mindestvorlauftemperatur"
       },
+      "gated_hold_flow_temperature": {
+        "name": "Haltevorlauftemperatur mit Gate"
+      },
       "hold_flow_temperature": {
         "name": "Haltevorlauftemperatur"
       },

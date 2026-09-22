@@ -21,6 +21,7 @@ async def async_setup_entry(
         [
             MinFlowTemperatureSensor(coordinator),
             HoldFlowTemperatureSensor(coordinator),
+            GatedHoldFlowTemperatureSensor(coordinator),
             HeatingDemandSensor(coordinator),
             RequestedHeatingPowerSensor(coordinator),
             AvailableHeatingPowerSensor(coordinator),
@@ -67,6 +68,12 @@ class MinFlowTemperatureSensor(_DiagnosticSensor):
             "hold_flow_temperature_c": (
                 self._coordinator.normal_hold_flow_temperature_c
             ),
+            "recovery_flow_temperature_c": (
+                self._coordinator.normal_recovery_flow_temperature_c
+            ),
+            "recovery_flow_saturated": (
+                self._coordinator.normal_recovery_flow_saturated
+            ),
         }
 
 
@@ -107,6 +114,40 @@ class HoldFlowTemperatureSensor(_DiagnosticSensor):
                 round(result.input.room_temp_c - result.input.target_temp_c, 2)
                 if result
                 else None
+            ),
+        }
+
+
+class GatedHoldFlowTemperatureSensor(_DiagnosticSensor):
+    """The hold requirement after the surplus gate, without the recovery part.
+
+    Reads the weather-driven hold flow while the room needs heat to keep its
+    setpoint and 0 while it coasts on stored heat. Unlike the minimum-flow
+    sensor it ignores how far the room is below setpoint, so a room briefly
+    cooled by airing does not register as a heating-season demand.
+    """
+
+    _attr_translation_key = "gated_hold_flow_temperature"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+
+    def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
+        super().__init__(coordinator, "gated_hold_flow_temperature")
+
+    @property
+    def native_value(self) -> float | None:
+        return self._coordinator.normal_gated_hold_flow_temperature_c
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "flow_gate_closed": self._coordinator.normal_flow_gate_closed,
+            "hold_flow_temperature_c": (
+                self._coordinator.normal_hold_flow_temperature_c
+            ),
+            "calculation_target_temperature_c": (
+                self._coordinator.normal_target_temperature_c
             ),
         }
 

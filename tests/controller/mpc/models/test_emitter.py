@@ -162,3 +162,25 @@ def test_panel_radiator_height_above_maximum_is_clamped():
         _expected_power_per_meter(PanelRadiatorType.TYPE_22, MAX_RADIATOR_HEIGHT_MM), 0.01
     )
     assert power == expected
+
+
+@pytest.mark.parametrize(
+    ("design_temperature_system", "design_flow_c"),
+    [
+        (DesignTemperatureSystem.SYSTEM_55_45, 55.0),
+        (DesignTemperatureSystem.SYSTEM_45_35, 45.0),
+    ],
+)
+def test_recommended_flow_is_capped_at_the_design_flow_temperature(
+    design_temperature_system, design_flow_c
+):
+    model = make_model([TrvConfig(name="trv1")], design_temperature_system)
+    assert model.flow_search_max_c == design_flow_c
+    assert model.calculate_recommended_flow_temperature_c(100_000, 20) == design_flow_c
+
+
+def test_flow_search_starts_ten_kelvin_below_the_flow_threshold():
+    model = HeatEmitterModel(
+        RoomThermalConfig(flow_threshold_c=32.0), [TrvConfig(name="trv1")]
+    )
+    assert model.flow_search_min_c == 22.0
