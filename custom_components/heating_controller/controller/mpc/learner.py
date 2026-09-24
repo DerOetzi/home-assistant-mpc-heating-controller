@@ -141,7 +141,9 @@ class RoomMpcModelLearner:
             return
 
         if not self._is_history_valid(relevant_history):
-            self._learning_state = self._create_learning_state(LearningStatus.SKIPPED)
+            self._learning_state = self._create_learning_state(
+                LearningStatus.DISTURBED
+            )
             self._rotate_learning_window()
             return
 
@@ -157,7 +159,9 @@ class RoomMpcModelLearner:
         )
 
         if abs(prediction_error_c) < MIN_ROOM_DELTA_C:
-            self._learning_state = self._create_learning_state(LearningStatus.SKIPPED)
+            self._learning_state = self._create_learning_state(
+                LearningStatus.NO_CORRECTION
+            )
             self._rotate_learning_window()
             return
 

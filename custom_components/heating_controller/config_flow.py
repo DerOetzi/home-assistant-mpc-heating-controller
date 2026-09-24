@@ -18,7 +18,7 @@ from .const import (
     CONF_FLOW_GATE_CLOSE_SURPLUS,
     CONF_FLOW_GATE_HOLD_TIME,
     CONF_FLOW_GATE_OPEN_SURPLUS,
-    CONF_FLOW_THRESHOLD,
+    CONF_FLOW_THRESHOLD_ENTITY,
     CONF_FROST_PROTECTION_TEMPERATURE,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
     CONF_MAX_SENSOR_AGE,
@@ -50,7 +50,6 @@ from .const import (
     DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C,
     DEFAULT_FLOW_GATE_HOLD_TIME_S,
     DEFAULT_FLOW_GATE_OPEN_SURPLUS_C,
-    DEFAULT_FLOW_THRESHOLD_C,
     DOMAIN,
     DesignTemperatureSystem,
     HeatEmitterType,
@@ -62,6 +61,7 @@ TRV_COUNT_OPTIONS = list(range(1, MAX_TRV_COUNT + 1))
 
 _BOOLEAN_SIGNAL_DOMAINS = ["binary_sensor", "input_boolean", "switch"]
 _WINDOW_DEVICE_CLASSES = ["window", "door", "garage_door", "opening"]
+_FLOW_THRESHOLD_DOMAINS = ["input_number", "number", "sensor"]
 
 
 def _trv_step_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
@@ -193,6 +193,11 @@ def _entities_schema(defaults: dict[str, Any]) -> vol.Schema:
                     selector.EntitySelectorConfig(domain="climate")
                 )
             ),
+            _marker(vol.Optional, CONF_FLOW_THRESHOLD_ENTITY, defaults): (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain=_FLOW_THRESHOLD_DOMAINS)
+                )
+            ),
             _marker(vol.Required, CONF_PV_BOOST_ENTITY, defaults): (
                 selector.EntitySelector(
                     selector.EntitySelectorConfig(domain=_BOOLEAN_SIGNAL_DOMAINS)
@@ -291,16 +296,12 @@ def _mpc_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_MAX_SENSOR_AGE, default=defaults.get(CONF_MAX_SENSOR_AGE, 1800.0)
             ): vol.Coerce(float),
-            vol.Required(
-                CONF_FLOW_THRESHOLD,
-                default=defaults.get(CONF_FLOW_THRESHOLD, DEFAULT_FLOW_THRESHOLD_C),
-            ): vol.Coerce(float),
         }
     )
 
 
 class HeatingControllerConfigFlow(ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}

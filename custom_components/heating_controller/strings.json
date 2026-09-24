@@ -38,6 +38,7 @@
           "room_comfort_condition_entities": "Room-specific comfort condition entities",
           "outdoor_temperature_entity": "Outdoor temperature sensor",
           "heat_source_climate_entity": "Heat source climate entity",
+          "flow_threshold_entity": "Heat-source flow threshold entity (optional)",
           "pv_boost_entity": "PV boost entity"
         }
       },
@@ -65,8 +66,7 @@
           "flow_gate_close_surplus_c": "Surplus gate: close above setpoint + (K)",
           "flow_gate_open_surplus_c": "Surplus gate: reopen below setpoint + (K)",
           "flow_gate_hold_time_s": "Surplus gate: hold time before closing (s)",
-          "max_sensor_age_s": "Max sensor age (s)",
-          "flow_threshold_c": "Heat-source flow threshold (°C)"
+          "max_sensor_age_s": "Max sensor age (s)"
         }
       }
     },
@@ -105,6 +105,7 @@
           "room_comfort_condition_entities": "Room-specific comfort condition entities",
           "outdoor_temperature_entity": "Outdoor temperature sensor",
           "heat_source_climate_entity": "Heat source climate entity",
+          "flow_threshold_entity": "Heat-source flow threshold entity (optional)",
           "pv_boost_entity": "PV boost entity"
         }
       },
@@ -132,8 +133,7 @@
           "flow_gate_close_surplus_c": "Surplus gate: close above setpoint + (K)",
           "flow_gate_open_surplus_c": "Surplus gate: reopen below setpoint + (K)",
           "flow_gate_hold_time_s": "Surplus gate: hold time before closing (s)",
-          "max_sensor_age_s": "Max sensor age (s)",
-          "flow_threshold_c": "Heat-source flow threshold (°C)"
+          "max_sensor_age_s": "Max sensor age (s)"
         }
       }
     }
@@ -224,7 +224,8 @@
         "state": {
           "learned": "Learned",
           "disabled": "Disabled",
-          "skipped": "Skipped",
+          "no_correction": "No correction needed",
+          "disturbed": "Window disturbed",
           "suppressed": "Suppressed",
           "waiting_interval": "Waiting"
         }

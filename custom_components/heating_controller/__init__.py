@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import logging
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import entity_registry as er, target
 
 from . import frontend
-from .const import CONF_ROOM_NAME, DOMAIN, SERVICE_UNBLOCK
+from .const import CONF_FLOW_THRESHOLD, CONF_ROOM_NAME, DOMAIN, SERVICE_UNBLOCK
 from .coordinator import HeatingRoomCoordinator
 from .store import FlowGateStateStore, LearningFactorsStore
+
+_LOGGER = logging.getLogger(__name__)
 
 __all__ = ["DOMAIN"]
 
@@ -35,6 +39,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     _async_register_services(hass)
 
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    if entry.version == 1:
+        data = dict(entry.data)
+        data.pop(CONF_FLOW_THRESHOLD, None)
+        hass.config_entries.async_update_entry(entry, data=data, version=2)
+        _LOGGER.info(
+            "Room %s migrated to the flow threshold entity; link a helper in the "
+            "entities step to control it, until then the default applies",
+            entry.data.get(CONF_ROOM_NAME),
+        )
     return True
 
 

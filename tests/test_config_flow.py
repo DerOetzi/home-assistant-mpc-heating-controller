@@ -6,7 +6,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from heating_controller.const import (
     CONF_COMFORT_CONDITION_ENTITIES,
     CONF_DESIGN_TEMPERATURE_SYSTEM,
-    CONF_FLOW_THRESHOLD,
+    CONF_FLOW_THRESHOLD_ENTITY,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PV_BOOST_ENTITY,
@@ -59,6 +59,7 @@ async def test_full_config_flow_creates_entry(hass: HomeAssistant) -> None:
             "comfort_condition_entities": ["input_boolean.comfort_release"],
             "outdoor_temperature_entity": "sensor.outdoor_temperature",
             "heat_source_climate_entity": "climate.heat_source",
+            "flow_threshold_entity": "input_number.flow_threshold",
             "pv_boost_entity": "binary_sensor.pv_boost",
         },
     )
@@ -88,7 +89,6 @@ async def test_full_config_flow_creates_entry(hass: HomeAssistant) -> None:
             "mpc_hold_override_demand_pct": 40.0,
             "mpc_max_demand_step_pct": 20.0,
             "max_sensor_age_s": 1800.0,
-            "flow_threshold_c": 30.0,
         },
     )
 
@@ -99,7 +99,7 @@ async def test_full_config_flow_creates_entry(hass: HomeAssistant) -> None:
     assert data[CONF_DESIGN_TEMPERATURE_SYSTEM] == "system_55_45"
     assert data[CONF_OUTDOOR_TEMPERATURE_ENTITY] == "sensor.outdoor_temperature"
     assert data[CONF_HEAT_SOURCE_CLIMATE_ENTITY] == "climate.heat_source"
-    assert data[CONF_FLOW_THRESHOLD] == 30.0
+    assert data[CONF_FLOW_THRESHOLD_ENTITY] == "input_number.flow_threshold"
     assert data[CONF_PV_BOOST_ENTITY] == "binary_sensor.pv_boost"
     assert data[CONF_COMFORT_CONDITION_ENTITIES] == ["input_boolean.comfort_release"]
     assert len(data[CONF_TRVS]) == 1
@@ -162,7 +162,6 @@ async def test_duplicate_room_name_is_aborted(hass: HomeAssistant) -> None:
                 "mpc_hold_override_demand_pct": 40.0,
                 "mpc_max_demand_step_pct": 20.0,
                 "max_sensor_age_s": 1800.0,
-                "flow_threshold_c": 30.0,
             },
         )
 
@@ -205,17 +204,17 @@ async def test_options_flow_writes_entry_data_and_covers_trvs(
     assert result["step_id"] == "trv_details"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["step_id"] == "entities"
-    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"flow_threshold_entity": "input_number.other_threshold"}
+    )
     assert result["step_id"] == "settings"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["step_id"] == "mpc"
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"flow_threshold_c": 35.0}
-    )
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
 
-    assert entry.data[CONF_FLOW_THRESHOLD] == 35.0
+    assert entry.data[CONF_FLOW_THRESHOLD_ENTITY] == "input_number.other_threshold"
     assert entry.data[CONF_TRVS][0][CONF_TRV_ACTIVE_SWITCH] == (
         "switch.heizung_wohnzimmer_trv_active"
     )

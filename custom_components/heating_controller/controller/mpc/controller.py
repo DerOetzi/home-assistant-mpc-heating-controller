@@ -193,6 +193,9 @@ class RoomMpcController:
     def set_flow_temperature(self, value: float | None) -> None:
         self._sensors.set_flow_temperature(value)
 
+    def set_flow_threshold_c(self, flow_threshold_c: float) -> None:
+        self._emitter_model.set_flow_threshold_c(flow_threshold_c)
+
     def compute(
         self, target_temperature_c: float, apply_side_effects: bool = True
     ) -> RoomMpcComputeResult:

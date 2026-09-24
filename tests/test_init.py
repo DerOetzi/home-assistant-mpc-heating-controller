@@ -1,7 +1,7 @@
 from homeassistant.core import HomeAssistant, ServiceCall
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from heating_controller.const import DOMAIN, HeatMode
+from heating_controller.const import DEFAULT_FLOW_THRESHOLD_C, DOMAIN, HeatMode
 
 from test_coordinator import ENTRY_DATA, _seed_entities
 
@@ -81,3 +81,37 @@ async def test_remove_entry_deletes_learning_factors_store(hass: HomeAssistant) 
         hass, ENTRY_DATA["room_name"], entry.entry_id
     )
     assert await leftover_gate_store.async_load() is None
+
+
+async def test_migration_drops_the_numeric_flow_threshold(hass: HomeAssistant) -> None:
+    _seed_entities(hass)
+
+    async def climate_handler(call: ServiceCall) -> None:
+        pass
+
+    async def switch_handler(call: ServiceCall) -> None:
+        pass
+
+    hass.services.async_register("climate", "set_temperature", climate_handler)
+    hass.services.async_register("switch", "turn_on", switch_handler)
+    hass.services.async_register("switch", "turn_off", switch_handler)
+
+    legacy_data = {
+        key: value
+        for key, value in ENTRY_DATA.items()
+        if key != "flow_threshold_entity"
+    }
+    legacy_data["flow_threshold_c"] = 30.0
+    entry = MockConfigEntry(domain=DOMAIN, data=legacy_data, version=1)
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.version == 2
+    assert "flow_threshold_c" not in entry.data
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    assert coordinator.flow_threshold_c == DEFAULT_FLOW_THRESHOLD_C
+
+    assert await hass.config_entries.async_unload(entry.entry_id)

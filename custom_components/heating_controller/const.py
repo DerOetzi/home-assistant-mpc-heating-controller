@@ -37,6 +37,7 @@ CONF_ROOM_COMFORT_CONDITION_ENTITIES = "room_comfort_condition_entities"
 CONF_OUTDOOR_TEMPERATURE_ENTITY = "outdoor_temperature_entity"
 CONF_HEAT_SOURCE_CLIMATE_ENTITY = "heat_source_climate_entity"
 CONF_FLOW_THRESHOLD = "flow_threshold_c"
+CONF_FLOW_THRESHOLD_ENTITY = "flow_threshold_entity"
 CONF_PV_BOOST_ENTITY = "pv_boost_entity"
 
 CONF_BOOST_ENABLED = "boost_enabled"
@@ -116,6 +117,7 @@ class RoomTemperatureStrategy(StrEnum):
 class LearningStatus(StrEnum):
     LEARNED = "learned"
     DISABLED = "disabled"
-    SKIPPED = "skipped"
+    NO_CORRECTION = "no_correction"
+    DISTURBED = "disturbed"
     SUPPRESSED = "suppressed"
     WAITING_INTERVAL = "waiting_interval"

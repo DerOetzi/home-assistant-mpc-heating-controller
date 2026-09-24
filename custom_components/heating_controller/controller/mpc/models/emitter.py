@@ -75,10 +75,8 @@ class HeatEmitterModel:
             thermal_config.design_temperature_system
         ]
         self._room_heat_load_w = thermal_config.room_heat_load_w
-        self._flow_search_min_c = (
-            thermal_config.flow_threshold_c - FLOW_SEARCH_BELOW_THRESHOLD_C
-        )
         self._flow_search_max_c = self._design_temperatures.flow_temperature_c
+        self.set_flow_threshold_c(thermal_config.flow_threshold_c)
         prepared = [self._create_prepared_emitter(trv) for trv in trvs]
         self._emitters = self._calculate_distribution_weights(prepared)
 
@@ -217,6 +215,10 @@ class HeatEmitterModel:
             trv.min_target_temperature_c,
             trv.max_target_temperature_c,
         )
+
+    def set_flow_threshold_c(self, flow_threshold_c: float) -> None:
+        """Move the search window with the heat source's minimum flow."""
+        self._flow_search_min_c = flow_threshold_c - FLOW_SEARCH_BELOW_THRESHOLD_C
 
     @property
     def flow_search_min_c(self) -> float:

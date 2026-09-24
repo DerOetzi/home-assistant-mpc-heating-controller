@@ -6,7 +6,12 @@ from pytest_homeassistant_custom_component.common import (
     async_fire_time_changed,
 )
 
-from heating_controller.const import DOMAIN, FlowSupplyStatus, HeatMode
+from heating_controller.const import (
+    DEFAULT_FLOW_THRESHOLD_C,
+    DOMAIN,
+    FlowSupplyStatus,
+    HeatMode,
+)
 from heating_controller.coordinator import (
     ROOM_SENSOR_STARTUP_GRACE_S,
     HeatingRoomCoordinator,
@@ -47,7 +52,7 @@ ENTRY_DATA = {
     "mpc_hold_override_demand_pct": 40.0,
     "mpc_max_demand_step_pct": 20.0,
     "max_sensor_age_s": 1800.0,
-    "flow_threshold_c": 30.0,
+    "flow_threshold_entity": "input_number.flow_threshold",
 }
 
 
@@ -73,6 +78,7 @@ def _seed_entities(
         {"current_temperature": flow_temp},
     )
     hass.states.async_set("binary_sensor.pv_boost", "off")
+    hass.states.async_set("input_number.flow_threshold", "30.0")
 
 
 def _register_fake_climate_set_temperature(hass: HomeAssistant) -> list[ServiceCall]:
@@ -406,7 +412,7 @@ async def test_flow_supply_status_below_threshold_for_a_never_binding_requiremen
 
     required = coordinator.normal_min_flow_temperature_c
     assert required is not None
-    assert 0 < required < ENTRY_DATA["flow_threshold_c"]
+    assert 0 < required < coordinator.flow_threshold_c
     assert coordinator.flow_supply_status == FlowSupplyStatus.BELOW_THRESHOLD
     assert coordinator.normal_heat_mode == HeatMode.COMFORT
     assert coordinator.normal_target_temperature_c == 22.0
@@ -674,5 +680,64 @@ async def test_compute_falls_back_to_trvs_when_room_sensor_stays_silent(
 
     assert coordinator.last_result is not None
     assert coordinator.last_result.input.room_temp_c == 18.0
+
+    coordinator.async_unload()
+
+
+async def test_flow_threshold_follows_the_linked_helper(hass: HomeAssistant) -> None:
+    _seed_entities(hass, flow_temp=32.0)
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+
+    assert coordinator.flow_threshold_c == 30.0
+    assert coordinator.trv_active is True
+
+    hass.states.async_set("input_number.flow_threshold", "35.0")
+    await hass.async_block_till_done()
+
+    assert coordinator.flow_threshold_c == 35.0
+    assert coordinator.trv_active is False
+
+    coordinator.async_unload()
+
+
+async def test_flow_threshold_falls_back_to_the_default(hass: HomeAssistant) -> None:
+    _seed_entities(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            key: value
+            for key, value in ENTRY_DATA.items()
+            if key != "flow_threshold_entity"
+        },
+    )
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+
+    assert coordinator.flow_threshold_c == DEFAULT_FLOW_THRESHOLD_C
+
+    coordinator.async_unload()
+
+
+async def test_flow_threshold_falls_back_while_the_helper_is_unavailable(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set("input_number.flow_threshold", "unavailable")
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+
+    assert coordinator.flow_threshold_c == DEFAULT_FLOW_THRESHOLD_C
 
     coordinator.async_unload()

@@ -184,3 +184,14 @@ def test_flow_search_starts_ten_kelvin_below_the_flow_threshold():
         RoomThermalConfig(flow_threshold_c=32.0), [TrvConfig(name="trv1")]
     )
     assert model.flow_search_min_c == 22.0
+
+
+def test_setting_the_flow_threshold_moves_the_search_window():
+    model = HeatEmitterModel(
+        RoomThermalConfig(flow_threshold_c=32.0), [TrvConfig(name="trv1")]
+    )
+
+    model.set_flow_threshold_c(25.0)
+
+    assert model.flow_search_min_c == 15.0
+    assert model.flow_search_max_c == 55.0

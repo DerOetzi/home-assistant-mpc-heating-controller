@@ -80,6 +80,86 @@ def test_full_cycle_learns_ua_factor_when_room_cools_more_than_predicted():
     assert loss_model.learned_ua_factor != initial_ua_factor
 
 
+START_TS = 1_000_000.0
+
+
+def _evaluate_window(learner, inputs, predicted_room_temperature_c):
+    """Run the cycle that evaluates a prediction against the given window."""
+    learner.set_prediction(
+        LearnerPrediction(
+            timestamp=START_TS,
+            predicted_room_temperature_c=predicted_room_temperature_c,
+            prediction_horizon_s=1800,
+        )
+    )
+    learner.run_learning_cycle()
+
+    for mpc_input in inputs:
+        learner.append_history(mpc_input, applied_heating_power_w=100.0)
+
+    learner.run_learning_cycle()
+
+
+def test_cycle_reports_no_correction_when_the_room_matched_the_prediction():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+    initial_ua_factor = loss_model.learned_ua_factor
+
+    _evaluate_window(
+        learner,
+        [
+            make_input(START_TS + index * 300, room_temp_c=20.05)
+            for index in range(6)
+        ],
+        predicted_room_temperature_c=20.0,
+    )
+
+    assert learner.get_learning_state().status == LearningStatus.NO_CORRECTION
+    assert loss_model.learned_ua_factor == initial_ua_factor
+
+
+def test_cycle_reports_disturbed_when_the_outdoor_temperature_drifts():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+    initial_ua_factor = loss_model.learned_ua_factor
+
+    _evaluate_window(
+        learner,
+        [
+            make_input(
+                START_TS + index * 300,
+                room_temp_c=18.0,
+                outdoor_temp_c=-5.0 - index,
+            )
+            for index in range(6)
+        ],
+        predicted_room_temperature_c=20.0,
+    )
+
+    assert learner.get_learning_state().status == LearningStatus.DISTURBED
+    assert loss_model.learned_ua_factor == initial_ua_factor
+
+
+def test_cycle_reports_disturbed_when_the_flow_temperature_jumps():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+    initial_ua_factor = loss_model.learned_ua_factor
+
+    # A domestic hot water charge on the shared leaving-water sensor.
+    flow_temperatures = [45.0, 45.0, 55.0, 55.0, 45.0, 45.0]
+    _evaluate_window(
+        learner,
+        [
+            make_input(START_TS + index * 300, room_temp_c=18.0, flow_temp_c=flow_temp_c)
+            for index, flow_temp_c in enumerate(flow_temperatures)
+        ],
+        predicted_room_temperature_c=20.0,
+    )
+
+    assert learner.get_learning_state().status == LearningStatus.DISTURBED
+    assert loss_model.learned_ua_factor == initial_ua_factor
+
+
 def test_suppress_for_interval_marks_current_window_invalid():
     learner, _, _ = make_learner()
     learner.enable()

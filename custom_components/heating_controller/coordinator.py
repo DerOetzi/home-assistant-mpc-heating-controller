@@ -22,7 +22,7 @@ from .const import (
     CONF_FLOW_GATE_CLOSE_SURPLUS,
     CONF_FLOW_GATE_HOLD_TIME,
     CONF_FLOW_GATE_OPEN_SURPLUS,
-    CONF_FLOW_THRESHOLD,
+    CONF_FLOW_THRESHOLD_ENTITY,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
     CONF_MAX_SENSOR_AGE,
     CONF_MPC_DEMAND_HYSTERESIS_PCT,
@@ -143,8 +143,8 @@ class HeatingRoomCoordinator:
         self._heat_source_climate_entity: str | None = self.data.get(
             CONF_HEAT_SOURCE_CLIMATE_ENTITY
         )
-        self._flow_threshold_c: float = self.data.get(
-            CONF_FLOW_THRESHOLD, DEFAULT_FLOW_THRESHOLD_C
+        self._flow_threshold_entity: str | None = self.data.get(
+            CONF_FLOW_THRESHOLD_ENTITY
         )
 
         self.state = HeatingStateController(
@@ -167,7 +167,7 @@ class HeatingRoomCoordinator:
                 self.data[CONF_DESIGN_TEMPERATURE_SYSTEM]
             ),
             room_heat_load_w=self.data[CONF_ROOM_HEAT_LOAD],
-            flow_threshold_c=self._flow_threshold_c,
+            flow_threshold_c=self.flow_threshold_c,
         )
         rate_limit_config = MpcRateLimitConfig(
             demand_hysteresis_pct=self.data[CONF_MPC_DEMAND_HYSTERESIS_PCT],
@@ -256,6 +256,8 @@ class HeatingRoomCoordinator:
         tracked_entities.append(self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY])
         if self._heat_source_climate_entity:
             tracked_entities.append(self._heat_source_climate_entity)
+        if self._flow_threshold_entity:
+            tracked_entities.append(self._flow_threshold_entity)
         if room_sensor_entity:
             tracked_entities.append(room_sensor_entity)
 
@@ -352,7 +354,7 @@ class HeatingRoomCoordinator:
         if climate_state is None or climate_state.state != HEAT_SOURCE_ACTIVE_STATE:
             return False
         flow_temp_c = self._climate_temperature_from_state(climate_state)
-        return flow_temp_c is not None and flow_temp_c > self._flow_threshold_c
+        return flow_temp_c is not None and flow_temp_c > self.flow_threshold_c
 
     async def _async_apply_trv_active_switches(self, active: bool) -> None:
         if not self._trv_active_switches:
@@ -455,7 +457,24 @@ class HeatingRoomCoordinator:
         if persisted_factors is not None:
             await self.store.async_save(persisted_factors)
 
+    @property
+    def flow_threshold_c(self) -> float:
+        """The lowest flow temperature the heat source can usefully deliver.
+
+        Read from the linked entity on every access so the limit can be tried
+        out on the heat pump by changing a single helper. Without a linked
+        entity, or while it reports nothing usable, the built-in default keeps
+        the room controllable instead of blocking it.
+        """
+        if not self._flow_threshold_entity:
+            return DEFAULT_FLOW_THRESHOLD_C
+        value = self._float_state(self._flow_threshold_entity)
+        if value is None:
+            return DEFAULT_FLOW_THRESHOLD_C
+        return value
+
     async def _async_recompute(self) -> None:
+        self.mpc.set_flow_threshold_c(self.flow_threshold_c)
         desired_mode = self.state.desired_automatic_heat_mode(self.blocked)
         self.state.set_active_heat_mode(desired_mode)
 
@@ -609,7 +628,7 @@ class HeatingRoomCoordinator:
                 return FlowSupplyStatus.SURPLUS
             return FlowSupplyStatus.NO_REQUIREMENT
         
-        if required < self._flow_threshold_c:
+        if required < self.flow_threshold_c:
             return FlowSupplyStatus.BELOW_THRESHOLD
             
         if not self.trv_active:

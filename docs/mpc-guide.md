@@ -36,8 +36,9 @@ currently doing:
 |---|---|
 | Learned | The last cycle adjusted the room's model slightly based on how it actually responded to heating. |
 | Waiting | Not enough recent history yet to draw a conclusion — normal shortly after startup or after a gap. |
-| Skipped | The room barely moved (or moved unpredictably) since the last check, so there's nothing reliable to learn from this cycle. |
-| Suppressed | Learning is temporarily paused, typically right after you've changed configuration or the setpoint. |
+| No correction needed | The room ended up within 0.15 K of what the model predicted, so the cycle carries no correction worth applying. |
+| Window disturbed | The measurement window itself was unusable: the outdoor temperature drifted more than 1 K, or the flow temperature jumped more than 5 K (a hot-water charge, for instance), so the room's response cannot be attributed to the model. |
+| Suppressed | Learning is paused on purpose — a window in the room was opened (60 min) or just closed (30 min), or the configuration changed. Not to be confused with the measurement window above. |
 | Disabled | The heat source isn't calling for heat above its configured flow threshold right now (e.g. outside the heating season) — learning simply doesn't run, and resumes on its own once heating starts again. |
 
 Adjustments per cycle are intentionally small — expect the model to sharpen gradually over
@@ -119,6 +120,12 @@ threshold stays visible as such rather than being rounded up to what the source 
 minimum. If even the design flow cannot bring the room back within six hours, the
 requirement reads the design flow and the `recovery_flow_saturated` attribute is set. The
 recovery part on its own is exposed as `recovery_flow_temperature_c`.
+
+The flow threshold is not a number in the room's configuration but an entity linked in the
+**Sensors and signals** step: an `input_number` helper, a `number` entity, or a `sensor` a
+heat source publishes it on. The rooms read it live, so trying out a different lower limit
+on the heat pump means changing one helper instead of reconfiguring every room. Without a
+linked entity, or while it reports nothing usable, 30 °C applies.
 
 ## The surplus gate
 

@@ -38,6 +38,7 @@
           "room_comfort_condition_entities": "Raumspezifische Komfort-Bedingungs-Entities",
           "outdoor_temperature_entity": "Außentemperatursensor",
           "heat_source_climate_entity": "Wärmeerzeuger-Climate-Entity",
+          "flow_threshold_entity": "Entität für Wärmeerzeuger-Vorlaufschwelle (optional)",
           "pv_boost_entity": "PV-Überschuss-Entity"
         }
       },
@@ -65,8 +66,7 @@
           "flow_gate_close_surplus_c": "Überschuss-Gate: schließen ab Soll + (K)",
           "flow_gate_open_surplus_c": "Überschuss-Gate: öffnen unter Soll + (K)",
           "flow_gate_hold_time_s": "Überschuss-Gate: Haltezeit vor dem Schließen (s)",
-          "max_sensor_age_s": "Max. Sensoralter (s)",
-          "flow_threshold_c": "Wärmeerzeuger-Vorlaufschwelle (°C)"
+          "max_sensor_age_s": "Max. Sensoralter (s)"
         }
       }
     },
@@ -105,6 +105,7 @@
           "room_comfort_condition_entities": "Raumspezifische Komfort-Bedingungs-Entities",
           "outdoor_temperature_entity": "Außentemperatursensor",
           "heat_source_climate_entity": "Wärmeerzeuger-Climate-Entity",
+          "flow_threshold_entity": "Entität für Wärmeerzeuger-Vorlaufschwelle (optional)",
           "pv_boost_entity": "PV-Überschuss-Entity"
         }
       },
@@ -132,8 +133,7 @@
           "flow_gate_close_surplus_c": "Überschuss-Gate: schließen ab Soll + (K)",
           "flow_gate_open_surplus_c": "Überschuss-Gate: öffnen unter Soll + (K)",
           "flow_gate_hold_time_s": "Überschuss-Gate: Haltezeit vor dem Schließen (s)",
-          "max_sensor_age_s": "Max. Sensoralter (s)",
-          "flow_threshold_c": "Wärmeerzeuger-Vorlaufschwelle (°C)"
+          "max_sensor_age_s": "Max. Sensoralter (s)"
         }
       }
     }
@@ -224,7 +224,8 @@
         "state": {
           "learned": "Gelernt",
           "disabled": "Deaktiviert",
-          "skipped": "Übersprungen",
+          "no_correction": "Kein Lernbedarf",
+          "disturbed": "Messfenster gestört",
           "suppressed": "Unterdrückt",
           "waiting_interval": "Wartet"
         }
