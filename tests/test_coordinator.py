@@ -315,6 +315,22 @@ async def test_heat_source_heat_mode_but_flow_below_threshold_is_inactive(
     coordinator.async_unload()
 
 
+async def test_heat_source_heat_mode_at_the_threshold_is_active(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass, flow_temp=30.0)
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+
+    assert coordinator.trv_active is True
+
+    coordinator.async_unload()
+
+
 async def test_heat_source_heat_mode_and_hot_flow_is_active(
     hass: HomeAssistant,
 ) -> None:

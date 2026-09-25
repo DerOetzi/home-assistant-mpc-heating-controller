@@ -376,7 +376,7 @@ class HeatingRoomCoordinator:
         if climate_state is None or climate_state.state != HEAT_SOURCE_ACTIVE_STATE:
             return False
         flow_temp_c = self._climate_temperature_from_state(climate_state)
-        return flow_temp_c is not None and flow_temp_c > self.flow_threshold_c
+        return flow_temp_c is not None and flow_temp_c >= self.flow_threshold_c
 
     async def _async_apply_trv_active_switches(self, active: bool) -> None:
         if not self._trv_active_switches:

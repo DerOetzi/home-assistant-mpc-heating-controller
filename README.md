@@ -110,7 +110,7 @@ rows) are configured entirely through the editor's sortable lists — see
 - Each room is its own config entry — deleting a room removes only that room's entities and
   learning data, other rooms are unaffected.
 - Learning (the `ua_factor`/`capacity_factor` self-calibration) only runs while the shared
-  heat source is actually calling for heat above the configured flow threshold; outside the
+  heat source is actually calling for heat at or above the configured flow threshold; outside the
   heating season the room simply stops adjusting until it's needed again. Within that time
   it also waits for the sun and the learning window entity, see
   [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
