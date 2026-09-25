@@ -6,3 +6,33 @@ unblock:
   target:
     entity:
       integration: heating_controller
+
+recalibrate:
+  name: Recalibrate
+  description: >-
+    Set the learned UA and capacity factors of one or more rooms. A factor
+    left out stays unchanged; pass 1.0 to reset it. Admin only.
+  target:
+    entity:
+      integration: heating_controller
+  fields:
+    ua_factor:
+      name: UA factor
+      description: Learned heat-loss factor. 1.0 resets it to the design heat load.
+      example: 1.0
+      selector:
+        number:
+          min: 0.5
+          max: 2.0
+          step: 0.001
+          mode: box
+    capacity_factor:
+      name: Capacity factor
+      description: Learned thermal-capacity factor. 1.0 resets it to the design value.
+      example: 1.0
+      selector:
+        number:
+          min: 0.5
+          max: 3.0
+          step: 0.001
+          mode: box

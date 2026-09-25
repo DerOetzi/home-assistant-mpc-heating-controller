@@ -39,7 +39,8 @@
           "outdoor_temperature_entity": "Outdoor temperature sensor",
           "heat_source_climate_entity": "Heat source climate entity",
           "flow_threshold_entity": "Heat-source flow threshold entity (optional)",
-          "pv_boost_entity": "PV boost entity"
+          "pv_boost_entity": "PV boost entity",
+          "learning_window_entity": "Learning window entity (optional)"
         }
       },
       "settings": {
@@ -66,7 +67,8 @@
           "flow_gate_close_surplus_c": "Surplus gate: close above setpoint + (K)",
           "flow_gate_open_surplus_c": "Surplus gate: reopen below setpoint + (K)",
           "flow_gate_hold_time_s": "Surplus gate: hold time before closing (s)",
-          "max_sensor_age_s": "Max sensor age (s)"
+          "max_sensor_age_s": "Max sensor age (s)",
+          "stationary_range_c": "Stationary range for learning (K)"
         }
       }
     },
@@ -106,7 +108,8 @@
           "outdoor_temperature_entity": "Outdoor temperature sensor",
           "heat_source_climate_entity": "Heat source climate entity",
           "flow_threshold_entity": "Heat-source flow threshold entity (optional)",
-          "pv_boost_entity": "PV boost entity"
+          "pv_boost_entity": "PV boost entity",
+          "learning_window_entity": "Learning window entity (optional)"
         }
       },
       "settings": {
@@ -133,7 +136,8 @@
           "flow_gate_close_surplus_c": "Surplus gate: close above setpoint + (K)",
           "flow_gate_open_surplus_c": "Surplus gate: reopen below setpoint + (K)",
           "flow_gate_hold_time_s": "Surplus gate: hold time before closing (s)",
-          "max_sensor_age_s": "Max sensor age (s)"
+          "max_sensor_age_s": "Max sensor age (s)",
+          "stationary_range_c": "Stationary range for learning (K)"
         }
       }
     }
@@ -227,7 +231,8 @@
           "no_correction": "No correction needed",
           "disturbed": "Window disturbed",
           "suppressed": "Suppressed",
-          "waiting_interval": "Waiting"
+          "waiting_interval": "Waiting",
+          "outside_window": "Outside learning window"
         }
       },
       "ua_factor": {
@@ -242,6 +247,20 @@
     "unblock": {
       "name": "Unblock",
       "description": "Clear a manual-override block for one or more rooms and let automatic comfort/eco selection resume."
+    },
+    "recalibrate": {
+      "name": "Recalibrate",
+      "description": "Set the learned UA and capacity factors of one or more rooms. A factor left out stays unchanged; pass 1.0 to reset it. Admin only.",
+      "fields": {
+        "ua_factor": {
+          "name": "UA factor",
+          "description": "Learned heat-loss factor. 1.0 resets it to the design heat load."
+        },
+        "capacity_factor": {
+          "name": "Capacity factor",
+          "description": "Learned thermal-capacity factor. 1.0 resets it to the design value."
+        }
+      }
     }
   }
 }

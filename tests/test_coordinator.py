@@ -1,6 +1,9 @@
-from datetime import timedelta
+import time
+from datetime import date, datetime, timedelta
 
+from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers.sun import get_astral_event_date
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
@@ -8,6 +11,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from heating_controller.const import (
     DEFAULT_FLOW_THRESHOLD_C,
+    DEFAULT_STATIONARY_RANGE_C,
     DOMAIN,
     FlowSupplyStatus,
     HeatMode,
@@ -739,5 +743,107 @@ async def test_flow_threshold_falls_back_while_the_helper_is_unavailable(
     await coordinator.async_setup()
 
     assert coordinator.flow_threshold_c == DEFAULT_FLOW_THRESHOLD_C
+
+    coordinator.async_unload()
+
+
+async def _setup_coordinator(
+    hass: HomeAssistant, **overrides
+) -> HeatingRoomCoordinator:
+    entry = MockConfigEntry(domain=DOMAIN, data={**ENTRY_DATA, **overrides})
+    entry.add_to_hass(hass)
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+    return coordinator
+
+
+async def test_learning_window_follows_the_linked_entity(hass: HomeAssistant) -> None:
+    _seed_entities(hass)
+    hass.states.async_set("input_boolean.nachtmodus", "off")
+    coordinator = await _setup_coordinator(
+        hass, learning_window_entity="input_boolean.nachtmodus"
+    )
+    learner = coordinator.mpc._learner
+
+    assert learner._learning_window_active is False
+
+    hass.states.async_set("input_boolean.nachtmodus", "on")
+    await hass.async_block_till_done()
+    assert learner._learning_window_active is True
+
+    hass.states.async_set("input_boolean.nachtmodus", "unavailable")
+    await hass.async_block_till_done()
+    assert learner._learning_window_active is False
+
+    coordinator.async_unload()
+
+
+async def test_learning_window_stays_open_without_a_linked_entity(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    coordinator = await _setup_coordinator(hass)
+
+    assert coordinator.mpc._learner._learning_window_active is True
+
+    coordinator.async_unload()
+
+
+async def test_stationary_range_comes_from_the_entry(hass: HomeAssistant) -> None:
+    _seed_entities(hass)
+    coordinator = await _setup_coordinator(hass, stationary_range_c=0.5)
+
+    assert coordinator.mpc._learner._stationary_range_c == 0.5
+
+    coordinator.async_unload()
+
+
+async def test_stationary_range_defaults_without_a_setting(hass: HomeAssistant) -> None:
+    _seed_entities(hass)
+    coordinator = await _setup_coordinator(hass)
+
+    assert coordinator.mpc._learner._stationary_range_c == DEFAULT_STATIONARY_RANGE_C
+
+    coordinator.async_unload()
+
+
+async def test_closing_the_window_frees_capacity_before_ua(hass: HomeAssistant) -> None:
+    _seed_entities(hass)
+    coordinator = await _setup_coordinator(hass)
+    learner = coordinator.mpc._learner
+
+    hass.states.async_set("binary_sensor.fenster_wohnzimmer", "on")
+    await hass.async_block_till_done()
+    before_close = time.time()
+    hass.states.async_set("binary_sensor.fenster_wohnzimmer", "off")
+    await hass.async_block_till_done()
+
+    ua_until = learner._ua_suppression.suppressed_until_ts - before_close
+    capacity_until = learner._capacity_suppression.suppressed_until_ts - before_close
+    assert 29 * 60 < ua_until <= 31 * 60
+    assert 9 * 60 < capacity_until <= 11 * 60
+
+    coordinator.async_unload()
+
+
+async def test_sun_condition_needs_two_hours_after_sunset_and_ends_at_sunrise(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    coordinator = await _setup_coordinator(hass)
+
+    day = date(2026, 12, 1)
+    sunset = get_astral_event_date(hass, SUN_EVENT_SUNSET, day)
+    next_sunrise = get_astral_event_date(hass, SUN_EVENT_SUNRISE, day + timedelta(days=1))
+
+    def met(moment: datetime) -> bool:
+        return coordinator.is_sun_condition_met(moment.timestamp())
+
+    assert met(sunset - timedelta(hours=3)) is False
+    assert met(sunset + timedelta(hours=1)) is False
+    assert met(sunset + timedelta(hours=2, minutes=1)) is True
+    assert met(next_sunrise - timedelta(minutes=1)) is True
+    assert met(next_sunrise + timedelta(minutes=1)) is False
 
     coordinator.async_unload()

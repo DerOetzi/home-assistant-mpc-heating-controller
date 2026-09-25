@@ -21,6 +21,7 @@ from .const import (
     CONF_FLOW_THRESHOLD_ENTITY,
     CONF_FROST_PROTECTION_TEMPERATURE,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
+    CONF_LEARNING_WINDOW_ENTITY,
     CONF_MAX_SENSOR_AGE,
     CONF_MPC_DEMAND_HYSTERESIS_PCT,
     CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT,
@@ -34,6 +35,7 @@ from .const import (
     CONF_ROOM_HEAT_LOAD,
     CONF_ROOM_NAME,
     CONF_ROOM_SENSOR_ENTITY,
+    CONF_STATIONARY_RANGE,
     CONF_TRV_ACTIVE_SWITCH,
     CONF_TRV_COUNT,
     CONF_TRV_EMITTER_TYPE,
@@ -50,10 +52,14 @@ from .const import (
     DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C,
     DEFAULT_FLOW_GATE_HOLD_TIME_S,
     DEFAULT_FLOW_GATE_OPEN_SURPLUS_C,
+    DEFAULT_STATIONARY_RANGE_C,
     DOMAIN,
+    MAX_STATIONARY_RANGE_C,
+    MAX_TRV_COUNT,
+    MIN_STATIONARY_RANGE_C,
+    STATIONARY_RANGE_STEP_C,
     DesignTemperatureSystem,
     HeatEmitterType,
-    MAX_TRV_COUNT,
     PanelRadiatorType,
 )
 
@@ -203,6 +209,11 @@ def _entities_schema(defaults: dict[str, Any]) -> vol.Schema:
                     selector.EntitySelectorConfig(domain=_BOOLEAN_SIGNAL_DOMAINS)
                 )
             ),
+            _marker(vol.Optional, CONF_LEARNING_WINDOW_ENTITY, defaults): (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain=_BOOLEAN_SIGNAL_DOMAINS)
+                )
+            ),
         }
     )
 
@@ -296,6 +307,18 @@ def _mpc_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_MAX_SENSOR_AGE, default=defaults.get(CONF_MAX_SENSOR_AGE, 1800.0)
             ): vol.Coerce(float),
+            vol.Required(
+                CONF_STATIONARY_RANGE,
+                default=defaults.get(CONF_STATIONARY_RANGE, DEFAULT_STATIONARY_RANGE_C),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=MIN_STATIONARY_RANGE_C,
+                    max=MAX_STATIONARY_RANGE_C,
+                    step=STATIONARY_RANGE_STEP_C,
+                    mode=selector.NumberSelectorMode.BOX,
+                    unit_of_measurement="K",
+                )
+            ),
         }
     )
 

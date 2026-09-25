@@ -39,7 +39,8 @@
           "outdoor_temperature_entity": "Außentemperatursensor",
           "heat_source_climate_entity": "Wärmeerzeuger-Climate-Entity",
           "flow_threshold_entity": "Entität für Wärmeerzeuger-Vorlaufschwelle (optional)",
-          "pv_boost_entity": "PV-Überschuss-Entity"
+          "pv_boost_entity": "PV-Überschuss-Entity",
+          "learning_window_entity": "Entität für Lernfenster (optional)"
         }
       },
       "settings": {
@@ -66,7 +67,8 @@
           "flow_gate_close_surplus_c": "Überschuss-Gate: schließen ab Soll + (K)",
           "flow_gate_open_surplus_c": "Überschuss-Gate: öffnen unter Soll + (K)",
           "flow_gate_hold_time_s": "Überschuss-Gate: Haltezeit vor dem Schließen (s)",
-          "max_sensor_age_s": "Max. Sensoralter (s)"
+          "max_sensor_age_s": "Max. Sensoralter (s)",
+          "stationary_range_c": "Stationäre Spannweite fürs Lernen (K)"
         }
       }
     },
@@ -106,7 +108,8 @@
           "outdoor_temperature_entity": "Außentemperatursensor",
           "heat_source_climate_entity": "Wärmeerzeuger-Climate-Entity",
           "flow_threshold_entity": "Entität für Wärmeerzeuger-Vorlaufschwelle (optional)",
-          "pv_boost_entity": "PV-Überschuss-Entity"
+          "pv_boost_entity": "PV-Überschuss-Entity",
+          "learning_window_entity": "Entität für Lernfenster (optional)"
         }
       },
       "settings": {
@@ -133,7 +136,8 @@
           "flow_gate_close_surplus_c": "Überschuss-Gate: schließen ab Soll + (K)",
           "flow_gate_open_surplus_c": "Überschuss-Gate: öffnen unter Soll + (K)",
           "flow_gate_hold_time_s": "Überschuss-Gate: Haltezeit vor dem Schließen (s)",
-          "max_sensor_age_s": "Max. Sensoralter (s)"
+          "max_sensor_age_s": "Max. Sensoralter (s)",
+          "stationary_range_c": "Stationäre Spannweite fürs Lernen (K)"
         }
       }
     }
@@ -227,7 +231,8 @@
           "no_correction": "Kein Lernbedarf",
           "disturbed": "Messfenster gestört",
           "suppressed": "Unterdrückt",
-          "waiting_interval": "Wartet"
+          "waiting_interval": "Wartet",
+          "outside_window": "Außerhalb des Lernfensters"
         }
       },
       "ua_factor": {
@@ -242,6 +247,20 @@
     "unblock": {
       "name": "Entblocken",
       "description": "Hebt die manuelle Blockierung für einen oder mehrere Räume auf und lässt die automatische Komfort-/Absenk-Auswahl wieder zu."
+    },
+    "recalibrate": {
+      "name": "Neu kalibrieren",
+      "description": "Setzt die gelernten UA- und Kapazitätsfaktoren eines oder mehrerer Räume. Ein weggelassener Faktor bleibt unverändert; 1.0 setzt ihn zurück. Nur für Admins.",
+      "fields": {
+        "ua_factor": {
+          "name": "UA-Faktor",
+          "description": "Gelernter Wärmeverlustfaktor. 1.0 setzt ihn auf die Auslegungsheizlast zurück."
+        },
+        "capacity_factor": {
+          "name": "Kapazitätsfaktor",
+          "description": "Gelernter Faktor der Wärmekapazität. 1.0 setzt ihn auf den Auslegungswert zurück."
+        }
+      }
     }
   }
 }

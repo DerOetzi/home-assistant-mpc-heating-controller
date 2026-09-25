@@ -44,7 +44,12 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   ungated requirement for diagnosis. See [docs/mpc-guide.md](docs/mpc-guide.md).
 - **Persisted learning** — each room's learned `ua_factor`/`capacity_factor` survive
   restarts (`homeassistant.helpers.storage.Store`, one file per room) and are removed
-  cleanly if the room's config entry is deleted.
+  cleanly if the room's config entry is deleted. The admin-only
+  `heating_controller.recalibrate` service sets or resets them.
+- **Learning only when gains are small** — learning pauses while the sun is up and for two
+  hours after sunset, the heat-loss factor also follows an optional learning window entity
+  (e.g. a night-mode helper), and the factor is chosen by how far the room temperature moved
+  in the window. See [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
 - **Custom Lovelace card** (`custom:heating-controller-card`) — a single card per room
   showing room temperature, configurable header sensors (humidity, CO₂, PM2.5, …), mode
   control, comfort/eco setpoints, boost, room-specific comfort conditions, and a detail
@@ -78,12 +83,13 @@ Heating Controller**. The setup flow walks through:
    TRV-active switch, valve target-temperature range/step, emitter type, and (depending on
    emitter type) panel radiator type/dimensions or nominal power.
 3. **Entities** — optional room temperature sensor, window contacts, room-specific comfort
-   conditions, PV-boost entity, plus the required outdoor temperature sensor and shared heat
-   source `climate` entity.
+   conditions, PV-boost entity, optional learning window entity, plus the required outdoor
+   temperature sensor and shared heat source `climate` entity.
 4. **Settings** — boost enable/offset, frost-protection temperature, PV-boost enable/offset.
 5. **MPC parameters** — design indoor/outdoor temperature and system flow/return
-   temperatures (used to size the emitter curve), room heat load, and demand-control
-   hysteresis/hold-time/max-step tuning.
+   temperatures (used to size the emitter curve), room heat load, demand-control
+   hysteresis/hold-time/max-step tuning, and the stationary range that decides which
+   factor a measurement window trains.
 
 All of the above is editable afterwards via the entry's **Configure** options flow — it
 re-runs the same steps pre-filled with the current values.
@@ -105,7 +111,9 @@ rows) are configured entirely through the editor's sortable lists — see
   learning data, other rooms are unaffected.
 - Learning (the `ua_factor`/`capacity_factor` self-calibration) only runs while the shared
   heat source is actually calling for heat above the configured flow threshold; outside the
-  heating season the room simply stops adjusting until it's needed again.
+  heating season the room simply stops adjusting until it's needed again. Within that time
+  it also waits for the sun and the learning window entity, see
+  [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
 - The card doesn't care about entity IDs — rename any of a room's entities freely, the card
   keeps working.
 - After updating the integration (HACS or manual), do a hard browser reload (Ctrl+F5) once

@@ -8,12 +8,15 @@ from heating_controller.const import (
     CONF_DESIGN_TEMPERATURE_SYSTEM,
     CONF_FLOW_THRESHOLD_ENTITY,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
+    CONF_LEARNING_WINDOW_ENTITY,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PV_BOOST_ENTITY,
     CONF_ROOM_NAME,
+    CONF_STATIONARY_RANGE,
     CONF_TRV_ACTIVE_SWITCH,
     CONF_TRV_ENTITY_ID,
     CONF_TRVS,
+    DEFAULT_STATIONARY_RANGE_C,
     DOMAIN,
 )
 
@@ -61,6 +64,7 @@ async def test_full_config_flow_creates_entry(hass: HomeAssistant) -> None:
             "heat_source_climate_entity": "climate.heat_source",
             "flow_threshold_entity": "input_number.flow_threshold",
             "pv_boost_entity": "binary_sensor.pv_boost",
+            "learning_window_entity": "input_boolean.nachtmodus",
         },
     )
     assert result["step_id"] == "settings"
@@ -89,6 +93,7 @@ async def test_full_config_flow_creates_entry(hass: HomeAssistant) -> None:
             "mpc_hold_override_demand_pct": 40.0,
             "mpc_max_demand_step_pct": 20.0,
             "max_sensor_age_s": 1800.0,
+            "stationary_range_c": 0.3,
         },
     )
 
@@ -101,6 +106,8 @@ async def test_full_config_flow_creates_entry(hass: HomeAssistant) -> None:
     assert data[CONF_HEAT_SOURCE_CLIMATE_ENTITY] == "climate.heat_source"
     assert data[CONF_FLOW_THRESHOLD_ENTITY] == "input_number.flow_threshold"
     assert data[CONF_PV_BOOST_ENTITY] == "binary_sensor.pv_boost"
+    assert data[CONF_LEARNING_WINDOW_ENTITY] == "input_boolean.nachtmodus"
+    assert data[CONF_STATIONARY_RANGE] == 0.3
     assert data[CONF_COMFORT_CONDITION_ENTITIES] == ["input_boolean.comfort_release"]
     assert len(data[CONF_TRVS]) == 1
     assert data[CONF_TRVS][0][CONF_TRV_ENTITY_ID] == "climate.heizung_wohnzimmer"
@@ -205,7 +212,11 @@ async def test_options_flow_writes_entry_data_and_covers_trvs(
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["step_id"] == "entities"
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"flow_threshold_entity": "input_number.other_threshold"}
+        result["flow_id"],
+        {
+            "flow_threshold_entity": "input_number.other_threshold",
+            "learning_window_entity": "input_boolean.nachtmodus",
+        },
     )
     assert result["step_id"] == "settings"
     result = await hass.config_entries.options.async_configure(result["flow_id"], {})
@@ -215,6 +226,8 @@ async def test_options_flow_writes_entry_data_and_covers_trvs(
     await hass.async_block_till_done()
 
     assert entry.data[CONF_FLOW_THRESHOLD_ENTITY] == "input_number.other_threshold"
+    assert entry.data[CONF_LEARNING_WINDOW_ENTITY] == "input_boolean.nachtmodus"
+    assert entry.data[CONF_STATIONARY_RANGE] == DEFAULT_STATIONARY_RANGE_C
     assert entry.data[CONF_TRVS][0][CONF_TRV_ACTIVE_SWITCH] == (
         "switch.heizung_wohnzimmer_trv_active"
     )

@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from ...const import LearningStatus
+from ...const import DEFAULT_STATIONARY_RANGE_C, LearningStatus
 from .models.capacity import ThermalCapacityModel
 from .models.loss import RoomLossModel
 from .results import RoomMpcInput
@@ -11,7 +11,6 @@ from .types import LearningFactors, RoomModelLearningState
 
 HISTORY_RETENTION_S = 180 * 60
 MIN_HISTORY_SAMPLES = 5
-UA_LEARNING_THRESHOLD_W = 300.0
 MIN_ROOM_DELTA_C = 0.15
 MAX_OUTDOOR_DELTA_C = 1.0
 MAX_FLOW_DELTA_C = 5.0
@@ -35,6 +34,29 @@ class LearnerPrediction:
     prediction_horizon_s: float
 
 
+@dataclass
+class _FactorSuppression:
+    suppressed_until_ts: float = 0.0
+    current_window_invalid: bool = False
+    next_window_invalid: bool = False
+
+    def suppress(self, until_ts: float) -> None:
+        self.suppressed_until_ts = until_ts
+        self.current_window_invalid = True
+
+    def mark_next_window(self, now_ts: float) -> None:
+        if now_ts < self.suppressed_until_ts:
+            self.next_window_invalid = True
+
+    def rotate(self) -> None:
+        self.current_window_invalid = self.next_window_invalid
+        self.next_window_invalid = False
+
+    def reset(self) -> None:
+        self.current_window_invalid = False
+        self.next_window_invalid = False
+
+
 class RoomMpcModelLearner:
     def __init__(
         self, loss_model: RoomLossModel, capacity_model: ThermalCapacityModel
@@ -47,9 +69,12 @@ class RoomMpcModelLearner:
         self._last_prediction: LearnerPrediction | None = None
 
         self._enabled = False
-        self._suppressed_until_ts = 0.0
-        self._current_window_invalid = False
-        self._next_window_invalid = False
+        self._ua_suppression = _FactorSuppression()
+        self._capacity_suppression = _FactorSuppression()
+        self._stationary_range_c = DEFAULT_STATIONARY_RANGE_C
+        self._learning_window_active = True
+        self._learning_window_active_since_ts = 0.0
+        self._sun_condition: callable[[float], bool] = lambda _ts: True
         self._pending_persisted_factors: LearningFactors | None = None
 
         self._learning_state = self._create_learning_state(LearningStatus.DISABLED)
@@ -75,14 +100,28 @@ class RoomMpcModelLearner:
         self._learning_state = self._create_learning_state(LearningStatus.DISABLED)
         self._active_prediction = None
         self._last_prediction = None
-        self._current_window_invalid = False
-        self._next_window_invalid = False
+        self._ua_suppression.reset()
+        self._capacity_suppression.reset()
 
-    def suppress_for_interval(self, duration_s: float) -> None:
-        self._suppressed_until_ts = time.time() + duration_s
-        self._current_window_invalid = True
+    def suppress_for_interval(
+        self, ua_duration_s: float, capacity_duration_s: float
+    ) -> None:
+        now = time.time()
+        self._ua_suppression.suppress(now + ua_duration_s)
+        self._capacity_suppression.suppress(now + capacity_duration_s)
         self._pending_persisted_factors = None
         self._learning_state = self._create_learning_state(LearningStatus.SUPPRESSED)
+
+    def set_stationary_range_c(self, stationary_range_c: float) -> None:
+        self._stationary_range_c = stationary_range_c
+
+    def set_learning_window_active(self, active: bool, now_ts: float) -> None:
+        if active and not self._learning_window_active:
+            self._learning_window_active_since_ts = now_ts
+        self._learning_window_active = active
+
+    def set_sun_condition(self, sun_condition: callable[[float], bool]) -> None:
+        self._sun_condition = sun_condition
 
     def append_history(self, mpc_input: RoomMpcInput, applied_heating_power_w: float) -> None:
         self._history.append(
@@ -114,10 +153,13 @@ class RoomMpcModelLearner:
             return
 
         now = time.time()
-        if now < self._suppressed_until_ts:
-            self._next_window_invalid = True
+        self._ua_suppression.mark_next_window(now)
+        self._capacity_suppression.mark_next_window(now)
 
-        if self._current_window_invalid:
+        if (
+            self._ua_suppression.current_window_invalid
+            and self._capacity_suppression.current_window_invalid
+        ):
             self._learning_state = self._create_learning_state(
                 LearningStatus.SUPPRESSED
             )
@@ -147,6 +189,24 @@ class RoomMpcModelLearner:
             self._rotate_learning_window()
             return
 
+        stationary = self._is_stationary(relevant_history)
+        suppression = (
+            self._ua_suppression if stationary else self._capacity_suppression
+        )
+        if suppression.current_window_invalid:
+            self._learning_state = self._create_learning_state(
+                LearningStatus.SUPPRESSED
+            )
+            self._rotate_learning_window()
+            return
+
+        if not self._is_inside_learning_window(self._active_prediction, stationary):
+            self._learning_state = self._create_learning_state(
+                LearningStatus.OUTSIDE_WINDOW
+            )
+            self._rotate_learning_window()
+            return
+
         predicted_room_temperature_c = (
             self._active_prediction.predicted_room_temperature_c
         )
@@ -154,9 +214,6 @@ class RoomMpcModelLearner:
             relevant_history
         )
         prediction_error_c = actual_room_temperature_c - predicted_room_temperature_c
-        average_heating_power_w = self._calculate_average_heating_power_w(
-            relevant_history
-        )
 
         if abs(prediction_error_c) < MIN_ROOM_DELTA_C:
             self._learning_state = self._create_learning_state(
@@ -165,7 +222,7 @@ class RoomMpcModelLearner:
             self._rotate_learning_window()
             return
 
-        if average_heating_power_w < UA_LEARNING_THRESHOLD_W:
+        if stationary:
             self._learn_ua_factor(prediction_error_c)
         else:
             self._learn_capacity_factor(prediction_error_c)
@@ -212,11 +269,23 @@ class RoomMpcModelLearner:
             last_samples
         )
 
-    @staticmethod
-    def _calculate_average_heating_power_w(
-        history: list[LearnerHistoryEntry],
-    ) -> float:
-        return sum(entry.applied_heating_power_w for entry in history) / len(history)
+    def _is_stationary(self, history: list[LearnerHistoryEntry]) -> bool:
+        room_temperatures = [entry.room_temperature_c for entry in history]
+        return max(room_temperatures) - min(room_temperatures) < self._stationary_range_c
+
+    def _is_inside_learning_window(
+        self, prediction: LearnerPrediction, stationary: bool
+    ) -> bool:
+        start_ts = prediction.timestamp
+        end_ts = start_ts + prediction.prediction_horizon_s
+        if not (self._sun_condition(start_ts) and self._sun_condition(end_ts)):
+            return False
+        if not stationary:
+            return True
+        return (
+            self._learning_window_active
+            and self._learning_window_active_since_ts <= start_ts
+        )
 
     def _learn_ua_factor(self, prediction_error_c: float) -> None:
         self._loss_model.learned_ua_factor = self._loss_model.learned_ua_factor * (
@@ -230,13 +299,15 @@ class RoomMpcModelLearner:
         )
 
     def _rotate_learning_window(self) -> None:
-        self._current_window_invalid = self._next_window_invalid
-        self._next_window_invalid = False
+        self._ua_suppression.rotate()
+        self._capacity_suppression.rotate()
         self._active_prediction = self._last_prediction
         self._last_prediction = None
 
     def recalibrate(self, factors: LearningFactors) -> None:
         self._pending_persisted_factors = None
+        self._active_prediction = None
+        self._last_prediction = None
         self._loss_model.learned_ua_factor = factors.ua_factor
         self._capacity_model.learned_capacity_factor = factors.capacity_factor
         self._learning_state = self._create_learning_state(self._learning_state.status)

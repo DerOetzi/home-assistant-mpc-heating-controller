@@ -454,5 +454,16 @@ class RoomMpcController:
     def disable_learning(self) -> None:
         self._learner.disable()
 
-    def suppress_learning_for_interval(self, duration_s: float) -> None:
-        self._learner.suppress_for_interval(duration_s)
+    def suppress_learning_for_interval(
+        self, ua_duration_s: float, capacity_duration_s: float
+    ) -> None:
+        self._learner.suppress_for_interval(ua_duration_s, capacity_duration_s)
+
+    def set_stationary_range_c(self, stationary_range_c: float) -> None:
+        self._learner.set_stationary_range_c(stationary_range_c)
+
+    def set_learning_window_active(self, active: bool, now_ts: float) -> None:
+        self._learner.set_learning_window_active(active, now_ts)
+
+    def set_sun_condition(self, sun_condition: callable[[float], bool]) -> None:
+        self._learner.set_sun_condition(sun_condition)

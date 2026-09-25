@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import timedelta
 from typing import Any, Callable
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_ON
+from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET, STATE_ON
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
     async_track_time_interval,
 )
-from homeassistant.util import slugify
+from homeassistant.helpers.sun import get_astral_event_date
+from homeassistant.util import dt as dt_util, slugify
 
 from .const import (
     CONF_COMFORT_CONDITION_ENTITIES,
@@ -24,6 +26,7 @@ from .const import (
     CONF_FLOW_GATE_OPEN_SURPLUS,
     CONF_FLOW_THRESHOLD_ENTITY,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
+    CONF_LEARNING_WINDOW_ENTITY,
     CONF_MAX_SENSOR_AGE,
     CONF_MPC_DEMAND_HYSTERESIS_PCT,
     CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT,
@@ -37,6 +40,7 @@ from .const import (
     CONF_ROOM_HEAT_LOAD,
     CONF_ROOM_NAME,
     CONF_ROOM_SENSOR_ENTITY,
+    CONF_STATIONARY_RANGE,
     CONF_TRV_ACTIVE_SWITCH,
     CONF_TRV_EMITTER_TYPE,
     CONF_TRV_ENTITY_ID,
@@ -55,6 +59,7 @@ from .const import (
     DEFAULT_FLOW_GATE_HOLD_TIME_S,
     DEFAULT_FLOW_GATE_OPEN_SURPLUS_C,
     DEFAULT_FLOW_THRESHOLD_C,
+    DEFAULT_STATIONARY_RANGE_C,
     HEAT_SOURCE_ACTIVE_STATE,
     DesignTemperatureSystem,
     FlowSupplyStatus,
@@ -86,7 +91,10 @@ LEARNING_CYCLE_INTERVAL = timedelta(minutes=LEARNING_CYCLE_INTERVAL_MINUTES)
 SENSOR_POLL_INTERVAL = timedelta(minutes=SENSOR_POLL_INTERVAL_MINUTES)
 
 WINDOW_OPEN_SUPPRESS_LEARNING_S = 60 * 60
-WINDOW_CLOSED_SUPPRESS_LEARNING_S = 30 * 60
+WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S = 30 * 60
+WINDOW_CLOSED_SUPPRESS_CAPACITY_LEARNING_S = 10 * 60
+
+SUNSET_LEARNING_DELAY = timedelta(hours=2)
 
 # After startup a configured room sensor often reports a few seconds after the
 # TRVs. Computing in between falls back to the TRV average, which can sit well
@@ -146,6 +154,9 @@ class HeatingRoomCoordinator:
         self._flow_threshold_entity: str | None = self.data.get(
             CONF_FLOW_THRESHOLD_ENTITY
         )
+        self._learning_window_entity: str | None = self.data.get(
+            CONF_LEARNING_WINDOW_ENTITY
+        )
 
         self.state = HeatingStateController(
             HeatingStateConfig(
@@ -193,6 +204,10 @@ class HeatingRoomCoordinator:
             max_sensor_age_s=self.data[CONF_MAX_SENSOR_AGE],
             flow_gate_config=flow_gate_config,
         )
+        self.mpc.set_stationary_range_c(
+            self.data.get(CONF_STATIONARY_RANGE, DEFAULT_STATIONARY_RANGE_C)
+        )
+        self.mpc.set_sun_condition(self.is_sun_condition_met)
 
         self.store = LearningFactorsStore(hass, self.room_name, entry.entry_id)
         self.flow_gate_store = FlowGateStateStore(hass, self.room_name, entry.entry_id)
@@ -237,6 +252,11 @@ class HeatingRoomCoordinator:
 
         self.state.set_pv_boost(self._is_on(self.data[CONF_PV_BOOST_ENTITY]))
 
+        if self._learning_window_entity:
+            self.mpc.set_learning_window_active(
+                self._is_on(self._learning_window_entity), time.time()
+            )
+
         self._refresh_temperature_inputs()
 
         room_sensor_entity = self.data.get(CONF_ROOM_SENSOR_ENTITY)
@@ -258,6 +278,8 @@ class HeatingRoomCoordinator:
             tracked_entities.append(self._heat_source_climate_entity)
         if self._flow_threshold_entity:
             tracked_entities.append(self._flow_threshold_entity)
+        if self._learning_window_entity:
+            tracked_entities.append(self._learning_window_entity)
         if room_sensor_entity:
             tracked_entities.append(room_sensor_entity)
 
@@ -436,14 +458,22 @@ class HeatingRoomCoordinator:
                 entity_id, self._bool_from_state(new_state)
             )
             if is_open and not was_open:
-                self.mpc.suppress_learning_for_interval(WINDOW_OPEN_SUPPRESS_LEARNING_S)
+                self.mpc.suppress_learning_for_interval(
+                    WINDOW_OPEN_SUPPRESS_LEARNING_S, WINDOW_OPEN_SUPPRESS_LEARNING_S
+                )
             elif was_open and not is_open:
                 self.mpc.suppress_learning_for_interval(
-                    WINDOW_CLOSED_SUPPRESS_LEARNING_S
+                    WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S,
+                    WINDOW_CLOSED_SUPPRESS_CAPACITY_LEARNING_S,
                 )
 
         elif entity_id == self.data[CONF_PV_BOOST_ENTITY]:
             self.state.set_pv_boost(self._bool_from_state(new_state))
+
+        elif entity_id == self._learning_window_entity:
+            self.mpc.set_learning_window_active(
+                self._bool_from_state(new_state), time.time()
+            )
 
         await self._async_recompute()
 
@@ -456,6 +486,43 @@ class HeatingRoomCoordinator:
         persisted_factors = self.mpc.consume_persisted_learning_factors()
         if persisted_factors is not None:
             await self.store.async_save(persisted_factors)
+
+    async def async_recalibrate(
+        self, ua_factor: float | None, capacity_factor: float | None
+    ) -> None:
+        factors = LearningFactors(
+            ua_factor=self.mpc.learned_ua_factor if ua_factor is None else ua_factor,
+            capacity_factor=(
+                self.mpc.learned_capacity_factor
+                if capacity_factor is None
+                else capacity_factor
+            ),
+        )
+        self.mpc.recalibrate_learning_factors(factors)
+        await self.store.async_save(factors)
+        _LOGGER.info(
+            "Recalibrated learning factors for room %s: ua_factor=%s capacity_factor=%s",
+            self.room_name,
+            factors.ua_factor,
+            factors.capacity_factor,
+        )
+        self._notify_listeners()
+
+    def is_sun_condition_met(self, timestamp: float) -> bool:
+        moment = dt_util.utc_from_timestamp(timestamp)
+        today = dt_util.as_local(moment).date()
+
+        sunset_today = get_astral_event_date(self.hass, SUN_EVENT_SUNSET, today)
+        if sunset_today is not None and moment >= sunset_today + SUNSET_LEARNING_DELAY:
+            return True
+
+        sunrise_today = get_astral_event_date(self.hass, SUN_EVENT_SUNRISE, today)
+        sunset_yesterday = get_astral_event_date(
+            self.hass, SUN_EVENT_SUNSET, today - timedelta(days=1)
+        )
+        if sunrise_today is None or sunset_yesterday is None:
+            return False
+        return sunset_yesterday + SUNSET_LEARNING_DELAY <= moment < sunrise_today
 
     @property
     def flow_threshold_c(self) -> float:

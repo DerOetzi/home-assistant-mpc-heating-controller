@@ -12,6 +12,11 @@ DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C = 0.5
 DEFAULT_FLOW_GATE_OPEN_SURPLUS_C = 0.2
 DEFAULT_FLOW_GATE_HOLD_TIME_S = 900.0
 
+DEFAULT_STATIONARY_RANGE_C = 0.2
+MIN_STATIONARY_RANGE_C = 0.1
+MAX_STATIONARY_RANGE_C = 1.0
+STATIONARY_RANGE_STEP_C = 0.05
+
 MAX_TRV_COUNT = 3
 
 HEAT_SOURCE_ACTIVE_STATE = "heat"
@@ -39,6 +44,7 @@ CONF_HEAT_SOURCE_CLIMATE_ENTITY = "heat_source_climate_entity"
 CONF_FLOW_THRESHOLD = "flow_threshold_c"
 CONF_FLOW_THRESHOLD_ENTITY = "flow_threshold_entity"
 CONF_PV_BOOST_ENTITY = "pv_boost_entity"
+CONF_LEARNING_WINDOW_ENTITY = "learning_window_entity"
 
 CONF_BOOST_ENABLED = "boost_enabled"
 CONF_BOOST_TEMPERATURE_OFFSET = "boost_temperature_offset_c"
@@ -58,8 +64,12 @@ CONF_FLOW_GATE_CLOSE_SURPLUS = "flow_gate_close_surplus_c"
 CONF_FLOW_GATE_OPEN_SURPLUS = "flow_gate_open_surplus_c"
 CONF_FLOW_GATE_HOLD_TIME = "flow_gate_hold_time_s"
 CONF_MAX_SENSOR_AGE = "max_sensor_age_s"
+CONF_STATIONARY_RANGE = "stationary_range_c"
 
 SERVICE_UNBLOCK = "unblock"
+SERVICE_RECALIBRATE = "recalibrate"
+ATTR_UA_FACTOR = "ua_factor"
+ATTR_CAPACITY_FACTOR = "capacity_factor"
 
 LEARNING_CYCLE_INTERVAL_MINUTES = 30
 SENSOR_POLL_INTERVAL_MINUTES = 5
@@ -121,3 +131,4 @@ class LearningStatus(StrEnum):
     DISTURBED = "disturbed"
     SUPPRESSED = "suppressed"
     WAITING_INTERVAL = "waiting_interval"
+    OUTSIDE_WINDOW = "outside_window"
