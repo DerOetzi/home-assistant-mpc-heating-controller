@@ -1,6 +1,6 @@
 [project]
 name = "heating-controller"
-version = "0.1.0"
+version = "0.0.0"
 description = "Home Assistant custom integration for MPC-based room heating control"
 requires-python = ">=3.13"
 license = { text = "MIT" }
