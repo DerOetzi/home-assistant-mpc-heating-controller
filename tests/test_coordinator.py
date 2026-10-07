@@ -536,6 +536,122 @@ async def test_trv_active_switch_turned_off_when_unavailable(
     coordinator.async_unload()
 
 
+async def test_trv_target_already_reported_is_not_rewritten(
+    hass: HomeAssistant,
+) -> None:
+    """Danfoss TRVs abort a running adaptation run on every setpoint write."""
+    writes: list[tuple[float | None, float]] = []
+
+    async def climate_handler(call: ServiceCall) -> None:
+        # Behave like a TRV: report the written target back as its state.
+        state = hass.states.get(call.data["entity_id"])
+        writes.append((state.attributes.get("temperature"), call.data["temperature"]))
+        hass.states.async_set(
+            call.data["entity_id"],
+            state.state,
+            {**state.attributes, "temperature": call.data["temperature"]},
+        )
+
+    async def switch_handler(call: ServiceCall) -> None:
+        return None
+
+    _seed_entities(hass)
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    hass.services.async_register("climate", "set_temperature", climate_handler)
+    hass.services.async_register("switch", "turn_on", switch_handler)
+    hass.services.async_register("switch", "turn_off", switch_handler)
+    await coordinator.async_setup()
+    await hass.async_block_till_done()
+    assert writes
+
+    # The MPC ramps its target over several cycles; once it settles, a
+    # recompute must not write again.
+    for _ in range(20):
+        write_count = len(writes)
+        await coordinator.async_unblock()
+        await hass.async_block_till_done()
+        if len(writes) == write_count:
+            break
+    else:
+        raise AssertionError("target never settled; every recompute wrote")
+
+    assert all(reported != written for reported, written in writes)
+
+    coordinator.async_unload()
+
+
+async def test_trv_target_differing_from_reported_is_written(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    calls = _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+    assert calls
+    written_target_c = calls[-1].data["temperature"]
+    reported_target_c = written_target_c + 1.0
+    calls.clear()
+
+    # E.g. someone turned the TRV by hand: the controller must win it back.
+    hass.states.async_set(
+        "climate.heizung_wohnzimmer",
+        "heat",
+        {"current_temperature": 18.0, "temperature": reported_target_c},
+    )
+    await hass.async_block_till_done()
+
+    assert calls
+    assert calls[-1].data["temperature"] != reported_target_c
+
+    coordinator.async_unload()
+
+
+async def test_trv_active_switch_already_in_state_is_not_rewritten(
+    hass: HomeAssistant,
+) -> None:
+    switch_calls: list[ServiceCall] = []
+
+    async def climate_handler(call: ServiceCall) -> None:
+        return None
+
+    async def switch_handler(call: ServiceCall) -> None:
+        switch_calls.append(call)
+
+    _seed_entities(hass, heat_available=True)
+    hass.states.async_set("switch.heizung_wohnzimmer_trv_active", "on")
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    hass.services.async_register("climate", "set_temperature", climate_handler)
+    hass.services.async_register("switch", "turn_on", switch_handler)
+    hass.services.async_register("switch", "turn_off", switch_handler)
+
+    await coordinator.async_setup()
+    await hass.async_block_till_done()
+
+    assert coordinator.trv_active is True
+    assert switch_calls == []
+
+    hass.states.async_set("switch.heizung_wohnzimmer_trv_active", "off")
+    await coordinator.async_unblock()
+    await hass.async_block_till_done()
+
+    on_calls = [call for call in switch_calls if call.service == "turn_on"]
+    assert on_calls
+    assert on_calls[-1].data["entity_id"] == [
+        "switch.heizung_wohnzimmer_trv_active"
+    ]
+
+    coordinator.async_unload()
+
+
 async def test_setup_tolerates_missing_heat_source_climate_entity(
     hass: HomeAssistant,
 ) -> None:

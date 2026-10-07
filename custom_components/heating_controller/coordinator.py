@@ -6,7 +6,7 @@ from datetime import timedelta
 from typing import Any, Callable
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET, STATE_ON
+from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET, STATE_OFF, STATE_ON
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
 from homeassistant.helpers.event import (
     async_call_later,
@@ -89,6 +89,8 @@ _LOGGER = logging.getLogger(__name__)
 LEARNING_CYCLE_INTERVAL = timedelta(minutes=LEARNING_CYCLE_INTERVAL_MINUTES)
 
 SENSOR_POLL_INTERVAL = timedelta(minutes=SENSOR_POLL_INTERVAL_MINUTES)
+
+TARGET_TEMPERATURE_TOLERANCE_C = 0.01
 
 WINDOW_OPEN_SUPPRESS_LEARNING_S = 60 * 60
 WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S = 30 * 60
@@ -379,12 +381,19 @@ class HeatingRoomCoordinator:
         return flow_temp_c is not None and flow_temp_c >= self.flow_threshold_c
 
     async def _async_apply_trv_active_switches(self, active: bool) -> None:
-        if not self._trv_active_switches:
+        desired_state = STATE_ON if active else STATE_OFF
+        switches_to_set = [
+            entity_id
+            for entity_id in self._trv_active_switches
+            if (state := self.hass.states.get(entity_id)) is None
+            or state.state != desired_state
+        ]
+        if not switches_to_set:
             return
         await self.hass.services.async_call(
             "switch",
             "turn_on" if active else "turn_off",
-            {"entity_id": self._trv_active_switches},
+            {"entity_id": switches_to_set},
             blocking=False,
         )
 
@@ -413,6 +422,15 @@ class HeatingRoomCoordinator:
             return None
         try:
             return float(state.attributes.get("current_temperature"))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _climate_target_from_state(state: State | None) -> float | None:
+        if state is None:
+            return None
+        try:
+            return float(state.attributes.get("temperature"))
         except (TypeError, ValueError):
             return None
 
@@ -596,6 +614,17 @@ class HeatingRoomCoordinator:
         for entity_id, target_temperature_c in zip(
             self._trv_entity_ids, result.trv_targets, strict=True
         ):
+            # Every write wakes the TRV and can abort a running adaptation run,
+            # so only send a target the TRV does not already report.
+            current_target_c = self._climate_target_from_state(
+                self.hass.states.get(entity_id)
+            )
+            if (
+                current_target_c is not None
+                and abs(current_target_c - target_temperature_c)
+                < TARGET_TEMPERATURE_TOLERANCE_C
+            ):
+                continue
             await self.hass.services.async_call(
                 "climate",
                 "set_temperature",
