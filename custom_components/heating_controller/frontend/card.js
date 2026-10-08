@@ -16,7 +16,7 @@ import {
   MODE_COLORS,
   REQUIRED_ROLES,
 } from "./const.js";
-import { num, localeOf, isOn } from "./format.js";
+import { num, localeOf, isOn, entityValue } from "./format.js";
 import { resolveRoles, managedDetailRows, managedHeaderRows } from "./entities.js";
 import { migrateLegacyConfig, normalizeItems, normalizeDetail } from "./config.js";
 import { CARD_STYLES, NOTICE_STYLES } from "./card-styles.js";
@@ -544,16 +544,11 @@ export class HeatingControllerCard extends HTMLElement {
       } else {
         const stateObj = this._hass.states[entry.entity];
         if (!stateObj) continue;
-        const unit = stateObj.attributes.unit_of_measurement ?? "";
         rows.push({
           entity: entry.entity,
           name: entry.name ?? stateObj.attributes.friendly_name ?? entry.entity,
           icon: entry.icon ?? DEVICE_CLASS_ICONS[stateObj.attributes.device_class],
-          value: `${num(
-            stateObj.state,
-            unit === "%" || unit === "ppm" ? 0 : 1,
-            localeOf(this._hass)
-          )} ${unit}`,
+          value: entityValue(this._hass, stateObj, entry.state_labels),
         });
       }
     }

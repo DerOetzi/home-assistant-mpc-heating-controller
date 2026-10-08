@@ -229,6 +229,8 @@ export class HeatingControllerCardEditor extends HTMLElement {
           label: stateObj?.attributes?.friendly_name ?? entry.entity,
           name: entry.name,
           icon: entry.icon,
+          // YAML-only; carried through so an edit in the UI keeps it.
+          stateLabels: entry.state_labels,
           hidden: false,
         });
       }
@@ -278,6 +280,7 @@ export class HeatingControllerCardEditor extends HTMLElement {
         const entry = { entity: item.entity };
         if (item.name) entry.name = item.name;
         if (item.icon) entry.icon = item.icon;
+        if (item.stateLabels) entry.state_labels = item.stateLabels;
         return entry;
       });
     }

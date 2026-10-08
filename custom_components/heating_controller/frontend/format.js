@@ -18,4 +18,21 @@ export const num = (value, digits = 1, locale) => {
 
 export const localeOf = (hass) => hass?.locale?.language;
 
+// The value of a hand-added row. A number is rounded and gets its unit; any
+// other state (an enum like "found") is shown as text, relabelled through the
+// row's optional `state_labels` map, else in HA's own wording. unavailable/
+// unknown stay "–" like a broken number always has.
+export const entityValue = (hass, stateObj, stateLabels) => {
+  const state = stateObj.state;
+  if (stateLabels && Object.prototype.hasOwnProperty.call(stateLabels, state)) {
+    return String(stateLabels[state]);
+  }
+  const unit = stateObj.attributes.unit_of_measurement ?? "";
+  const isNumber = Number.isFinite(Number.parseFloat(state));
+  if (!isNumber && state !== "unavailable" && state !== "unknown") {
+    return hass.formatEntityState ? hass.formatEntityState(stateObj) : state;
+  }
+  return `${num(state, unit === "%" || unit === "ppm" ? 0 : 1, localeOf(hass))} ${unit}`;
+};
+
 export const isOn = (stateObj) => stateObj?.state === "on";

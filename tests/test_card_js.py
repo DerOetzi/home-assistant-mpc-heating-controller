@@ -366,6 +366,57 @@ def test_number_formatting_survives_bad_input(ctx) -> None:
     assert ctx.eval("num(undefined)") == "–"
 
 
+def test_entity_value_rounds_numbers_with_their_unit(ctx) -> None:
+    assert (
+        ctx.eval(
+            'entityValue({}, {state: "39", attributes: {unit_of_measurement: "%"}})'
+        )
+        == "39 %"
+    )
+    assert (
+        ctx.eval(
+            'entityValue({}, {state: "11.27", attributes: {unit_of_measurement: "°C"}})'
+        )
+        == "11.3 °C"
+    )
+
+
+def test_entity_value_shows_text_states_instead_of_a_dash(ctx) -> None:
+    """An enum sensor (Danfoss adaptation status) used to render as "–"."""
+    assert ctx.eval('entityValue({}, {state: "found", attributes: {}})') == "found"
+    assert (
+        ctx.eval(
+            """entityValue(
+                 {formatEntityState: function (s) { return "HA:" + s.state; }},
+                 {state: "found", attributes: {}}
+               )"""
+        )
+        == "HA:found"
+    )
+
+
+def test_entity_value_relabels_through_state_labels(ctx) -> None:
+    labels = '{found: "Gefunden", none: "Keine"}'
+    assert (
+        ctx.eval(f'entityValue({{}}, {{state: "found", attributes: {{}}}}, {labels})')
+        == "Gefunden"
+    )
+    # A state the map doesn't cover falls back to the plain text.
+    assert (
+        ctx.eval(f'entityValue({{}}, {{state: "lost", attributes: {{}}}}, {labels})')
+        == "lost"
+    )
+
+
+def test_entity_value_keeps_a_dash_for_unavailable(ctx) -> None:
+    assert (
+        ctx.eval(
+            'entityValue({}, {state: "unavailable", attributes: {unit_of_measurement: "%"}})'
+        )
+        == "– %"
+    )
+
+
 _BUTTON_STUB = """
 var makeButtonStub = function () {
   var el = { disabled: false, innerHTML: "", _class: "", _listeners: {} };

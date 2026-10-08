@@ -25,12 +25,20 @@ detail_entities:                           # optional, see "Editing the lists" b
   - entity: sensor.living_room_dew_point
     name: Dew point
     icon: mdi:thermometer-water
+  - entity: sensor.heizung_living_room_big_adaptation_run_status
+    name: Adaptation
+    state_labels:                          # optional, YAML only
+      found: Done
+      none: Not yet
   - key: window:binary_sensor.living_room_window_contact
     hidden: true
 ```
 
 You don't need to write `header_entities`/`detail_entities` by hand — the visual editor's
-sortable lists (see below) generate this for you.
+sortable lists (see below) generate this for you. The one exception is `state_labels` on a
+hand-added detail row: a numeric sensor is shown rounded with its unit, any other state as
+text — in Home Assistant's own wording, or relabelled through this map. The editor keeps the
+map when you reorder or rename the row, but can't edit it.
 
 ## What you see
 
