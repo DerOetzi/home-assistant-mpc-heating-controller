@@ -8,6 +8,7 @@ from heating_controller.const import (
     CONF_DESIGN_TEMPERATURE_SYSTEM,
     CONF_FLOW_THRESHOLD_ENTITY,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
+    CONF_LEARNING_ENABLED_ENTITY,
     CONF_LEARNING_WINDOW_ENTITY,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PV_BOOST_ENTITY,
@@ -216,6 +217,7 @@ async def test_options_flow_writes_entry_data_and_covers_trvs(
         {
             "flow_threshold_entity": "input_number.other_threshold",
             "learning_window_entity": "input_boolean.nachtmodus",
+            "learning_enabled_entity": "binary_sensor.learning_enabled",
         },
     )
     assert result["step_id"] == "settings"
@@ -227,6 +229,7 @@ async def test_options_flow_writes_entry_data_and_covers_trvs(
 
     assert entry.data[CONF_FLOW_THRESHOLD_ENTITY] == "input_number.other_threshold"
     assert entry.data[CONF_LEARNING_WINDOW_ENTITY] == "input_boolean.nachtmodus"
+    assert entry.data[CONF_LEARNING_ENABLED_ENTITY] == "binary_sensor.learning_enabled"
     assert entry.data[CONF_STATIONARY_RANGE] == DEFAULT_STATIONARY_RANGE_C
     assert entry.data[CONF_TRVS][0][CONF_TRV_ACTIVE_SWITCH] == (
         "switch.heizung_wohnzimmer_trv_active"

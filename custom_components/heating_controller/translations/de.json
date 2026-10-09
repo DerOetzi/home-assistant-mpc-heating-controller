@@ -40,7 +40,8 @@
           "heat_source_climate_entity": "Wärmeerzeuger-Climate-Entity",
           "flow_threshold_entity": "Entität für Wärmeerzeuger-Vorlaufschwelle (optional)",
           "pv_boost_entity": "PV-Überschuss-Entity",
-          "learning_window_entity": "Entität für Lernfenster (optional)"
+          "learning_window_entity": "Entität für Lernfenster (optional)",
+          "learning_enabled_entity": "Entität für Lernfreigabe (optional, aus pausiert jedes Lernen)"
         }
       },
       "settings": {
@@ -109,7 +110,8 @@
           "heat_source_climate_entity": "Wärmeerzeuger-Climate-Entity",
           "flow_threshold_entity": "Entität für Wärmeerzeuger-Vorlaufschwelle (optional)",
           "pv_boost_entity": "PV-Überschuss-Entity",
-          "learning_window_entity": "Entität für Lernfenster (optional)"
+          "learning_window_entity": "Entität für Lernfenster (optional)",
+          "learning_enabled_entity": "Entität für Lernfreigabe (optional, aus pausiert jedes Lernen)"
         }
       },
       "settings": {
@@ -232,7 +234,8 @@
           "disturbed": "Messfenster gestört",
           "suppressed": "Unterdrückt",
           "waiting_interval": "Wartet",
-          "outside_window": "Außerhalb des Lernfensters"
+          "outside_window": "Außerhalb des Lernfensters",
+          "paused": "Pausiert"
         }
       },
       "ua_factor": {

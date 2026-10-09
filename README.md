@@ -48,8 +48,9 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   `heating_controller.recalibrate` service sets or resets them.
 - **Learning only when gains are small** — learning pauses while the sun is up and for two
   hours after sunset, the heat-loss factor also follows an optional learning window entity
-  (e.g. a night-mode helper), and the factor is chosen by how far the room temperature moved
-  in the window. See [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
+  (e.g. a night-mode helper), an optional learning enabled entity pauses both factors (e.g.
+  while an input is only estimated), and the factor is chosen by how far the room
+  temperature moved in the window. See [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
 - **Custom Lovelace card** (`custom:heating-controller-card`) — a single card per room
   showing room temperature, configurable header sensors (humidity, CO₂, PM2.5, …), mode
   control, comfort/eco setpoints, boost, room-specific comfort conditions, and a detail
@@ -83,7 +84,8 @@ Heating Controller**. The setup flow walks through:
    TRV-active switch, valve target-temperature range/step, emitter type, and (depending on
    emitter type) panel radiator type/dimensions or nominal power.
 3. **Entities** — optional room temperature sensor, window contacts, room-specific comfort
-   conditions, PV-boost entity, optional learning window entity, plus the required outdoor
+   conditions, PV-boost entity, optional learning window and learning enabled entities,
+   plus the required outdoor
    temperature sensor and shared heat source `climate` entity.
 4. **Settings** — boost enable/offset, frost-protection temperature, PV-boost enable/offset.
 5. **MPC parameters** — design indoor/outdoor temperature and system flow/return
@@ -112,7 +114,7 @@ rows) are configured entirely through the editor's sortable lists — see
 - Learning (the `ua_factor`/`capacity_factor` self-calibration) only runs while the shared
   heat source is actually calling for heat at or above the configured flow threshold; outside the
   heating season the room simply stops adjusting until it's needed again. Within that time
-  it also waits for the sun and the learning window entity, see
+  it also waits for the sun, the learning window entity and the learning enabled entity, see
   [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
 - The card doesn't care about entity IDs — rename any of a room's entities freely, the card
   keeps working.

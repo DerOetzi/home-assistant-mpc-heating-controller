@@ -26,6 +26,7 @@ from .const import (
     CONF_FLOW_GATE_OPEN_SURPLUS,
     CONF_FLOW_THRESHOLD_ENTITY,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
+    CONF_LEARNING_ENABLED_ENTITY,
     CONF_LEARNING_WINDOW_ENTITY,
     CONF_MAX_SENSOR_AGE,
     CONF_MPC_DEMAND_HYSTERESIS_PCT,
@@ -159,6 +160,9 @@ class HeatingRoomCoordinator:
         self._learning_window_entity: str | None = self.data.get(
             CONF_LEARNING_WINDOW_ENTITY
         )
+        self._learning_enabled_entity: str | None = self.data.get(
+            CONF_LEARNING_ENABLED_ENTITY
+        )
 
         self.state = HeatingStateController(
             HeatingStateConfig(
@@ -259,6 +263,11 @@ class HeatingRoomCoordinator:
                 self._is_on(self._learning_window_entity), time.time()
             )
 
+        if self._learning_enabled_entity:
+            self.mpc.set_learning_paused(
+                not self._is_on(self._learning_enabled_entity), time.time()
+            )
+
         self._refresh_temperature_inputs()
 
         room_sensor_entity = self.data.get(CONF_ROOM_SENSOR_ENTITY)
@@ -282,6 +291,8 @@ class HeatingRoomCoordinator:
             tracked_entities.append(self._flow_threshold_entity)
         if self._learning_window_entity:
             tracked_entities.append(self._learning_window_entity)
+        if self._learning_enabled_entity:
+            tracked_entities.append(self._learning_enabled_entity)
         if room_sensor_entity:
             tracked_entities.append(room_sensor_entity)
 
@@ -491,6 +502,11 @@ class HeatingRoomCoordinator:
         elif entity_id == self._learning_window_entity:
             self.mpc.set_learning_window_active(
                 self._bool_from_state(new_state), time.time()
+            )
+
+        elif entity_id == self._learning_enabled_entity:
+            self.mpc.set_learning_paused(
+                not self._bool_from_state(new_state), time.time()
             )
 
         await self._async_recompute()

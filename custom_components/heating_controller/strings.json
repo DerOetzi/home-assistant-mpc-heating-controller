@@ -40,7 +40,8 @@
           "heat_source_climate_entity": "Heat source climate entity",
           "flow_threshold_entity": "Heat-source flow threshold entity (optional)",
           "pv_boost_entity": "PV boost entity",
-          "learning_window_entity": "Learning window entity (optional)"
+          "learning_window_entity": "Learning window entity (optional)",
+          "learning_enabled_entity": "Learning enabled entity (optional, off pauses all learning)"
         }
       },
       "settings": {
@@ -109,7 +110,8 @@
           "heat_source_climate_entity": "Heat source climate entity",
           "flow_threshold_entity": "Heat-source flow threshold entity (optional)",
           "pv_boost_entity": "PV boost entity",
-          "learning_window_entity": "Learning window entity (optional)"
+          "learning_window_entity": "Learning window entity (optional)",
+          "learning_enabled_entity": "Learning enabled entity (optional, off pauses all learning)"
         }
       },
       "settings": {
@@ -232,7 +234,8 @@
           "disturbed": "Window disturbed",
           "suppressed": "Suppressed",
           "waiting_interval": "Waiting",
-          "outside_window": "Outside learning window"
+          "outside_window": "Outside learning window",
+          "paused": "Paused"
         }
       },
       "ua_factor": {

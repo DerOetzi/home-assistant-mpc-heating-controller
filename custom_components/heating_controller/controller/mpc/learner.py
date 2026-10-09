@@ -74,6 +74,8 @@ class RoomMpcModelLearner:
         self._stationary_range_c = DEFAULT_STATIONARY_RANGE_C
         self._learning_window_active = True
         self._learning_window_active_since_ts = 0.0
+        self._learning_paused = False
+        self._learning_resumed_ts = 0.0
         self._sun_condition: callable[[float], bool] = lambda _ts: True
         self._pending_persisted_factors: LearningFactors | None = None
 
@@ -90,7 +92,9 @@ class RoomMpcModelLearner:
         self._pending_persisted_factors = None
         self._enabled = True
         self._learning_state = self._create_learning_state(
-            LearningStatus.WAITING_INTERVAL
+            LearningStatus.PAUSED
+            if self._learning_paused
+            else LearningStatus.WAITING_INTERVAL
         )
 
     def disable(self) -> None:
@@ -119,6 +123,17 @@ class RoomMpcModelLearner:
         if active and not self._learning_window_active:
             self._learning_window_active_since_ts = now_ts
         self._learning_window_active = active
+
+    def set_learning_paused(self, paused: bool, now_ts: float) -> None:
+        # Unlike the learning window this blocks both factors: it is an external
+        # veto for when the inputs themselves are not trustworthy (e.g. an
+        # estimated outdoor temperature). Windows that started before the
+        # resume carry paused samples and are discarded.
+        if self._learning_paused and not paused:
+            self._learning_resumed_ts = now_ts
+        self._learning_paused = paused
+        if paused and self._enabled:
+            self._learning_state = self._create_learning_state(LearningStatus.PAUSED)
 
     def set_sun_condition(self, sun_condition: callable[[float], bool]) -> None:
         self._sun_condition = sun_condition
@@ -155,6 +170,11 @@ class RoomMpcModelLearner:
         now = time.time()
         self._ua_suppression.mark_next_window(now)
         self._capacity_suppression.mark_next_window(now)
+
+        if self._is_paused_window(self._active_prediction):
+            self._learning_state = self._create_learning_state(LearningStatus.PAUSED)
+            self._rotate_learning_window()
+            return
 
         if (
             self._ua_suppression.current_window_invalid
@@ -272,6 +292,14 @@ class RoomMpcModelLearner:
     def _is_stationary(self, history: list[LearnerHistoryEntry]) -> bool:
         room_temperatures = [entry.room_temperature_c for entry in history]
         return max(room_temperatures) - min(room_temperatures) < self._stationary_range_c
+
+    def _is_paused_window(self, prediction: LearnerPrediction | None) -> bool:
+        if self._learning_paused:
+            return True
+        return (
+            prediction is not None
+            and prediction.timestamp < self._learning_resumed_ts
+        )
 
     def _is_inside_learning_window(
         self, prediction: LearnerPrediction, stationary: bool

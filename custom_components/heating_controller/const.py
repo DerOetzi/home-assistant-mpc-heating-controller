@@ -45,6 +45,7 @@ CONF_FLOW_THRESHOLD = "flow_threshold_c"
 CONF_FLOW_THRESHOLD_ENTITY = "flow_threshold_entity"
 CONF_PV_BOOST_ENTITY = "pv_boost_entity"
 CONF_LEARNING_WINDOW_ENTITY = "learning_window_entity"
+CONF_LEARNING_ENABLED_ENTITY = "learning_enabled_entity"
 
 CONF_BOOST_ENABLED = "boost_enabled"
 CONF_BOOST_TEMPERATURE_OFFSET = "boost_temperature_offset_c"
@@ -132,3 +133,4 @@ class LearningStatus(StrEnum):
     SUPPRESSED = "suppressed"
     WAITING_INTERVAL = "waiting_interval"
     OUTSIDE_WINDOW = "outside_window"
+    PAUSED = "paused"

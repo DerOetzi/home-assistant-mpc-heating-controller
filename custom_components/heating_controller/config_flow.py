@@ -21,6 +21,7 @@ from .const import (
     CONF_FLOW_THRESHOLD_ENTITY,
     CONF_FROST_PROTECTION_TEMPERATURE,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
+    CONF_LEARNING_ENABLED_ENTITY,
     CONF_LEARNING_WINDOW_ENTITY,
     CONF_MAX_SENSOR_AGE,
     CONF_MPC_DEMAND_HYSTERESIS_PCT,
@@ -210,6 +211,11 @@ def _entities_schema(defaults: dict[str, Any]) -> vol.Schema:
                 )
             ),
             _marker(vol.Optional, CONF_LEARNING_WINDOW_ENTITY, defaults): (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain=_BOOLEAN_SIGNAL_DOMAINS)
+                )
+            ),
+            _marker(vol.Optional, CONF_LEARNING_ENABLED_ENTITY, defaults): (
                 selector.EntitySelector(
                     selector.EntitySelectorConfig(domain=_BOOLEAN_SIGNAL_DOMAINS)
                 )

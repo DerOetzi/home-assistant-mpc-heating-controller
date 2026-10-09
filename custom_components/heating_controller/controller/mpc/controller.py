@@ -465,5 +465,8 @@ class RoomMpcController:
     def set_learning_window_active(self, active: bool, now_ts: float) -> None:
         self._learner.set_learning_window_active(active, now_ts)
 
+    def set_learning_paused(self, paused: bool, now_ts: float) -> None:
+        self._learner.set_learning_paused(paused, now_ts)
+
     def set_sun_condition(self, sun_condition: callable[[float], bool]) -> None:
         self._learner.set_sun_condition(sun_condition)

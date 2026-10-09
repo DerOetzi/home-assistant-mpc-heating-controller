@@ -922,6 +922,39 @@ async def test_learning_window_stays_open_without_a_linked_entity(
     coordinator.async_unload()
 
 
+async def test_learning_pause_follows_the_linked_entity(hass: HomeAssistant) -> None:
+    _seed_entities(hass)
+    hass.states.async_set("binary_sensor.learning_enabled", "off")
+    coordinator = await _setup_coordinator(
+        hass, learning_enabled_entity="binary_sensor.learning_enabled"
+    )
+    learner = coordinator.mpc._learner
+
+    assert learner._learning_paused is True
+
+    hass.states.async_set("binary_sensor.learning_enabled", "on")
+    await hass.async_block_till_done()
+    assert learner._learning_paused is False
+    assert learner._learning_resumed_ts > 0
+
+    hass.states.async_set("binary_sensor.learning_enabled", "unavailable")
+    await hass.async_block_till_done()
+    assert learner._learning_paused is True
+
+    coordinator.async_unload()
+
+
+async def test_learning_is_not_paused_without_a_linked_entity(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    coordinator = await _setup_coordinator(hass)
+
+    assert coordinator.mpc._learner._learning_paused is False
+
+    coordinator.async_unload()
+
+
 async def test_stationary_range_comes_from_the_entry(hass: HomeAssistant) -> None:
     _seed_entities(hass)
     coordinator = await _setup_coordinator(hass, stationary_range_c=0.5)

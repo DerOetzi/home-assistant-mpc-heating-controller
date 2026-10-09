@@ -312,6 +312,68 @@ def test_learning_window_active_before_the_window_allows_ua():
     assert loss_model.learned_ua_factor != 1.0
 
 
+def test_paused_learning_blocks_ua():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+    learner.set_learning_paused(True, START_TS - 600)
+
+    _evaluate_window(learner, _stationary_inputs(), predicted_room_temperature_c=20.0)
+
+    assert learner.get_learning_state().status == LearningStatus.PAUSED
+    assert loss_model.learned_ua_factor == 1.0
+
+
+def test_paused_learning_blocks_capacity():
+    learner, _, capacity_model = make_learner()
+    learner.enable()
+    learner.set_learning_paused(True, START_TS - 600)
+
+    _evaluate_window(learner, _transient_inputs(), predicted_room_temperature_c=20.0)
+
+    assert learner.get_learning_state().status == LearningStatus.PAUSED
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_pause_shows_immediately_while_enabled():
+    learner, _, _ = make_learner()
+    learner.enable()
+    learner.set_learning_paused(True, START_TS)
+
+    assert learner.get_learning_state().status == LearningStatus.PAUSED
+
+
+def test_enable_while_paused_reports_paused():
+    learner, _, _ = make_learner()
+    learner.set_learning_paused(True, START_TS)
+    learner.enable()
+
+    assert learner.get_learning_state().status == LearningStatus.PAUSED
+
+
+def test_window_spanning_the_resume_is_discarded():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+    learner.set_learning_paused(True, START_TS - 600)
+    learner.set_learning_paused(False, START_TS + 300)
+
+    _evaluate_window(learner, _stationary_inputs(), predicted_room_temperature_c=20.0)
+
+    assert learner.get_learning_state().status == LearningStatus.PAUSED
+    assert loss_model.learned_ua_factor == 1.0
+
+
+def test_window_after_the_resume_learns():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+    learner.set_learning_paused(True, START_TS - 1200)
+    learner.set_learning_paused(False, START_TS - 600)
+
+    _evaluate_window(learner, _stationary_inputs(), predicted_room_temperature_c=20.0)
+
+    assert learner.get_learning_state().status == LearningStatus.LEARNED
+    assert loss_model.learned_ua_factor != 1.0
+
+
 def test_sun_condition_blocks_both_factors():
     learner, loss_model, capacity_model = make_learner()
     learner.enable()
