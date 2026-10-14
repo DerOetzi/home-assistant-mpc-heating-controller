@@ -49,8 +49,9 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
 - **Learning only when gains are small** — learning pauses while the sun is up and for two
   hours after sunset, the heat-loss factor also follows an optional learning window entity
   (e.g. a night-mode helper), an optional learning enabled entity pauses both factors (e.g.
-  while an input is only estimated), and the factor is chosen by how far the room
-  temperature moved in the window. See [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
+  while an input is only estimated). The heat-loss factor comes from a heat balance
+  over each usable night stretch (four to eight hours) of the requested heating power, the capacity factor from replaying 30-minute
+  windows with that power. See [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
 - **Custom Lovelace card** (`custom:heating-controller-card`) — a single card per room
   showing room temperature, configurable header sensors (humidity, CO₂, PM2.5, …), mode
   control, comfort/eco setpoints, boost, room-specific comfort conditions, and a detail

@@ -7,8 +7,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, PERCENTAGE, UnitOfPower, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, LearningStatus
+from .controller.mpc.learner import UA_BALANCE_MIN_WINDOW_S
 from .coordinator import HeatingRoomCoordinator
 from .entity import HeatingControllerEntity
 
@@ -264,6 +266,38 @@ class MpcLearningStatusSensor(_DiagnosticSensor):
     @property
     def native_value(self) -> str:
         return self._coordinator.mpc.get_learning_state().status.value
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        info = self._coordinator.mpc.get_ua_balance_info()
+        since_ts = info.collecting_since_ts
+        return {
+            "ua_balance_status": info.outcome.value if info.outcome else None,
+            "ua_balance_collecting_since": _iso(since_ts),
+            "ua_balance_due": _iso(
+                since_ts + UA_BALANCE_MIN_WINDOW_S if since_ts is not None else None
+            ),
+            "ua_balance_last_learned": _iso(info.last_learned_ts),
+            "ua_balance_last_target_factor": (
+                round(info.last_target_factor, 4)
+                if info.last_target_factor is not None
+                else None
+            ),
+            "ua_balance_last_drift_c": (
+                round(info.last_drift_c, 2) if info.last_drift_c is not None else None
+            ),
+            "ua_balance_last_window_h": (
+                round(info.last_window_s / 3600, 2)
+                if info.last_window_s is not None
+                else None
+            ),
+        }
+
+
+def _iso(timestamp: float | None) -> str | None:
+    if timestamp is None:
+        return None
+    return dt_util.as_local(dt_util.utc_from_timestamp(timestamp)).isoformat()
 
 
 class UaFactorSensor(_DiagnosticSensor):

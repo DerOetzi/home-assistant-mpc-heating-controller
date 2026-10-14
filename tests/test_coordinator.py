@@ -984,7 +984,7 @@ async def test_closing_the_window_frees_capacity_before_ua(hass: HomeAssistant) 
     hass.states.async_set("binary_sensor.fenster_wohnzimmer", "off")
     await hass.async_block_till_done()
 
-    ua_until = learner._ua_suppression.suppressed_until_ts - before_close
+    ua_until = learner._ua_blocked_until_ts - before_close
     capacity_until = learner._capacity_suppression.suppressed_until_ts - before_close
     assert 29 * 60 < ua_until <= 31 * 60
     assert 9 * 60 < capacity_until <= 11 * 60

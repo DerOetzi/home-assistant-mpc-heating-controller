@@ -3,19 +3,53 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from ...const import DEFAULT_STATIONARY_RANGE_C, LearningStatus
+from ...const import (
+    DEFAULT_STATIONARY_RANGE_C,
+    SENSOR_POLL_INTERVAL_MINUTES,
+    LearningStatus,
+    UaBalanceOutcome,
+)
 from .models.capacity import ThermalCapacityModel
 from .models.loss import RoomLossModel
 from .results import RoomMpcInput
-from .types import LearningFactors, RoomModelLearningState
+from .types import LearningFactors, RoomModelLearningState, UaBalanceInfo
 
-HISTORY_RETENTION_S = 180 * 60
 MIN_HISTORY_SAMPLES = 5
 MIN_ROOM_DELTA_C = 0.15
+# Capacity only scales how far the room moves. Below this simulated change the
+# error comes from power or losses, and its sign says nothing about capacity.
+MIN_SIMULATED_CHANGE_C = 0.1
 MAX_OUTDOOR_DELTA_C = 1.0
 MAX_FLOW_DELTA_C = 5.0
-UA_LEARNING_RATE = 0.0025
 CAPACITY_LEARNING_RATE = 0.005
+
+# UA is learned from a heat balance over a long window rather than from single
+# prediction windows: in closed loop the room sits at the setpoint the
+# prediction aims for, so a wrong UA hardly shows as a prediction error. Over
+# the window, the heat the controller requested has to match the losses plus
+# what the room stored; the UA that balances this is the learning target.
+#
+# The window is a stretch of usable time: it runs until the learning window
+# closes, learning is paused, a window contact opens, heating stays off for
+# longer than a short interruption, or the sun condition ends, and is balanced
+# once at that end. A night shortened by a disturbance still counts as long as
+# the remaining stretch is long enough; a stretch that reaches the maximum is
+# balanced right away so a learning window that never closes still learns.
+UA_BALANCE_MIN_WINDOW_S = 4 * 3600
+UA_BALANCE_MAX_WINDOW_S = 8 * 3600
+# Heating briefly unavailable (a missed heat-source poll, the flow dipping
+# under the threshold) does not end the stretch: up to three controller cycles
+# are bridged as no heating, which is what the radiators got. The extra minute
+# absorbs the jitter of the poll that ends the interruption.
+UA_BALANCE_MAX_INTERRUPTION_S = 3 * SENSOR_POLL_INTERVAL_MINUTES * 60 + 60
+HISTORY_RETENTION_S = UA_BALANCE_MAX_WINDOW_S + 3600
+UA_BALANCE_EDGE_S = 30 * 60
+UA_BALANCE_MAX_GAP_S = 20 * 60
+# The stored heat relies on the (uncertain) capacity, so only windows where the
+# room ends close to where it started are used.
+UA_BALANCE_MAX_DRIFT_C = 0.3
+UA_BALANCE_MIN_MEAN_DELTA_C = 3.0
+UA_BALANCE_WEIGHT = 0.3
 
 
 @dataclass
@@ -69,7 +103,12 @@ class RoomMpcModelLearner:
         self._last_prediction: LearnerPrediction | None = None
 
         self._enabled = False
-        self._ua_suppression = _FactorSuppression()
+        self._ua_blocked_until_ts = 0.0
+        self._ua_balance_from_ts = 0.0
+        self._ua_balance_closed: tuple[float, float] | None = None
+        self._ua_balance_bridged: list[tuple[float, float]] = []
+        self._disabled_since_ts: float | None = None
+        self._ua_balance_info = UaBalanceInfo()
         self._capacity_suppression = _FactorSuppression()
         self._stationary_range_c = DEFAULT_STATIONARY_RANGE_C
         self._learning_window_active = True
@@ -84,12 +123,30 @@ class RoomMpcModelLearner:
     def destroy(self) -> None:
         self.disable()
 
-    def enable(self) -> None:
+    def enable(self, now_ts: float | None = None) -> None:
         if self._enabled:
             return
+        now_ts = time.time() if now_ts is None else now_ts
         self._active_prediction = None
         self._last_prediction = None
         self._pending_persisted_factors = None
+        # History keeps growing while disabled, with power the TRVs never got:
+        # a short interruption is bridged as no heating, a longer one ends the
+        # heat-balance stretch.
+        disabled_since_ts = self._disabled_since_ts
+        self._disabled_since_ts = None
+        if (
+            disabled_since_ts is not None
+            and now_ts - disabled_since_ts <= UA_BALANCE_MAX_INTERRUPTION_S
+        ):
+            self._ua_balance_bridged.append((disabled_since_ts, now_ts))
+        else:
+            if disabled_since_ts is not None:
+                self._close_ua_balance(disabled_since_ts)
+            if self._history:
+                self._ua_balance_from_ts = max(
+                    self._ua_balance_from_ts, self._history[-1].timestamp
+                )
         self._enabled = True
         self._learning_state = self._create_learning_state(
             LearningStatus.PAUSED
@@ -97,21 +154,22 @@ class RoomMpcModelLearner:
             else LearningStatus.WAITING_INTERVAL
         )
 
-    def disable(self) -> None:
+    def disable(self, now_ts: float | None = None) -> None:
         if self._enabled:
             self._enabled = False
             self._pending_persisted_factors = None
+            self._disabled_since_ts = time.time() if now_ts is None else now_ts
         self._learning_state = self._create_learning_state(LearningStatus.DISABLED)
         self._active_prediction = None
         self._last_prediction = None
-        self._ua_suppression.reset()
         self._capacity_suppression.reset()
 
     def suppress_for_interval(
         self, ua_duration_s: float, capacity_duration_s: float
     ) -> None:
         now = time.time()
-        self._ua_suppression.suppress(now + ua_duration_s)
+        self._close_ua_balance(now)
+        self._ua_blocked_until_ts = now + ua_duration_s
         self._capacity_suppression.suppress(now + capacity_duration_s)
         self._pending_persisted_factors = None
         self._learning_state = self._create_learning_state(LearningStatus.SUPPRESSED)
@@ -122,6 +180,8 @@ class RoomMpcModelLearner:
     def set_learning_window_active(self, active: bool, now_ts: float) -> None:
         if active and not self._learning_window_active:
             self._learning_window_active_since_ts = now_ts
+        if not active and self._learning_window_active:
+            self._close_ua_balance(now_ts)
         self._learning_window_active = active
 
     def set_learning_paused(self, paused: bool, now_ts: float) -> None:
@@ -131,6 +191,8 @@ class RoomMpcModelLearner:
         # resume carry paused samples and are discarded.
         if self._learning_paused and not paused:
             self._learning_resumed_ts = now_ts
+        if paused and not self._learning_paused:
+            self._close_ua_balance(now_ts)
         self._learning_paused = paused
         if paused and self._enabled:
             self._learning_state = self._create_learning_state(LearningStatus.PAUSED)
@@ -156,6 +218,11 @@ class RoomMpcModelLearner:
             for entry in self._history
             if now_ts - entry.timestamp <= HISTORY_RETENTION_S
         ]
+        self._ua_balance_bridged = [
+            (start_ts, end_ts)
+            for start_ts, end_ts in self._ua_balance_bridged
+            if now_ts - end_ts <= HISTORY_RETENTION_S
+        ]
 
     def set_prediction(self, prediction: LearnerPrediction) -> None:
         self._last_prediction = prediction
@@ -163,93 +230,272 @@ class RoomMpcModelLearner:
     def get_learning_state(self) -> RoomModelLearningState:
         return self._learning_state
 
+    def get_ua_balance_info(self) -> UaBalanceInfo:
+        return self._ua_balance_info
+
     def run_learning_cycle(self) -> None:
         if not self._enabled:
+            self._run_disabled_heat_balance()
             return
 
-        now = time.time()
-        self._ua_suppression.mark_next_window(now)
-        self._capacity_suppression.mark_next_window(now)
+        self._capacity_suppression.mark_next_window(time.time())
 
+        ua_learned = self._learn_ua_from_heat_balance()
+        status = self._evaluate_capacity_window()
+        if ua_learned:
+            status = LearningStatus.LEARNED
+        if status == LearningStatus.LEARNED:
+            self._pending_persisted_factors = self._get_current_learning_factors()
+
+        self._learning_state = self._create_learning_state(status)
+        self._rotate_learning_window()
+
+    def _evaluate_capacity_window(self) -> LearningStatus:
         if self._is_paused_window(self._active_prediction):
-            self._learning_state = self._create_learning_state(LearningStatus.PAUSED)
-            self._rotate_learning_window()
-            return
+            return LearningStatus.PAUSED
 
-        if (
-            self._ua_suppression.current_window_invalid
-            and self._capacity_suppression.current_window_invalid
-        ):
-            self._learning_state = self._create_learning_state(
-                LearningStatus.SUPPRESSED
-            )
-            self._rotate_learning_window()
-            return
+        if self._capacity_suppression.current_window_invalid:
+            return LearningStatus.SUPPRESSED
 
         if self._active_prediction is None:
-            self._learning_state = self._create_learning_state(
-                LearningStatus.WAITING_INTERVAL
-            )
-            self._rotate_learning_window()
-            return
+            return LearningStatus.WAITING_INTERVAL
 
         relevant_history = self._get_relevant_history(self._active_prediction)
-
         if len(relevant_history) < MIN_HISTORY_SAMPLES:
-            self._learning_state = self._create_learning_state(
-                LearningStatus.WAITING_INTERVAL
-            )
-            self._rotate_learning_window()
-            return
+            return LearningStatus.WAITING_INTERVAL
 
         if not self._is_history_valid(relevant_history):
-            self._learning_state = self._create_learning_state(
-                LearningStatus.DISTURBED
-            )
-            self._rotate_learning_window()
-            return
+            return LearningStatus.DISTURBED
 
-        stationary = self._is_stationary(relevant_history)
-        suppression = (
-            self._ua_suppression if stationary else self._capacity_suppression
-        )
-        if suppression.current_window_invalid:
-            self._learning_state = self._create_learning_state(
-                LearningStatus.SUPPRESSED
-            )
-            self._rotate_learning_window()
-            return
+        if self._is_stationary(relevant_history):
+            # UA comes from the heat balance; a window that barely moved says
+            # nothing about capacity.
+            return LearningStatus.NO_CORRECTION
 
-        if not self._is_inside_learning_window(self._active_prediction, stationary):
-            self._learning_state = self._create_learning_state(
-                LearningStatus.OUTSIDE_WINDOW
-            )
-            self._rotate_learning_window()
-            return
+        if not self._is_sun_free_window(self._active_prediction):
+            return LearningStatus.OUTSIDE_WINDOW
 
-        predicted_room_temperature_c = (
-            self._active_prediction.predicted_room_temperature_c
-        )
-        actual_room_temperature_c = self._calculate_actual_room_temperature_c(
+        # Replay the window with the power that was actually requested, not the
+        # plan the prediction was made with: the controller rarely applies the
+        # planned demand for the whole window.
+        simulated_temperatures_c = self._simulate_room_temperatures_c(
             relevant_history
         )
-        prediction_error_c = actual_room_temperature_c - predicted_room_temperature_c
+        simulation_error_c = self._mean_of_last_samples(
+            [entry.room_temperature_c for entry in relevant_history]
+        ) - self._mean_of_last_samples(simulated_temperatures_c)
+        if abs(simulation_error_c) < MIN_ROOM_DELTA_C:
+            return LearningStatus.NO_CORRECTION
 
-        if abs(prediction_error_c) < MIN_ROOM_DELTA_C:
-            self._learning_state = self._create_learning_state(
-                LearningStatus.NO_CORRECTION
+        simulated_change_c = (
+            simulated_temperatures_c[-1] - relevant_history[0].room_temperature_c
+        )
+        if abs(simulated_change_c) < MIN_SIMULATED_CHANGE_C:
+            return LearningStatus.NO_CORRECTION
+
+        self._learn_capacity_factor(simulation_error_c, simulated_change_c)
+        return LearningStatus.LEARNED
+
+    def _simulate_room_temperatures_c(
+        self, history: list[LearnerHistoryEntry]
+    ) -> list[float]:
+        room_temperature_c = history[0].room_temperature_c
+        simulated = [room_temperature_c]
+        for previous, current in zip(history, history[1:]):
+            net_heating_power_w = (
+                previous.applied_heating_power_w
+                - self._loss_model.calculate_heat_loss_w(
+                    room_temperature_c, previous.outdoor_temperature_c
+                )
             )
-            self._rotate_learning_window()
+            room_temperature_c += self._capacity_model.predict_temperature_change_c(
+                net_heating_power_w, current.timestamp - previous.timestamp
+            )
+            simulated.append(room_temperature_c)
+        return simulated
+
+    def _run_disabled_heat_balance(self) -> None:
+        # Heating may stay off past the end of the night; the stretch before
+        # it is still worth balancing.
+        if (
+            self._disabled_since_ts is not None
+            and self._history
+            and self._history[-1].timestamp - self._disabled_since_ts
+            > UA_BALANCE_MAX_INTERRUPTION_S
+        ):
+            self._close_ua_balance(self._disabled_since_ts)
+        if self._ua_balance_closed is None:
             return
+        if self._learn_ua_from_heat_balance():
+            self._pending_persisted_factors = self._get_current_learning_factors()
+            self._learning_state = self._create_learning_state(LearningStatus.DISABLED)
 
-        if stationary:
-            self._learn_ua_factor(prediction_error_c)
-        else:
-            self._learn_capacity_factor(prediction_error_c)
+    def _ua_balance_start_ts(self) -> float:
+        return max(
+            self._ua_balance_from_ts,
+            self._learning_window_active_since_ts,
+            self._learning_resumed_ts,
+            self._ua_blocked_until_ts,
+            self._history[0].timestamp if self._history else 0.0,
+        )
 
-        self._pending_persisted_factors = self._get_current_learning_factors()
-        self._learning_state = self._create_learning_state(LearningStatus.LEARNED)
-        self._rotate_learning_window()
+    def _close_ua_balance(self, end_ts: float) -> None:
+        """End the running heat-balance stretch; the next cycle balances it."""
+        if self._ua_balance_closed is not None:
+            # Heating went off before the learning window closed, and only
+            # turned out to stay off for too long afterwards.
+            start_ts, closed_end_ts = self._ua_balance_closed
+            if start_ts < end_ts < closed_end_ts:
+                self._ua_balance_closed = (start_ts, end_ts)
+            return
+        if (
+            not self._history
+            or self._learning_paused
+            or not self._learning_window_active
+        ):
+            return
+        start_ts = self._ua_balance_start_ts()
+        if end_ts <= start_ts:
+            return
+        self._ua_balance_closed = (start_ts, end_ts)
+        self._ua_balance_from_ts = max(self._ua_balance_from_ts, end_ts)
+
+    def _learn_ua_from_heat_balance(self) -> bool:
+        outcome = self._evaluate_heat_balance()
+        self._ua_balance_info.outcome = outcome
+        return outcome == UaBalanceOutcome.LEARNED
+
+    def _evaluate_heat_balance(self) -> UaBalanceOutcome:
+        info = self._ua_balance_info
+        info.collecting_since_ts = None
+        if self._ua_balance_closed is not None:
+            start_ts, end_ts = self._ua_balance_closed
+            self._ua_balance_closed = None
+            return self._balance_stretch(start_ts, end_ts)
+        if self._learning_paused:
+            return UaBalanceOutcome.PAUSED
+        if not self._learning_window_active:
+            return UaBalanceOutcome.OUTSIDE_WINDOW
+        if not self._history:
+            return UaBalanceOutcome.COLLECTING
+
+        start_ts = self._ua_balance_start_ts()
+        end_ts = self._history[-1].timestamp
+        sun_free_ts = [
+            entry.timestamp
+            for entry in self._history
+            if entry.timestamp >= start_ts and self._sun_condition(entry.timestamp)
+        ]
+        if not sun_free_ts:
+            return UaBalanceOutcome.OUTSIDE_WINDOW
+        if not self._sun_condition(end_ts):
+            # The stretch ran into sunrise.
+            self._ua_balance_from_ts = end_ts
+            return self._balance_stretch(sun_free_ts[0], sun_free_ts[-1])
+
+        if end_ts - sun_free_ts[0] < UA_BALANCE_MAX_WINDOW_S:
+            info.collecting_since_ts = sun_free_ts[0]
+            return UaBalanceOutcome.COLLECTING
+        self._ua_balance_from_ts = end_ts
+        return self._balance_stretch(sun_free_ts[0], end_ts)
+
+    def _balance_stretch(self, start_ts: float, end_ts: float) -> UaBalanceOutcome:
+        info = self._ua_balance_info
+        if self._loss_model.base_ua_w_per_k <= 0:
+            return UaBalanceOutcome.COLLECTING
+
+        window = [
+            entry
+            for entry in self._history
+            if start_ts <= entry.timestamp <= end_ts
+            and self._sun_condition(entry.timestamp)
+        ]
+        if (
+            len(window) < MIN_HISTORY_SAMPLES
+            or window[-1].timestamp - window[0].timestamp < UA_BALANCE_MIN_WINDOW_S
+        ):
+            return UaBalanceOutcome.TOO_SHORT
+        end_ts = window[-1].timestamp
+
+        flow_temperatures = sorted(
+            entry.flow_temperature_c
+            for entry in window
+            if entry.flow_temperature_c is not None
+        )
+        median_flow_c = (
+            flow_temperatures[len(flow_temperatures) // 2] if flow_temperatures else None
+        )
+
+        heat_j = 0.0
+        temperature_difference_ks = 0.0
+        for previous, current in zip(window, window[1:]):
+            duration_s = current.timestamp - previous.timestamp
+            if duration_s > UA_BALANCE_MAX_GAP_S:
+                return UaBalanceOutcome.GAP
+            heat_j += self._balance_heating_power_w(previous, median_flow_c) * duration_s
+            temperature_difference_ks += (
+                previous.room_temperature_c - previous.outdoor_temperature_c
+            ) * duration_s
+
+        window_duration_s = end_ts - window[0].timestamp
+        if temperature_difference_ks / window_duration_s < UA_BALANCE_MIN_MEAN_DELTA_C:
+            return UaBalanceOutcome.SMALL_TEMPERATURE_DIFFERENCE
+
+        start_temperature_c = self._mean_room_temperature_c(
+            window, window[0].timestamp, window[0].timestamp + UA_BALANCE_EDGE_S
+        )
+        end_temperature_c = self._mean_room_temperature_c(
+            window, end_ts - UA_BALANCE_EDGE_S, end_ts
+        )
+        drift_c = end_temperature_c - start_temperature_c
+        if abs(drift_c) > UA_BALANCE_MAX_DRIFT_C:
+            return UaBalanceOutcome.DRIFT
+
+        stored_heat_j = self._capacity_model.effective_capacity_j_per_k * drift_c
+        target_ua_w_per_k = (heat_j - stored_heat_j) / temperature_difference_ks
+        target_factor = target_ua_w_per_k / self._loss_model.base_ua_w_per_k
+
+        current_factor = self._loss_model.learned_ua_factor
+        self._loss_model.learned_ua_factor = current_factor + UA_BALANCE_WEIGHT * (
+            target_factor - current_factor
+        )
+        self._ua_balance_from_ts = max(self._ua_balance_from_ts, end_ts)
+        info.last_learned_ts = end_ts
+        info.last_target_factor = target_factor
+        info.last_drift_c = drift_c
+        info.last_window_s = window_duration_s
+        return UaBalanceOutcome.LEARNED
+
+    def _balance_heating_power_w(
+        self, entry: LearnerHistoryEntry, median_flow_c: float | None
+    ) -> float:
+        # A domestic hot water charge shows as a flow spike on the shared
+        # leaving-water sensor while the radiators get no water at all.
+        if (
+            median_flow_c is not None
+            and entry.flow_temperature_c is not None
+            and entry.flow_temperature_c > median_flow_c + MAX_FLOW_DELTA_C
+        ):
+            return 0.0
+        # While heating was unavailable the TRVs were closed, whatever the
+        # controller kept requesting.
+        if any(
+            start_ts <= entry.timestamp < end_ts
+            for start_ts, end_ts in self._ua_balance_bridged
+        ):
+            return 0.0
+        return entry.applied_heating_power_w
+
+    @staticmethod
+    def _mean_room_temperature_c(
+        history: list[LearnerHistoryEntry], start_ts: float, end_ts: float
+    ) -> float:
+        temperatures = [
+            entry.room_temperature_c
+            for entry in history
+            if start_ts <= entry.timestamp <= end_ts
+        ]
+        return sum(temperatures) / len(temperatures)
 
     def _get_relevant_history(
         self, prediction: LearnerPrediction
@@ -281,13 +527,9 @@ class RoomMpcModelLearner:
         return True
 
     @staticmethod
-    def _calculate_actual_room_temperature_c(
-        history: list[LearnerHistoryEntry],
-    ) -> float:
-        last_samples = history[-5:]
-        return sum(entry.room_temperature_c for entry in last_samples) / len(
-            last_samples
-        )
+    def _mean_of_last_samples(values: list[float]) -> float:
+        last_samples = values[-5:]
+        return sum(last_samples) / len(last_samples)
 
     def _is_stationary(self, history: list[LearnerHistoryEntry]) -> bool:
         room_temperatures = [entry.room_temperature_c for entry in history]
@@ -301,33 +543,24 @@ class RoomMpcModelLearner:
             and prediction.timestamp < self._learning_resumed_ts
         )
 
-    def _is_inside_learning_window(
-        self, prediction: LearnerPrediction, stationary: bool
-    ) -> bool:
+    def _is_sun_free_window(self, prediction: LearnerPrediction) -> bool:
         start_ts = prediction.timestamp
         end_ts = start_ts + prediction.prediction_horizon_s
-        if not (self._sun_condition(start_ts) and self._sun_condition(end_ts)):
-            return False
-        if not stationary:
-            return True
-        return (
-            self._learning_window_active
-            and self._learning_window_active_since_ts <= start_ts
-        )
+        return self._sun_condition(start_ts) and self._sun_condition(end_ts)
 
-    def _learn_ua_factor(self, prediction_error_c: float) -> None:
-        self._loss_model.learned_ua_factor = self._loss_model.learned_ua_factor * (
-            1 - prediction_error_c * UA_LEARNING_RATE
-        )
-
-    def _learn_capacity_factor(self, prediction_error_c: float) -> None:
+    def _learn_capacity_factor(
+        self, simulation_error_c: float, simulated_change_c: float
+    ) -> None:
+        # A room that overshoots a simulated rise is lighter than modelled; one
+        # that falls less than a simulated drop is heavier. The error alone
+        # cannot tell these apart, the direction of the simulation can.
+        direction = 1.0 if simulated_change_c > 0 else -1.0
         self._capacity_model.learned_capacity_factor = (
             self._capacity_model.learned_capacity_factor
-            * (1 - prediction_error_c * CAPACITY_LEARNING_RATE)
+            * (1 - simulation_error_c * direction * CAPACITY_LEARNING_RATE)
         )
 
     def _rotate_learning_window(self) -> None:
-        self._ua_suppression.rotate()
         self._capacity_suppression.rotate()
         self._active_prediction = self._last_prediction
         self._last_prediction = None
@@ -336,6 +569,9 @@ class RoomMpcModelLearner:
         self._pending_persisted_factors = None
         self._active_prediction = None
         self._last_prediction = None
+        self._ua_balance_closed = None
+        if self._history:
+            self._ua_balance_from_ts = self._history[-1].timestamp
         self._loss_model.learned_ua_factor = factors.ua_factor
         self._capacity_model.learned_capacity_factor = factors.capacity_factor
         self._learning_state = self._create_learning_state(self._learning_state.status)

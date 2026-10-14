@@ -21,6 +21,7 @@ from .types import (
     RoomModelLearningState,
     RoomThermalConfig,
     TrvConfig,
+    UaBalanceInfo,
 )
 
 MPC_PREDICTION_HORIZON_S = 1800
@@ -180,6 +181,9 @@ class RoomMpcController:
 
     def get_learning_state(self) -> RoomModelLearningState:
         return self._learner.get_learning_state()
+
+    def get_ua_balance_info(self) -> UaBalanceInfo:
+        return self._learner.get_ua_balance_info()
 
     def set_trv_temperature(self, index: int, value: float | None) -> None:
         self._sensors.set_trv_temperature(index, value)

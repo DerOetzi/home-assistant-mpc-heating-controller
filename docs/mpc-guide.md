@@ -36,12 +36,25 @@ currently doing:
 |---|---|
 | Learned | The last cycle adjusted the room's model slightly based on how it actually responded to heating. |
 | Waiting | Not enough recent history yet to draw a conclusion — normal shortly after startup or after a gap. |
-| No correction needed | The room ended up within 0.15 K of what the model predicted, so the cycle carries no correction worth applying. |
+| No correction needed | The room ended up within 0.15 K of what the model gives when replaying the window, the room barely moved (heat-loss factor learns from the heat balance instead, see below), or the replay itself hardly moved, so the cycle carries no correction worth applying. |
 | Window disturbed | The measurement window itself was unusable: the outdoor temperature drifted more than 1 K, or the flow temperature jumped more than 5 K (a hot-water charge, for instance), so the room's response cannot be attributed to the model. |
-| Suppressed | Learning is paused on purpose — a window in the room was opened (60 min) or just closed (30 min for the heat-loss factor, 10 min for the capacity factor), or the configuration changed. Not to be confused with the measurement window above. |
+| Suppressed | Learning is paused on purpose — a window in the room was opened (60 min) or just closed (30 min for the heat-loss factor, 10 min for the capacity factor), or the configuration changed. For the heat-loss factor this restarts the heat-balance window. Not to be confused with the measurement window above. |
 | Outside learning window | The measurement window fell outside the time the room is allowed to learn: the sun was up or had set less than two hours before, or — for the heat-loss factor — the learning window entity was off. See below. |
 | Paused | The learning enabled entity is off, or the measurement window started before it came back on. Neither factor learns. See below. |
 | Disabled | The heat source isn't calling for heat at or above its configured flow threshold right now (e.g. outside the heating season) — learning simply doesn't run, and resumes on its own once heating starts again. |
+
+The state covers one cycle and both factors. Where the heat-loss heat balance stands is in
+the sensor's attributes:
+
+| Attribute | Meaning |
+|---|---|
+| `ua_balance_status` | Result of the last check: `learned`, `collecting` (stretch still running), `too_short` (stretch ended with fewer than four usable hours), `outside_window` (learning window entity off, or sun), `paused`, `gap` (a sample gap above 20 minutes), `drift` (room ended more than 0.3 K away from where it started), `small_temperature_difference` (room on average less than 3 K above outside). |
+| `ua_balance_collecting_since` | Start of the current usable stretch — after the last balance, a restart, a pause, the learning window opening, a window contact or heating being off for longer than a short interruption. |
+| `ua_balance_due` | When that stretch reaches four hours, the earliest it can be balanced. |
+| `ua_balance_last_learned` | End of the last balance that moved the factor. |
+| `ua_balance_last_target_factor` | The factor that balance pointed at; the learned factor moves 30 % towards it. |
+| `ua_balance_last_drift_c` | How far the room moved over that balance. |
+| `ua_balance_last_window_h` | How many hours that balance covered. |
 
 Adjustments per cycle are intentionally small — expect the model to sharpen gradually over
 real heating days, not to converge instantly. None of these states need any action from you;
@@ -50,21 +63,35 @@ it's actively adapting.
 
 ## When the model learns
 
-The model has no term for heat gains — sun through the windows, people, appliances. Every
-gain therefore shows up as a prediction error and would otherwise be booked onto one of the
-two factors, mostly as a heat-loss factor that drifts lower and lower in mild weather. The
-controller limits learning to windows in which gains are small, and picks the factor from
-what the room actually did:
+The two factors are learned in different ways, because a wrong heat-loss factor hardly shows
+as a prediction error: the controller keeps the room at the setpoint its prediction aims
+for, whatever the model believes the losses are.
 
-- **Which factor.** If the room temperature stayed within the **stationary range** (default
-  0.2 K between the highest and lowest reading of the 30-minute window) the error goes to
-  the heat-loss factor (`ua_factor`), no matter how much heating power flowed. If it moved
-  further, in either direction, the error goes to the capacity factor (`capacity_factor`).
+- **Heat-loss factor (`ua_factor`): heat balance over a usable stretch.** Over the
+  stretch the heat the controller requested has to equal what the room lost plus what it
+  stored. The factor that balances this is the target, and each balance moves the learned
+  factor 30 % of the way there. A stretch runs as long as learning is possible and is
+  balanced once when it ends: the learning window entity turns off, learning is paused, a
+  window contact opens, the sun condition ends, or heating stays off for more than three
+  controller cycles (15 minutes). A stretch that reaches eight hours is balanced right away.
+  Shorter interruptions of heating (a missed heat-source poll, the flow briefly under the
+  threshold) are bridged and count as no heating. A balance needs at least four gap-free
+  hours (no gap above 20 minutes), the room ending within 0.3 K of where it started, and on
+  average at least 3 K between room and outside. Samples where the flow temperature sits
+  more than 5 K above the stretch's median (a hot-water charge) count as no heating. Each
+  stretch is used once. Steady gains during the window (people, appliances,
+  neighbouring rooms) end up in the factor — that is what the room needs in operation.
+- **Capacity factor (`capacity_factor`): replay of 30-minute windows.** If the room moved
+  further than the **stationary range** (default 0.2 K between the highest and lowest
+  reading of the window), the window is replayed with the power that was actually
+  requested and the current heat-loss factor. A room that rose more than the replay, or
+  fell more, is lighter than modelled; one that rose or fell less is heavier. Windows the
+  room barely moved in, or that the replay hardly moves in (below 0.1 K), are skipped.
 - **Sun.** Neither factor learns while the sun is up or within two hours after sunset,
   when walls still release the afternoon's solar heat. Sunrise and sunset are calculated
   from the location configured in Home Assistant.
 - **Learning window entity.** The heat-loss factor additionally only learns while the
-  optional learning window entity is on for the whole 30 minutes — a night-mode helper, for
+  optional learning window entity is on — a night-mode helper, for
   instance, so evening activity does not count. `unavailable` counts as off. Without an
   entity this condition is always met. The capacity factor ignores it: its best signal is the
   recovery after airing a room, which rarely happens at night.
@@ -74,6 +101,10 @@ what the room actually did:
   inputs themselves cannot be trusted — for instance a template that falls back to an
   estimated outdoor temperature while the real sensor is down. Without an entity learning is
   never paused.
+
+The heat-loss factor may end up well below 1: room heat loads usually come from a design
+calculation for the worst case (neighbouring rooms unheated, full air change), which a room
+in operation rarely sees. It is limited to 0.1–2.
 
 The learning window entity, the learning enabled entity and the stationary range are set
 per room in the Configure flow.

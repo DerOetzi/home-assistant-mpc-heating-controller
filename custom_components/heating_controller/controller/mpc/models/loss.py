@@ -3,7 +3,9 @@ from __future__ import annotations
 from ..math_helper import clamp
 from ..types import RoomThermalConfig
 
-MIN_LEARNED_UA_FACTOR = 0.5
+# Room heat loads come from a design calculation (worst case: neighbours unheated,
+# full air change). In operation the room may lose a fraction of that.
+MIN_LEARNED_UA_FACTOR = 0.1
 MAX_LEARNED_UA_FACTOR = 2.0
 
 
@@ -32,6 +34,10 @@ class RoomLossModel:
         self._learned_ua_factor = clamp(
             value, MIN_LEARNED_UA_FACTOR, MAX_LEARNED_UA_FACTOR
         )
+
+    @property
+    def base_ua_w_per_k(self) -> float:
+        return self._base_ua_w_per_k
 
     @property
     def effective_ua_w_per_k(self) -> float:

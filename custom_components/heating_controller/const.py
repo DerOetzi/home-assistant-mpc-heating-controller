@@ -134,3 +134,14 @@ class LearningStatus(StrEnum):
     WAITING_INTERVAL = "waiting_interval"
     OUTSIDE_WINDOW = "outside_window"
     PAUSED = "paused"
+
+
+class UaBalanceOutcome(StrEnum):
+    LEARNED = "learned"
+    COLLECTING = "collecting"
+    OUTSIDE_WINDOW = "outside_window"
+    PAUSED = "paused"
+    GAP = "gap"
+    DRIFT = "drift"
+    SMALL_TEMPERATURE_DIFFERENCE = "small_temperature_difference"
+    TOO_SHORT = "too_short"

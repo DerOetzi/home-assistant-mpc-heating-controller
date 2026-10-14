@@ -8,6 +8,7 @@ from ...const import (
     HeatEmitterType,
     LearningStatus,
     PanelRadiatorType,
+    UaBalanceOutcome,
 )
 
 
@@ -61,3 +62,15 @@ class FlowGateState:
 class RoomModelLearningState:
     status: LearningStatus
     learned_factors: LearningFactors
+
+
+@dataclass
+class UaBalanceInfo:
+    """Where the heat-loss heat balance stands, for diagnostics."""
+
+    outcome: UaBalanceOutcome | None = None
+    collecting_since_ts: float | None = None
+    last_learned_ts: float | None = None
+    last_target_factor: float | None = None
+    last_drift_c: float | None = None
+    last_window_s: float | None = None

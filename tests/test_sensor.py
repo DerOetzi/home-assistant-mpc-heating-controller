@@ -98,3 +98,23 @@ async def test_min_flow_sensor_reports_the_recovery_flow_for_a_cold_room(
     assert float(gated_hold.state) == gated.attributes["hold_flow_temperature_c"]
     assert float(gated_hold.state) < recovery_c
     assert gated.attributes["recovery_flow_saturated"] in (True, False)
+
+
+async def test_learning_status_sensor_exposes_the_heat_balance(
+    hass: HomeAssistant,
+) -> None:
+    await _setup_coasting_room(hass, ENTRY_DATA)
+
+    status = hass.states.get("sensor.wohnzimmer_mpc_learning_status")
+    assert status is not None
+    for key in (
+        "ua_balance_status",
+        "ua_balance_collecting_since",
+        "ua_balance_due",
+        "ua_balance_last_learned",
+        "ua_balance_last_target_factor",
+        "ua_balance_last_drift_c",
+        "ua_balance_last_window_h",
+    ):
+        assert key in status.attributes
+    assert status.attributes["ua_balance_last_learned"] is None
