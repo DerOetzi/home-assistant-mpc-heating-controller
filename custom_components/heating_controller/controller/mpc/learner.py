@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from ...const import (
     DEFAULT_STATIONARY_RANGE_C,
     SENSOR_POLL_INTERVAL_MINUTES,
+    CapacityOutcome,
     LearningStatus,
     UaBalanceOutcome,
 )
@@ -48,7 +49,17 @@ UA_BALANCE_MAX_GAP_S = 20 * 60
 # The stored heat relies on the (uncertain) capacity, so only windows where the
 # room ends close to where it started are used.
 UA_BALANCE_MAX_DRIFT_C = 0.3
-UA_BALANCE_MIN_MEAN_DELTA_C = 3.0
+# In mild nights little heat is requested, and heat from neighbouring rooms or
+# appliances weighs too much in the balance.
+UA_BALANCE_MIN_MEAN_DELTA_C = 6.0
+# Even within the drift limit the stored heat must stay a minor part of the
+# balance; otherwise the result depends on the capacity more than on the
+# losses.
+UA_BALANCE_MAX_STORAGE_SHARE = 0.5
+# A target near zero or negative is a measurement artefact, not a signal:
+# the stretch is discarded instead of pulling the factor towards it.
+UA_BALANCE_MIN_TARGET_FACTOR = 0.3
+UA_BALANCE_MAX_TARGET_FACTOR = 2.0
 UA_BALANCE_WEIGHT = 0.3
 
 
@@ -110,6 +121,7 @@ class RoomMpcModelLearner:
         self._disabled_since_ts: float | None = None
         self._ua_balance_info = UaBalanceInfo()
         self._capacity_suppression = _FactorSuppression()
+        self._capacity_outcome = CapacityOutcome.DISABLED
         self._stationary_range_c = DEFAULT_STATIONARY_RANGE_C
         self._learning_window_active = True
         self._learning_window_active_since_ts = 0.0
@@ -148,6 +160,7 @@ class RoomMpcModelLearner:
                     self._ua_balance_from_ts, self._history[-1].timestamp
                 )
         self._enabled = True
+        self._capacity_outcome = CapacityOutcome.WAITING
         self._learning_state = self._create_learning_state(
             LearningStatus.PAUSED
             if self._learning_paused
@@ -160,6 +173,7 @@ class RoomMpcModelLearner:
             self._pending_persisted_factors = None
             self._disabled_since_ts = time.time() if now_ts is None else now_ts
         self._learning_state = self._create_learning_state(LearningStatus.DISABLED)
+        self._capacity_outcome = CapacityOutcome.DISABLED
         self._active_prediction = None
         self._last_prediction = None
         self._capacity_suppression.reset()
@@ -233,8 +247,12 @@ class RoomMpcModelLearner:
     def get_ua_balance_info(self) -> UaBalanceInfo:
         return self._ua_balance_info
 
+    def get_capacity_outcome(self) -> CapacityOutcome:
+        return self._capacity_outcome
+
     def run_learning_cycle(self) -> None:
         if not self._enabled:
+            self._capacity_outcome = CapacityOutcome.DISABLED
             self._run_disabled_heat_balance()
             return
 
@@ -251,29 +269,34 @@ class RoomMpcModelLearner:
         self._rotate_learning_window()
 
     def _evaluate_capacity_window(self) -> LearningStatus:
+        status, outcome = self._capacity_window_result()
+        self._capacity_outcome = outcome
+        return status
+
+    def _capacity_window_result(self) -> tuple[LearningStatus, CapacityOutcome]:
         if self._is_paused_window(self._active_prediction):
-            return LearningStatus.PAUSED
+            return LearningStatus.PAUSED, CapacityOutcome.PAUSED
 
         if self._capacity_suppression.current_window_invalid:
-            return LearningStatus.SUPPRESSED
+            return LearningStatus.SUPPRESSED, CapacityOutcome.SUPPRESSED
 
         if self._active_prediction is None:
-            return LearningStatus.WAITING_INTERVAL
+            return LearningStatus.WAITING_INTERVAL, CapacityOutcome.WAITING
 
         relevant_history = self._get_relevant_history(self._active_prediction)
         if len(relevant_history) < MIN_HISTORY_SAMPLES:
-            return LearningStatus.WAITING_INTERVAL
+            return LearningStatus.WAITING_INTERVAL, CapacityOutcome.WAITING
 
         if not self._is_history_valid(relevant_history):
-            return LearningStatus.DISTURBED
+            return LearningStatus.DISTURBED, CapacityOutcome.DISTURBED
 
         if self._is_stationary(relevant_history):
             # UA comes from the heat balance; a window that barely moved says
             # nothing about capacity.
-            return LearningStatus.NO_CORRECTION
+            return LearningStatus.NO_CORRECTION, CapacityOutcome.STATIONARY
 
         if not self._is_sun_free_window(self._active_prediction):
-            return LearningStatus.OUTSIDE_WINDOW
+            return LearningStatus.OUTSIDE_WINDOW, CapacityOutcome.OUTSIDE_WINDOW
 
         # Replay the window with the power that was actually requested, not the
         # plan the prediction was made with: the controller rarely applies the
@@ -285,16 +308,16 @@ class RoomMpcModelLearner:
             [entry.room_temperature_c for entry in relevant_history]
         ) - self._mean_of_last_samples(simulated_temperatures_c)
         if abs(simulation_error_c) < MIN_ROOM_DELTA_C:
-            return LearningStatus.NO_CORRECTION
+            return LearningStatus.NO_CORRECTION, CapacityOutcome.SMALL_ERROR
 
         simulated_change_c = (
             simulated_temperatures_c[-1] - relevant_history[0].room_temperature_c
         )
         if abs(simulated_change_c) < MIN_SIMULATED_CHANGE_C:
-            return LearningStatus.NO_CORRECTION
+            return LearningStatus.NO_CORRECTION, CapacityOutcome.SMALL_CHANGE
 
         self._learn_capacity_factor(simulation_error_c, simulated_change_c)
-        return LearningStatus.LEARNED
+        return LearningStatus.LEARNED, CapacityOutcome.LEARNED
 
     def _simulate_room_temperatures_c(
         self, history: list[LearnerHistoryEntry]
@@ -454,6 +477,22 @@ class RoomMpcModelLearner:
         stored_heat_j = self._capacity_model.effective_capacity_j_per_k * drift_c
         target_ua_w_per_k = (heat_j - stored_heat_j) / temperature_difference_ks
         target_factor = target_ua_w_per_k / self._loss_model.base_ua_w_per_k
+
+        rejection = None
+        if abs(stored_heat_j) > UA_BALANCE_MAX_STORAGE_SHARE * heat_j:
+            rejection = UaBalanceOutcome.STORAGE_DOMINATED
+        elif not (
+            UA_BALANCE_MIN_TARGET_FACTOR
+            <= target_factor
+            <= UA_BALANCE_MAX_TARGET_FACTOR
+        ):
+            rejection = UaBalanceOutcome.IMPLAUSIBLE_TARGET
+        if rejection is not None:
+            # Kept for diagnostics; the factor and the last learned time stay.
+            self._ua_balance_from_ts = max(self._ua_balance_from_ts, end_ts)
+            info.last_target_factor = target_factor
+            info.last_drift_c = drift_c
+            return rejection
 
         current_factor = self._loss_model.learned_ua_factor
         self._loss_model.learned_ua_factor = current_factor + UA_BALANCE_WEIGHT * (

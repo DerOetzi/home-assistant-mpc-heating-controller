@@ -1,4 +1,4 @@
-from heating_controller.const import DesignTemperatureSystem
+from heating_controller.const import Construction, DesignTemperatureSystem
 from heating_controller.controller.mpc.controller import (
     FlowGateConfig,
     MpcRateLimitConfig,
@@ -14,7 +14,11 @@ from heating_controller.controller.mpc.types import (
 
 def make_controller(flow_gate_config=None, **rate_limit_overrides):
     return RoomMpcController(
-        thermal_config=RoomThermalConfig(room_heat_load_w=1200),
+        thermal_config=RoomThermalConfig(
+            room_heat_load_w=1200,
+            room_area_m2=108,
+            construction=Construction.VERY_LIGHT,
+        ),
         trvs=[TrvConfig(name="trv1")],
         rate_limit_config=MpcRateLimitConfig(**rate_limit_overrides),
         max_sensor_age_s=1800,
@@ -79,6 +83,61 @@ def test_demand_rate_limiting_caps_step_change():
 
     assert first.valid and second.valid
     assert abs(second.result.demand_pct - first.result.demand_pct) <= 10
+
+
+def _heating_room_controller():
+    # Default smoothing: 20 % per step, 300 s hold, 40 % hold override.
+    controller = make_controller()
+    controller.set_room_sensor_temperature(18.0)
+    controller.set_outdoor_temperature(-5.0)
+    controller.set_flow_temperature(45.0)
+    for _ in range(5):
+        controller.compute(target_temperature_c=22.0)
+    return controller
+
+
+def test_smoothing_steps_the_demand_down_slowly():
+    controller = _heating_room_controller()
+    heating_pct = controller.compute(target_temperature_c=22.0).result.demand_pct
+    assert heating_pct > 50
+
+    lowered = controller.compute(target_temperature_c=5.0).result
+
+    assert lowered.demand_pct > 0
+
+
+def test_skipped_smoothing_applies_the_demand_at_once():
+    controller = _heating_room_controller()
+
+    frost = controller.compute(
+        target_temperature_c=5.0, skip_demand_smoothing=True
+    ).result
+
+    assert frost.demand_pct == 0
+    assert frost.trv_targets == [TrvConfig(name="trv1").min_target_temperature_c]
+
+
+def test_skipped_smoothing_still_heats_a_room_below_frost_protection():
+    controller = make_controller()
+    controller.set_room_sensor_temperature(3.0)
+    controller.set_outdoor_temperature(-15.0)
+    controller.set_flow_temperature(45.0)
+
+    frost = controller.compute(
+        target_temperature_c=8.0, skip_demand_smoothing=True
+    ).result
+
+    assert frost.demand_pct > 20
+
+
+def test_smoothing_resumes_from_the_forced_demand():
+    controller = _heating_room_controller()
+    controller.compute(target_temperature_c=5.0, skip_demand_smoothing=True)
+
+    resumed = controller.compute(target_temperature_c=22.0).result
+
+    # Hold time and step limit start again from 0 %, not from the old demand.
+    assert resumed.demand_pct <= 20
 
 
 def test_hysteresis_suppresses_small_demand_changes():
@@ -213,6 +272,8 @@ def test_recommended_flow_saturates_at_the_design_flow_temperature():
         RoomThermalConfig(
             room_heat_load_w=1200,
             design_temperature_system=DesignTemperatureSystem.SYSTEM_45_35,
+            room_area_m2=108,
+            construction=Construction.VERY_LIGHT,
         )
     )
     controller.set_room_sensor_temperature(15.0)
@@ -229,7 +290,12 @@ def test_recommended_flow_saturates_at_the_design_flow_temperature():
 def test_flow_search_starts_below_the_flow_threshold():
     def hold_flow(flow_threshold_c):
         controller = make_thermal_controller(
-            RoomThermalConfig(room_heat_load_w=1200, flow_threshold_c=flow_threshold_c)
+            RoomThermalConfig(
+                room_heat_load_w=1200,
+                flow_threshold_c=flow_threshold_c,
+                room_area_m2=108,
+                construction=Construction.VERY_LIGHT,
+            )
         )
         controller.set_room_sensor_temperature(21.0)
         controller.set_outdoor_temperature(20.0)

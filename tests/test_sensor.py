@@ -118,3 +118,6 @@ async def test_learning_status_sensor_exposes_the_heat_balance(
     ):
         assert key in status.attributes
     assert status.attributes["ua_balance_last_learned"] is None
+    assert status.attributes["capacity_status"] == "waiting"
+    # 20 m² medium construction, learned factor 1.0.
+    assert status.attributes["capacity_j_per_k"] == 20 * 165 * 1000

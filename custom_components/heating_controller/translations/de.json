@@ -38,6 +38,7 @@
           "room_comfort_condition_entities": "Raumspezifische Komfort-Bedingungs-Entities",
           "outdoor_temperature_entity": "Außentemperatursensor",
           "heat_source_climate_entity": "Wärmeerzeuger-Climate-Entity",
+          "flow_temperature_entity": "Vorlauftemperatur-Sensor (gemessen, mit Ersatzwert bei nicht erreichbarem Wärmeerzeuger)",
           "flow_threshold_entity": "Entität für Wärmeerzeuger-Vorlaufschwelle (optional)",
           "pv_boost_entity": "PV-Überschuss-Entity",
           "learning_window_entity": "Entität für Lernfenster (optional)",
@@ -61,6 +62,8 @@
           "design_outdoor_temperature_c": "Auslegungs-Außentemperatur (°C)",
           "design_temperature_system": "Heizkörper-Auslegungstemperatursystem",
           "room_heat_load_w": "Auslegungsheizlast (W)",
+          "room_area_m2": "Raumfläche (m², Basis der Wärmekapazität)",
+          "construction": "Bauweise (Klasse nach ISO 13790, Wärmekapazität je m²)",
           "mpc_demand_hysteresis_pct": "Anforderungs-Hysterese (%)",
           "mpc_hold_time_s": "Haltezeit (s)",
           "mpc_hold_override_demand_pct": "Haltezeit-Override-Anforderung (%)",
@@ -108,6 +111,7 @@
           "room_comfort_condition_entities": "Raumspezifische Komfort-Bedingungs-Entities",
           "outdoor_temperature_entity": "Außentemperatursensor",
           "heat_source_climate_entity": "Wärmeerzeuger-Climate-Entity",
+          "flow_temperature_entity": "Vorlauftemperatur-Sensor (gemessen, mit Ersatzwert bei nicht erreichbarem Wärmeerzeuger)",
           "flow_threshold_entity": "Entität für Wärmeerzeuger-Vorlaufschwelle (optional)",
           "pv_boost_entity": "PV-Überschuss-Entity",
           "learning_window_entity": "Entität für Lernfenster (optional)",
@@ -131,6 +135,8 @@
           "design_outdoor_temperature_c": "Auslegungs-Außentemperatur (°C)",
           "design_temperature_system": "Heizkörper-Auslegungstemperatursystem",
           "room_heat_load_w": "Auslegungsheizlast (W)",
+          "room_area_m2": "Raumfläche (m², Basis der Wärmekapazität)",
+          "construction": "Bauweise (Klasse nach ISO 13790, Wärmekapazität je m²)",
           "mpc_demand_hysteresis_pct": "Anforderungs-Hysterese (%)",
           "mpc_hold_time_s": "Haltezeit (s)",
           "mpc_hold_override_demand_pct": "Haltezeit-Override-Anforderung (%)",
@@ -167,6 +173,15 @@
         "system_55_45": "55/45 °C",
         "system_45_35": "45/35 °C",
         "system_35_30": "35/30 °C"
+      }
+    },
+    "construction": {
+      "options": {
+        "very_light": "Sehr leicht (80 kJ/m²K)",
+        "light": "Leicht (110 kJ/m²K)",
+        "medium": "Mittel (165 kJ/m²K)",
+        "heavy": "Schwer (260 kJ/m²K)",
+        "very_heavy": "Sehr schwer (370 kJ/m²K)"
       }
     }
   },

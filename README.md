@@ -87,10 +87,12 @@ Heating Controller**. The setup flow walks through:
 3. **Entities** — optional room temperature sensor, window contacts, room-specific comfort
    conditions, PV-boost entity, optional learning window and learning enabled entities,
    plus the required outdoor
-   temperature sensor and shared heat source `climate` entity.
+   temperature sensor, shared heat source `climate` entity (operating state) and flow
+   temperature sensor.
 4. **Settings** — boost enable/offset, frost-protection temperature, PV-boost enable/offset.
 5. **MPC parameters** — design indoor/outdoor temperature and system flow/return
-   temperatures (used to size the emitter curve), room heat load, demand-control
+   temperatures (used to size the emitter curve), room heat load, room area and
+   construction class (the base heat capacity), demand-control
    hysteresis/hold-time/max-step tuning, and the stationary range that decides which
    factor a measurement window trains.
 

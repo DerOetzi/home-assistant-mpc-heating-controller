@@ -1,8 +1,10 @@
 import time
 from datetime import date, datetime, timedelta
 
+import pytest
 from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.sun import get_astral_event_date
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -41,6 +43,7 @@ ENTRY_DATA = {
     "comfort_condition_entities": ["input_boolean.comfort_release"],
     "outdoor_temperature_entity": "sensor.outdoor_temperature",
     "heat_source_climate_entity": "climate.heat_source",
+    "flow_temperature_entity": "sensor.flow_temperature",
     "pv_boost_entity": "binary_sensor.pv_boost",
     "boost_enabled": False,
     "boost_temperature_offset_c": 5.0,
@@ -51,6 +54,8 @@ ENTRY_DATA = {
     "design_outdoor_temperature_c": -12.0,
     "design_temperature_system": "system_55_45",
     "room_heat_load_w": 1200.0,
+    "room_area_m2": 20.0,
+    "construction": "medium",
     "mpc_demand_hysteresis_pct": 5.0,
     "mpc_hold_time_s": 300.0,
     "mpc_hold_override_demand_pct": 40.0,
@@ -76,11 +81,8 @@ def _seed_entities(
         "input_boolean.comfort_release", "on" if comfort_release else "off"
     )
     hass.states.async_set("sensor.outdoor_temperature", "-3.0")
-    hass.states.async_set(
-        "climate.heat_source",
-        "heat" if heat_available else "off",
-        {"current_temperature": flow_temp},
-    )
+    hass.states.async_set("climate.heat_source", "heat" if heat_available else "off")
+    hass.states.async_set("sensor.flow_temperature", str(flow_temp))
     hass.states.async_set("binary_sensor.pv_boost", "off")
     hass.states.async_set("input_number.flow_threshold", "30.0")
 
@@ -1010,5 +1012,168 @@ async def test_sun_condition_needs_two_hours_after_sunset_and_ends_at_sunrise(
     assert met(sunset + timedelta(hours=2, minutes=1)) is True
     assert met(next_sunrise - timedelta(minutes=1)) is True
     assert met(next_sunrise + timedelta(minutes=1)) is False
+
+    coordinator.async_unload()
+
+
+async def test_flow_temperature_comes_from_the_flow_entity(hass: HomeAssistant) -> None:
+    _seed_entities(hass, flow_temp=42.0)
+    hass.states.async_set("climate.heat_source", "heat", {"current_temperature": 20.0})
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+
+    assert coordinator.current_flow_temperature_c == 42.0
+    assert coordinator.trv_active is True
+
+    hass.states.async_set("sensor.flow_temperature", "25.0")
+    await hass.async_block_till_done()
+
+    assert coordinator.current_flow_temperature_c == 25.0
+    assert coordinator.last_result.input.flow_temp_c == 25.0
+    assert coordinator.trv_active is False
+
+    coordinator.async_unload()
+
+
+async def test_unreachable_heat_source_keeps_its_last_known_heat_state(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+    assert coordinator.trv_active is True
+
+    hass.states.async_set("climate.heat_source", "unavailable")
+    await hass.async_block_till_done()
+
+    assert coordinator.trv_active is True
+    assert coordinator.mpc._learner._enabled is True
+
+    hass.states.async_set("climate.heat_source", "off")
+    await hass.async_block_till_done()
+    hass.states.async_set("climate.heat_source", "unknown")
+    await hass.async_block_till_done()
+
+    assert coordinator.trv_active is False
+
+    coordinator.async_unload()
+
+
+async def test_heat_source_unreachable_since_startup_stays_inactive(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set("climate.heat_source", "unavailable")
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+
+    assert coordinator.trv_active is False
+    assert coordinator.current_heat_mode == HeatMode.FROST_PROTECTION
+
+    coordinator.async_unload()
+
+
+async def test_missing_flow_temperature_entity_stops_the_room(
+    hass: HomeAssistant,
+) -> None:
+    data = {k: v for k, v in ENTRY_DATA.items() if k != "flow_temperature_entity"}
+    entry = MockConfigEntry(domain=DOMAIN, data=data)
+    entry.add_to_hass(hass)
+
+    with pytest.raises(ConfigEntryError, match="flow_temperature_entity"):
+        HeatingRoomCoordinator(hass, entry)
+
+
+async def test_opening_a_window_closes_the_valve_without_smoothing(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set("sensor.wohnzimmer_temperatur", "17.0")
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    calls = _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+    # Without the bypass the hold time would keep this demand for 300 s.
+    assert coordinator.last_result.demand_pct > 0
+
+    hass.states.async_set("binary_sensor.fenster_wohnzimmer", "on")
+    await hass.async_block_till_done()
+
+    assert coordinator.current_heat_mode == HeatMode.FROST_PROTECTION
+    assert coordinator.last_result.demand_pct == 0
+    assert calls[-1].data["temperature"] == ENTRY_DATA["trvs"][0][
+        "min_target_temperature_c"
+    ]
+
+    coordinator.async_unload()
+
+
+async def test_unavailable_flow_entity_keeps_the_last_flow_temperature(
+    hass: HomeAssistant,
+) -> None:
+    switch_calls: list[ServiceCall] = []
+
+    async def climate_handler(call: ServiceCall) -> None:
+        return None
+
+    async def switch_handler(call: ServiceCall) -> None:
+        switch_calls.append(call)
+
+    _seed_entities(hass, flow_temp=42.0)
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    hass.services.async_register("climate", "set_temperature", climate_handler)
+    hass.services.async_register("switch", "turn_on", switch_handler)
+    hass.services.async_register("switch", "turn_off", switch_handler)
+    await coordinator.async_setup()
+    assert coordinator.trv_active is True
+
+    # A template reload drops the sensor for a moment.
+    hass.states.async_set("sensor.flow_temperature", "unavailable")
+    await hass.async_block_till_done()
+
+    assert coordinator.current_flow_temperature_c == 42.0
+    assert coordinator.trv_active is True
+    assert coordinator.current_heat_mode == HeatMode.COMFORT
+    assert not [call for call in switch_calls if call.service == "turn_off"]
+
+    hass.states.async_set("sensor.flow_temperature", "25.0")
+    await hass.async_block_till_done()
+
+    assert coordinator.trv_active is False
+
+    coordinator.async_unload()
+
+
+async def test_flow_entity_unavailable_since_startup_stays_inactive(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set("sensor.flow_temperature", "unavailable")
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = HeatingRoomCoordinator(hass, entry)
+    _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+
+    assert coordinator.current_flow_temperature_c is None
+    assert coordinator.trv_active is False
 
     coordinator.async_unload()

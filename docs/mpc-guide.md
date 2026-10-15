@@ -48,13 +48,15 @@ the sensor's attributes:
 
 | Attribute | Meaning |
 |---|---|
-| `ua_balance_status` | Result of the last check: `learned`, `collecting` (stretch still running), `too_short` (stretch ended with fewer than four usable hours), `outside_window` (learning window entity off, or sun), `paused`, `gap` (a sample gap above 20 minutes), `drift` (room ended more than 0.3 K away from where it started), `small_temperature_difference` (room on average less than 3 K above outside). |
+| `ua_balance_status` | Result of the last check: `learned`, `collecting` (stretch still running), `too_short` (stretch ended with fewer than four usable hours), `outside_window` (learning window entity off, or sun), `paused`, `gap` (a sample gap above 20 minutes), `drift` (room ended more than 0.3 K away from where it started), `small_temperature_difference` (room on average less than 6 K above outside), `storage_dominated` (the heat stored in or released by the room was more than half of the heat requested), `implausible_target` (the balance pointed at a factor outside 0.3–2). |
 | `ua_balance_collecting_since` | Start of the current usable stretch — after the last balance, a restart, a pause, the learning window opening, a window contact or heating being off for longer than a short interruption. |
 | `ua_balance_due` | When that stretch reaches four hours, the earliest it can be balanced. |
 | `ua_balance_last_learned` | End of the last balance that moved the factor. |
-| `ua_balance_last_target_factor` | The factor that balance pointed at; the learned factor moves 30 % towards it. |
-| `ua_balance_last_drift_c` | How far the room moved over that balance. |
+| `ua_balance_last_target_factor` | The factor the last balance pointed at; the learned factor moves 30 % towards it. Also set for a stretch discarded as `storage_dominated` or `implausible_target`, which leaves the factor alone. |
+| `ua_balance_last_drift_c` | How far the room moved over that balance, set like the target factor. |
 | `ua_balance_last_window_h` | How many hours that balance covered. |
+| `capacity_status` | Result of the last capacity check: `learned`, `stationary` (room moved less than the stationary range), `small_error` (replay within 0.15 K), `small_change` (replay moved less than 0.1 K), `outside_window` (sun), `disturbed`, `suppressed`, `paused`, `waiting` (no complete window yet), `disabled` (heating unavailable). |
+| `capacity_j_per_k` | Effective heat capacity the model uses: base capacity from area and construction times the learned capacity factor. |
 
 Adjustments per cycle are intentionally small — expect the model to sharpen gradually over
 real heating days, not to converge instantly. None of these states need any action from you;
@@ -77,10 +79,14 @@ for, whatever the model believes the losses are.
   Shorter interruptions of heating (a missed heat-source poll, the flow briefly under the
   threshold) are bridged and count as no heating. A balance needs at least four gap-free
   hours (no gap above 20 minutes), the room ending within 0.3 K of where it started, and on
-  average at least 3 K between room and outside. Samples where the flow temperature sits
+  average at least 6 K between room and outside. Samples where the flow temperature sits
   more than 5 K above the stretch's median (a hot-water charge) count as no heating. Each
   stretch is used once. Steady gains during the window (people, appliances,
   neighbouring rooms) end up in the factor — that is what the room needs in operation.
+  Two checks keep measurement artefacts out: a stretch where the heat stored in or
+  released by the room exceeds half of the requested heat depends more on the capacity
+  than on the losses, and a target outside 0.3–2 (near zero or negative in mild nights
+  with little heating) is no signal. Both are discarded without moving the factor.
 - **Capacity factor (`capacity_factor`): replay of 30-minute windows.** If the room moved
   further than the **stationary range** (default 0.2 K between the highest and lowest
   reading of the window), the window is replayed with the power that was actually
@@ -142,6 +148,28 @@ undersized for the room relative to what was entered — worth revisiting the de
 load / radiator dimensions for that room, or expecting that room to be the one that sets
 the system's flow temperature.
 
+## Heat capacity: room area and construction
+
+The base heat capacity of a room is its **room area** times the effective heat capacity
+per square metre of its **construction class** (ISO 13790, table 12):
+
+| Construction | kJ/m²K | Typical |
+|---|---|---|
+| Very light | 80 | Timber frame, lightweight partitions, no screed |
+| Light | 110 | Lightweight walls, wooden floors |
+| Medium | 165 | Masonry behind interior insulation, screed |
+| Heavy | 260 | Solid masonry or concrete with the mass facing the room (exterior insulation) |
+| Very heavy | 370 | Massive concrete walls and floors |
+
+The learned capacity factor (0.5–3) scales this base for furniture, open doors and heat
+exchange with neighbouring rooms. Both values are required; a room without them stops with
+a setup error until they are entered in the Configure flow.
+
+The capacity also drives the valve demand and the recovery flow temperature: a lighter
+room reaches its setpoint faster in the prediction, so the controller asks for less
+preheating and backs off earlier. After changing a room's area or construction, watch for
+overshoot or demand that switches back and forth before tuning the demand smoothing below.
+
 ## Demand smoothing
 
 Three settings in the Configure flow's "Grey-box thermal model" step keep the requested
@@ -159,6 +187,12 @@ heating power from chattering cycle to cycle:
 Larger values make a room's demand steadier but slower to react; smaller values make it more
 responsive but more prone to small back-and-forth adjustments.
 
+Smoothing only applies in normal operation. While frost protection is forced (a window is
+open, or the heat source is unavailable), the demand is applied at once, so an opened window
+closes the valve on the same calculation instead of stepping down over the hold time. A room
+below the frost protection temperature still gets heat. Once the forced mode ends, smoothing
+resumes from that demand.
+
 ## Sensor reliability
 
 Room and outdoor temperature readings are checked against **max sensor age (s)**: once a
@@ -167,9 +201,31 @@ the room pauses its calculation until a fresh reading arrives. Implausible singl
 jumps are also filtered rather than acted on immediately, so one noisy reading doesn't swing
 a room's demand; a jump that repeats over a few polls is accepted as a real change.
 
-The heat source's flow temperature is exempt from that filter. Its jumps are physical —
+The flow temperature is exempt from that filter. Its jumps are physical —
 compressor start, defrost, or a hot-water charge showing up on a shared leaving-water sensor
 — and it only feeds the valve demand, never the minimum flow temperature (see below).
+
+## Flow temperature and an unreachable heat source
+
+The flow temperature comes from the required **flow temperature entity**, a sensor; the
+heat source `climate` entity only supplies the operating state. This lets a template
+sensor fall back to a calculated value (a heating curve, for instance) while the heat
+source's cloud connection drops out, without the room losing its flow temperature.
+
+While the flow temperature entity is `unavailable` or `unknown` (for instance for a moment
+while its template is reloaded), the room keeps the last flow temperature it reported, so a
+reload does not switch the TRVs off and on. While the heat source entity is `unavailable`
+or `unknown`, the room keeps its last known operating state: TRVs that were active stay active and are checked against the flow
+threshold with whatever the flow temperature entity reports. A room that has not seen a
+known state since startup stays inactive. If the heat source really stopped, the TRVs stay
+open without heat coming — notify yourself about long outages from the flow sensor.
+
+If the flow threshold and the fallback both come from the same heating curve, the
+threshold check is fixed during an outage: with the threshold at the curve's warm end and
+the outdoor temperature clamped to the curve range, the fallback never drops below the
+threshold, so the room stays active. Learning does not see the difference between a
+measured and a calculated flow temperature; pause it through the learning enabled entity
+while the fallback is in use.
 
 ## Multiple rooms sharing one heat source
 

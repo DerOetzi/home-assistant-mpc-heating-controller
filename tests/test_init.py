@@ -1,5 +1,6 @@
 import pytest
 import voluptuous as vol
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, HomeAssistant, ServiceCall
 from homeassistant.exceptions import Unauthorized
 from pytest_homeassistant_custom_component.common import MockConfigEntry, MockUser
@@ -112,7 +113,7 @@ async def test_migration_drops_the_numeric_flow_threshold(hass: HomeAssistant) -
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    assert entry.version == 2
+    assert entry.version == 3
     assert "flow_threshold_c" not in entry.data
 
     coordinator = hass.data[DOMAIN][entry.entry_id]
@@ -237,5 +238,81 @@ async def test_recalibrate_is_admin_only(
         )
 
     assert coordinator.mpc.learned_ua_factor == 1.0
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+_ADDED_IN_V3 = ("room_area_m2", "construction", "flow_temperature_entity")
+
+
+def _register_noop_services(hass: HomeAssistant) -> None:
+    async def handler(call: ServiceCall) -> None:
+        pass
+
+    hass.services.async_register("climate", "set_temperature", handler)
+    hass.services.async_register("switch", "turn_on", handler)
+    hass.services.async_register("switch", "turn_off", handler)
+
+
+async def test_migration_to_v3_invents_no_values(hass: HomeAssistant) -> None:
+    _seed_entities(hass)
+    _register_noop_services(hass)
+    data = {key: value for key, value in ENTRY_DATA.items() if key not in _ADDED_IN_V3}
+    entry = MockConfigEntry(domain=DOMAIN, data=data, version=2)
+    entry.add_to_hass(hass)
+
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.version == 3
+    assert all(key not in entry.data for key in _ADDED_IN_V3)
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+
+
+@pytest.mark.parametrize("missing", _ADDED_IN_V3)
+async def test_setup_fails_without_a_required_value(
+    hass: HomeAssistant, missing: str
+) -> None:
+    _seed_entities(hass)
+    _register_noop_services(hass)
+    data = {key: value for key, value in ENTRY_DATA.items() if key != missing}
+    entry = MockConfigEntry(domain=DOMAIN, data=data, version=3)
+    entry.add_to_hass(hass)
+
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert missing in entry.reason
+
+
+async def test_options_flow_loads_a_room_whose_setup_failed(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    _register_noop_services(hass)
+    data = {key: value for key, value in ENTRY_DATA.items() if key not in _ADDED_IN_V3}
+    entry = MockConfigEntry(domain=DOMAIN, data=data, version=3)
+    entry.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"flow_temperature_entity": "sensor.flow_temperature"}
+    )
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"room_area_m2": 20.0, "construction": "medium"}
+    )
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert hass.data[DOMAIN][entry.entry_id].mpc.effective_capacity_j_per_k == (
+        20.0 * 165 * 1000
+    )
 
     assert await hass.config_entries.async_unload(entry.entry_id)

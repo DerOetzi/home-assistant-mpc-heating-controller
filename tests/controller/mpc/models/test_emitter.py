@@ -2,6 +2,7 @@ import pytest
 
 from heating_controller.const import (
     DesignTemperatureSystem,
+    Construction,
     HeatEmitterType,
     PanelRadiatorType,
 )
@@ -19,7 +20,12 @@ from heating_controller.controller.mpc.types import RoomThermalConfig, TrvConfig
 
 def make_model(trvs, design_temperature_system=DesignTemperatureSystem.SYSTEM_55_45):
     return HeatEmitterModel(
-        RoomThermalConfig(design_temperature_system=design_temperature_system), trvs
+        RoomThermalConfig(
+            design_temperature_system=design_temperature_system,
+            room_area_m2=90,
+            construction=Construction.VERY_LIGHT,
+        ),
+        trvs,
     )
 
 
@@ -114,7 +120,12 @@ def test_recommended_flow_uses_part_load_spread():
     design spread implies. Pinning this against an explicit design-spread
     calculation keeps the two directions from silently converging again."""
     model = HeatEmitterModel(
-        RoomThermalConfig(room_heat_load_w=1200), [TrvConfig(name="trv1")]
+        RoomThermalConfig(
+            room_heat_load_w=1200,
+            room_area_m2=108,
+            construction=Construction.VERY_LIGHT,
+        ),
+        [TrvConfig(name="trv1")],
     )
     required_w = 300
 
@@ -127,7 +138,12 @@ def test_recommended_flow_uses_part_load_spread():
 def test_forward_direction_keeps_design_spread():
     """The valves-throttling direction must not inherit the part-load spread."""
     model = HeatEmitterModel(
-        RoomThermalConfig(room_heat_load_w=1200), [TrvConfig(name="trv1")]
+        RoomThermalConfig(
+            room_heat_load_w=1200,
+            room_area_m2=108,
+            construction=Construction.VERY_LIGHT,
+        ),
+        [TrvConfig(name="trv1")],
     )
     assert model.calculate_available_heating_power_w(
         20, 45
@@ -181,14 +197,24 @@ def test_recommended_flow_is_capped_at_the_design_flow_temperature(
 
 def test_flow_search_starts_ten_kelvin_below_the_flow_threshold():
     model = HeatEmitterModel(
-        RoomThermalConfig(flow_threshold_c=32.0), [TrvConfig(name="trv1")]
+        RoomThermalConfig(
+            flow_threshold_c=32.0,
+            room_area_m2=90,
+            construction=Construction.VERY_LIGHT,
+        ),
+        [TrvConfig(name="trv1")],
     )
     assert model.flow_search_min_c == 22.0
 
 
 def test_setting_the_flow_threshold_moves_the_search_window():
     model = HeatEmitterModel(
-        RoomThermalConfig(flow_threshold_c=32.0), [TrvConfig(name="trv1")]
+        RoomThermalConfig(
+            flow_threshold_c=32.0,
+            room_area_m2=90,
+            construction=Construction.VERY_LIGHT,
+        ),
+        [TrvConfig(name="trv1")],
     )
 
     model.set_flow_threshold_c(25.0)

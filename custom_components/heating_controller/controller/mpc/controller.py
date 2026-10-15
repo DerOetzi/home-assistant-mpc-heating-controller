@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import ceil
 
+from ...const import CapacityOutcome
 from .learner import LearnerPrediction, RoomMpcModelLearner
 from .math_helper import clamp, round_to_step
 from .models.capacity import ThermalCapacityModel
@@ -185,6 +186,13 @@ class RoomMpcController:
     def get_ua_balance_info(self) -> UaBalanceInfo:
         return self._learner.get_ua_balance_info()
 
+    def get_capacity_outcome(self) -> CapacityOutcome:
+        return self._learner.get_capacity_outcome()
+
+    @property
+    def effective_capacity_j_per_k(self) -> float:
+        return self._capacity_model.effective_capacity_j_per_k
+
     def set_trv_temperature(self, index: int, value: float | None) -> None:
         self._sensors.set_trv_temperature(index, value)
 
@@ -201,8 +209,17 @@ class RoomMpcController:
         self._emitter_model.set_flow_threshold_c(flow_threshold_c)
 
     def compute(
-        self, target_temperature_c: float, apply_side_effects: bool = True
+        self,
+        target_temperature_c: float,
+        apply_side_effects: bool = True,
+        skip_demand_smoothing: bool = False,
     ) -> RoomMpcComputeResult:
+        """Compute demand, TRV targets and flow requirements.
+
+        skip_demand_smoothing applies the optimal demand at once, for forced
+        frost protection: an open window must not keep the valve open for
+        the hold time while the demand steps down.
+        """
         input_result = self._sensors.create_input(target_temperature_c)
         if not input_result.valid:
             return RoomMpcComputeResult(valid=False, error=input_result.error)
@@ -217,7 +234,11 @@ class RoomMpcController:
         )
 
         optimal_demand = self._find_optimal_demand_prediction(mpc_input)
-        if apply_side_effects:
+        if apply_side_effects and skip_demand_smoothing:
+            stabilized_demand_pct = self._reset_demand_rate_limiting(
+                mpc_input, optimal_demand.demand_pct
+            )
+        elif apply_side_effects:
             stabilized_demand_pct = self._apply_demand_rate_limiting(
                 mpc_input, optimal_demand.demand_pct
             )
@@ -427,6 +448,15 @@ class RoomMpcController:
         self._last_demand_update_ts = mpc_input.now_ts
 
         return self._last_output_demand_pct
+
+    def _reset_demand_rate_limiting(
+        self, mpc_input: RoomMpcInput, demand_pct: float
+    ) -> float:
+        # Smoothing resumes from this demand once the forced mode ends.
+        self._target_demand_pct = demand_pct
+        self._last_output_demand_pct = demand_pct
+        self._last_demand_update_ts = mpc_input.now_ts
+        return demand_pct
 
     def _record_learning_telemetry(
         self,

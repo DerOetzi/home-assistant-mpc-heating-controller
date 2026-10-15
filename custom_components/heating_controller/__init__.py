@@ -77,7 +77,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     _async_register_services(hass)
 
@@ -94,6 +93,15 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "entities step to control it, until then the default applies",
             entry.data.get(CONF_ROOM_NAME),
         )
+    if entry.version == 2:
+        # Room area, construction and the flow temperature entity have no
+        # sensible value to derive; setup asks for them until they are set.
+        hass.config_entries.async_update_entry(entry, version=3)
+        _LOGGER.warning(
+            "Room %s needs its room area, construction and flow temperature "
+            "entity; fill them in through the options flow",
+            entry.data.get(CONF_ROOM_NAME),
+        )
     return True
 
 
@@ -103,10 +111,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator: HeatingRoomCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
         coordinator.async_unload()
     return unload_ok
-
-
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

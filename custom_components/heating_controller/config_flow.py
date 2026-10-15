@@ -12,12 +12,14 @@ from .const import (
     CONF_BOOST_ENABLED,
     CONF_BOOST_TEMPERATURE_OFFSET,
     CONF_COMFORT_CONDITION_ENTITIES,
+    CONF_CONSTRUCTION,
     CONF_DESIGN_INDOOR_TEMPERATURE,
     CONF_DESIGN_OUTDOOR_TEMPERATURE,
     CONF_DESIGN_TEMPERATURE_SYSTEM,
     CONF_FLOW_GATE_CLOSE_SURPLUS,
     CONF_FLOW_GATE_HOLD_TIME,
     CONF_FLOW_GATE_OPEN_SURPLUS,
+    CONF_FLOW_TEMPERATURE_ENTITY,
     CONF_FLOW_THRESHOLD_ENTITY,
     CONF_FROST_PROTECTION_TEMPERATURE,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
@@ -32,6 +34,7 @@ from .const import (
     CONF_PV_BOOST_ENABLED,
     CONF_PV_BOOST_ENTITY,
     CONF_PV_BOOST_TEMPERATURE_OFFSET,
+    CONF_ROOM_AREA,
     CONF_ROOM_COMFORT_CONDITION_ENTITIES,
     CONF_ROOM_HEAT_LOAD,
     CONF_ROOM_NAME,
@@ -59,6 +62,7 @@ from .const import (
     MAX_TRV_COUNT,
     MIN_STATIONARY_RANGE_C,
     STATIONARY_RANGE_STEP_C,
+    Construction,
     DesignTemperatureSystem,
     HeatEmitterType,
     PanelRadiatorType,
@@ -200,6 +204,13 @@ def _entities_schema(defaults: dict[str, Any]) -> vol.Schema:
                     selector.EntitySelectorConfig(domain="climate")
                 )
             ),
+            _marker(vol.Required, CONF_FLOW_TEMPERATURE_ENTITY, defaults): (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="sensor", device_class="temperature"
+                    )
+                )
+            ),
             _marker(vol.Optional, CONF_FLOW_THRESHOLD_ENTITY, defaults): (
                 selector.EntitySelector(
                     selector.EntitySelectorConfig(domain=_FLOW_THRESHOLD_DOMAINS)
@@ -277,6 +288,22 @@ def _mpc_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_ROOM_HEAT_LOAD, default=defaults.get(CONF_ROOM_HEAT_LOAD, 1000.0)
             ): vol.Coerce(float),
+            _marker(vol.Required, CONF_ROOM_AREA, defaults): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1,
+                    max=200,
+                    step=0.1,
+                    mode=selector.NumberSelectorMode.BOX,
+                    unit_of_measurement="m²",
+                )
+            ),
+            _marker(vol.Required, CONF_CONSTRUCTION, defaults): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[c.value for c in Construction],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    translation_key=CONF_CONSTRUCTION,
+                )
+            ),
             vol.Required(
                 CONF_MPC_DEMAND_HYSTERESIS_PCT,
                 default=defaults.get(CONF_MPC_DEMAND_HYSTERESIS_PCT, 5.0),
@@ -330,7 +357,7 @@ def _mpc_schema(defaults: dict[str, Any]) -> vol.Schema:
 
 
 class HeatingControllerConfigFlow(ConfigFlow, domain=DOMAIN):
-    VERSION = 2
+    VERSION = 3
 
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}
@@ -518,6 +545,12 @@ class HeatingControllerOptionsFlow(OptionsFlow):
             self._data[CONF_TRVS] = self._trvs
             self.hass.config_entries.async_update_entry(
                 self._config_entry, data=self._data
+            )
+            # Reload explicitly rather than through an update listener: a room
+            # whose setup failed (e.g. missing room area) has none registered,
+            # and this is how it gets loaded once the values are in.
+            self.hass.config_entries.async_schedule_reload(
+                self._config_entry.entry_id
             )
             return self.async_create_entry(title="", data={})
 

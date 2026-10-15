@@ -6,8 +6,16 @@ from datetime import timedelta
 from typing import Any, Callable
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET, STATE_OFF, STATE_ON
+from homeassistant.const import (
+    STATE_OFF,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    SUN_EVENT_SUNRISE,
+    SUN_EVENT_SUNSET,
+)
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
+from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
@@ -18,12 +26,14 @@ from homeassistant.util import dt as dt_util, slugify
 
 from .const import (
     CONF_COMFORT_CONDITION_ENTITIES,
+    CONF_CONSTRUCTION,
     CONF_DESIGN_INDOOR_TEMPERATURE,
     CONF_DESIGN_OUTDOOR_TEMPERATURE,
     CONF_DESIGN_TEMPERATURE_SYSTEM,
     CONF_FLOW_GATE_CLOSE_SURPLUS,
     CONF_FLOW_GATE_HOLD_TIME,
     CONF_FLOW_GATE_OPEN_SURPLUS,
+    CONF_FLOW_TEMPERATURE_ENTITY,
     CONF_FLOW_THRESHOLD_ENTITY,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
     CONF_LEARNING_ENABLED_ENTITY,
@@ -37,6 +47,7 @@ from .const import (
     CONF_PV_BOOST_ENABLED,
     CONF_PV_BOOST_ENTITY,
     CONF_PV_BOOST_TEMPERATURE_OFFSET,
+    CONF_ROOM_AREA,
     CONF_ROOM_COMFORT_CONDITION_ENTITIES,
     CONF_ROOM_HEAT_LOAD,
     CONF_ROOM_NAME,
@@ -62,6 +73,7 @@ from .const import (
     DEFAULT_FLOW_THRESHOLD_C,
     DEFAULT_STATIONARY_RANGE_C,
     HEAT_SOURCE_ACTIVE_STATE,
+    Construction,
     DesignTemperatureSystem,
     FlowSupplyStatus,
     HeatEmitterType,
@@ -105,6 +117,14 @@ SUNSET_LEARNING_DELAY = timedelta(hours=2)
 # the room sensor before accepting the fallback.
 ROOM_SENSOR_STARTUP_GRACE_S = 5 * 60
 
+# Added after rooms were already set up; an entry without them stops with a
+# hint to fill them in through the options flow instead of guessing.
+_REQUIRED_ENTRY_KEYS = (
+    CONF_ROOM_AREA,
+    CONF_CONSTRUCTION,
+    CONF_FLOW_TEMPERATURE_ENTITY,
+)
+
 
 def _build_trv_configs(trv_entries: list[dict[str, Any]]) -> list[TrvConfig]:
     return [
@@ -133,6 +153,12 @@ class HeatingRoomCoordinator:
         self.entry = entry
         self.data = entry.data
         self.room_name: str = self.data[CONF_ROOM_NAME]
+        missing = [key for key in _REQUIRED_ENTRY_KEYS if not self.data.get(key)]
+        if missing:
+            raise ConfigEntryError(
+                f"Room {self.room_name} is missing {', '.join(missing)}; "
+                "fill them in through the options flow"
+            )
 
         self._trv_entries: list[dict[str, Any]] = self.data[CONF_TRVS]
         self._trv_entity_ids: list[str] = [
@@ -154,6 +180,13 @@ class HeatingRoomCoordinator:
         self._heat_source_climate_entity: str | None = self.data.get(
             CONF_HEAT_SOURCE_CLIMATE_ENTITY
         )
+        self._flow_temperature_entity: str = self.data[CONF_FLOW_TEMPERATURE_ENTITY]
+        # The heat source drops out for a few polls at a time while it keeps
+        # running; its last known state bridges that.
+        self._last_heat_source_state: str | None = None
+        # Same for the flow temperature entity, which drops out for a moment
+        # whenever its template is reloaded.
+        self._flow_temperature_c: float | None = None
         self._flow_threshold_entity: str | None = self.data.get(
             CONF_FLOW_THRESHOLD_ENTITY
         )
@@ -185,6 +218,8 @@ class HeatingRoomCoordinator:
             ),
             room_heat_load_w=self.data[CONF_ROOM_HEAT_LOAD],
             flow_threshold_c=self.flow_threshold_c,
+            room_area_m2=self.data[CONF_ROOM_AREA],
+            construction=Construction(self.data[CONF_CONSTRUCTION]),
         )
         rate_limit_config = MpcRateLimitConfig(
             demand_hysteresis_pct=self.data[CONF_MPC_DEMAND_HYSTERESIS_PCT],
@@ -285,6 +320,7 @@ class HeatingRoomCoordinator:
         tracked_entities.extend(self.data.get(CONF_WINDOW_CONTACT_ENTITIES, []))
         tracked_entities.append(self.data[CONF_PV_BOOST_ENTITY])
         tracked_entities.append(self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY])
+        tracked_entities.append(self._flow_temperature_entity)
         if self._heat_source_climate_entity:
             tracked_entities.append(self._heat_source_climate_entity)
         if self._flow_threshold_entity:
@@ -364,7 +400,9 @@ class HeatingRoomCoordinator:
         self.mpc.set_outdoor_temperature(
             self._float_state(self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY])
         )
-        self.mpc.set_flow_temperature(self.current_flow_temperature_c)
+        self._update_flow_temperature(
+            self.hass.states.get(self._flow_temperature_entity)
+        )
 
     async def _async_handle_room_sensor_grace_expired(self, _now: Any) -> None:
         if not self._awaiting_room_sensor:
@@ -382,13 +420,24 @@ class HeatingRoomCoordinator:
         self._refresh_temperature_inputs()
         await self._async_recompute()
 
+    def _update_flow_temperature(self, state: State | None) -> None:
+        value = self._float_from_state(state)
+        if value is not None:
+            self._flow_temperature_c = value
+        self.mpc.set_flow_temperature(self._flow_temperature_c)
+
     def _compute_trv_active(self) -> bool:
         if not self._heat_source_climate_entity:
             return False
         climate_state = self.hass.states.get(self._heat_source_climate_entity)
-        if climate_state is None or climate_state.state != HEAT_SOURCE_ACTIVE_STATE:
+        if climate_state is not None and climate_state.state not in (
+            STATE_UNAVAILABLE,
+            STATE_UNKNOWN,
+        ):
+            self._last_heat_source_state = climate_state.state
+        if self._last_heat_source_state != HEAT_SOURCE_ACTIVE_STATE:
             return False
-        flow_temp_c = self._climate_temperature_from_state(climate_state)
+        flow_temp_c = self.current_flow_temperature_c
         return flow_temp_c is not None and flow_temp_c >= self.flow_threshold_c
 
     async def _async_apply_trv_active_switches(self, active: bool) -> None:
@@ -471,10 +520,8 @@ class HeatingRoomCoordinator:
         elif entity_id == self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY]:
             self.mpc.set_outdoor_temperature(self._float_from_state(new_state))
 
-        elif entity_id == self._heat_source_climate_entity:
-            self.mpc.set_flow_temperature(
-                self._climate_temperature_from_state(new_state)
-            )
+        elif entity_id == self._flow_temperature_entity:
+            self._update_flow_temperature(new_state)
 
         elif entity_id in self._comfort_condition_entities:
             self.state.set_comfort_condition(
@@ -603,7 +650,12 @@ class HeatingRoomCoordinator:
         actual_target = self.state.effective_target_temperature(
             self.state.determine_base_target_temperature(display_mode)
         )
-        actual_compute = self.mpc.compute(actual_target)
+        actual_compute = self.mpc.compute(
+            actual_target,
+            skip_demand_smoothing=self.state.should_force_frost_protection(
+                self.blocked
+            ),
+        )
         if actual_compute.valid:
             self.last_result = actual_compute.result
             await self._async_apply_result(actual_compute.result)
@@ -683,11 +735,8 @@ class HeatingRoomCoordinator:
 
     @property
     def current_flow_temperature_c(self) -> float | None:
-        if not self._heat_source_climate_entity:
-            return None
-        return self._climate_temperature_from_state(
-            self.hass.states.get(self._heat_source_climate_entity)
-        )
+        """The last valid flow temperature; None until one was reported."""
+        return self._flow_temperature_c
 
     @property
     def normal_min_flow_temperature_c(self) -> float | None:

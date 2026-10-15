@@ -3,6 +3,8 @@ import time
 import pytest
 
 from heating_controller.const import (
+    CapacityOutcome,
+    Construction,
     LearningStatus,
     RoomTemperatureStrategy,
     UaBalanceOutcome,
@@ -22,7 +24,11 @@ from heating_controller.controller.mpc.types import LearningFactors, RoomThermal
 
 
 def make_learner():
-    thermal_config = RoomThermalConfig(room_heat_load_w=1000)
+    # 90 m² very light construction: 7.2 MJ/K, the capacity the windows below
+    # were worked out with.
+    thermal_config = RoomThermalConfig(
+        room_heat_load_w=1000, room_area_m2=90, construction=Construction.VERY_LIGHT
+    )
     loss_model = RoomLossModel(thermal_config)
     capacity_model = ThermalCapacityModel(thermal_config)
     return RoomMpcModelLearner(loss_model, capacity_model), loss_model, capacity_model
@@ -87,7 +93,7 @@ def _inputs(temperatures, outdoor_temp_c=-5.0):
     ]
 
 
-# Test room: UA 1000 W / 32 K = 31.25 W/K, capacity 1000 W * 2 h = 7.2 MJ/K.
+# Test room: UA 1000 W / 32 K = 31.25 W/K, capacity 90 m² * 80 kJ/m²K = 7.2 MJ/K.
 # At 18 °C and -5 °C outside it loses ~720 W; 2 kW heating lets the replay rise
 # by ~0.25 K over the window.
 RISING = (18.0, 18.2, 18.4, 18.6, 18.8, 19.0)
@@ -774,3 +780,156 @@ def test_balance_info_reports_an_inactive_learning_window():
     info = learner.get_ua_balance_info()
     assert info.outcome == UaBalanceOutcome.OUTSIDE_WINDOW
     assert info.collecting_since_ts is None
+
+
+@pytest.mark.parametrize(
+    ("power_w", "target_factor"),
+    [(0.0, 0.0), (62.5, 0.1), (1500.0, 2.4)],
+)
+def test_heat_balance_discards_an_implausible_target(power_w, target_factor):
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    _feed_night(learner, power_w=power_w)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.IMPLAUSIBLE_TARGET
+    assert loss_model.learned_ua_factor == 1.0
+    assert info.last_target_factor == pytest.approx(target_factor)
+    assert info.last_drift_c == pytest.approx(0.0)
+    assert info.last_learned_ts is None
+    assert learner.consume_persisted_learning_factors() is None
+
+
+def test_heat_balance_discards_a_stretch_dominated_by_stored_heat():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    # 0.25 K rise stores 1.8 MJ, more than half of the 3.1 MJ requested.
+    rising = [20.0 + 0.25 * index / (NIGHT_COUNT - 1) for index in range(NIGHT_COUNT)]
+    _feed_night(learner, room_temps=rising, power_w=100.0)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.STORAGE_DOMINATED
+    assert loss_model.learned_ua_factor == 1.0
+    assert info.last_drift_c > 0.2
+    assert info.last_target_factor is not None
+    assert info.last_learned_ts is None
+
+
+def test_discarded_stretch_is_not_balanced_again():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    end_ts = _feed_night(learner, power_w=0.0)
+    learner.run_learning_cycle()
+    learner.append_history(
+        make_input(end_ts + STEP_S, room_temp_c=20.0, outdoor_temp_c=0.0, flow_temp_c=40.0),
+        applied_heating_power_w=0.0,
+    )
+    learner.run_learning_cycle()
+
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.COLLECTING
+    assert loss_model.learned_ua_factor == 1.0
+
+
+def test_heat_balance_skips_mild_nights():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    # 5 K mean difference: below the mild-night limit even though the power
+    # matches the modelled losses.
+    _feed_night(learner, outdoor_temp_c=15.0, power_w=156.25)
+    learner.run_learning_cycle()
+
+    assert (
+        learner.get_ua_balance_info().outcome
+        == UaBalanceOutcome.SMALL_TEMPERATURE_DIFFERENCE
+    )
+    assert loss_model.learned_ua_factor == 1.0
+
+
+def _replay_matching_window(learner):
+    learner.set_prediction(
+        LearnerPrediction(
+            timestamp=START_TS, predicted_room_temperature_c=20.0, prediction_horizon_s=1800
+        )
+    )
+    learner.run_learning_cycle()
+    for index in range(6):
+        learner.append_history(
+            make_input(START_TS + index * 300, room_temp_c=18.0 + index * 0.0533),
+            applied_heating_power_w=2000.0,
+        )
+    learner.run_learning_cycle()
+
+
+def _paused(learner):
+    learner.set_learning_paused(True, START_TS - 600)
+    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
+
+
+def _suppressed(learner):
+    learner.suppress_for_interval(3600, 3600)
+    learner.run_learning_cycle()
+
+
+def _outside_window(learner):
+    learner.set_sun_condition(lambda ts: ts < START_TS + 900)
+    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
+
+
+def _disturbed(learner):
+    _evaluate_window(
+        learner,
+        [
+            make_input(START_TS + index * 300, room_temp_c=room_temp_c, outdoor_temp_c=-5.0 - index)
+            for index, room_temp_c in enumerate(RISING)
+        ],
+        power_w=2000.0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("scenario", "outcome"),
+    [
+        (lambda learner: learner.run_learning_cycle(), CapacityOutcome.WAITING),
+        (
+            lambda learner: _evaluate_window(learner, _inputs(RISING), power_w=2000.0),
+            CapacityOutcome.LEARNED,
+        ),
+        (
+            lambda learner: _evaluate_window(learner, _inputs((18.0,) * 6), power_w=2000.0),
+            CapacityOutcome.STATIONARY,
+        ),
+        (_replay_matching_window, CapacityOutcome.SMALL_ERROR),
+        (
+            lambda learner: _evaluate_window(
+                learner, _inputs((18.0, 18.1, 18.2, 18.3, 18.4, 18.5)), power_w=719.0
+            ),
+            CapacityOutcome.SMALL_CHANGE,
+        ),
+        (_disturbed, CapacityOutcome.DISTURBED),
+        (_outside_window, CapacityOutcome.OUTSIDE_WINDOW),
+        (_paused, CapacityOutcome.PAUSED),
+        (_suppressed, CapacityOutcome.SUPPRESSED),
+    ],
+)
+def test_capacity_outcome_names_the_branch(scenario, outcome):
+    learner, _, _ = make_learner()
+    learner.enable()
+
+    scenario(learner)
+
+    assert learner.get_capacity_outcome() == outcome
+
+
+def test_capacity_outcome_reports_a_disabled_learner():
+    learner, _, _ = make_learner()
+    learner.enable()
+    learner.disable()
+    learner.run_learning_cycle()
+
+    assert learner.get_capacity_outcome() == CapacityOutcome.DISABLED

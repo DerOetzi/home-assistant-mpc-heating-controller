@@ -46,6 +46,7 @@ CONF_FLOW_THRESHOLD_ENTITY = "flow_threshold_entity"
 CONF_PV_BOOST_ENTITY = "pv_boost_entity"
 CONF_LEARNING_WINDOW_ENTITY = "learning_window_entity"
 CONF_LEARNING_ENABLED_ENTITY = "learning_enabled_entity"
+CONF_FLOW_TEMPERATURE_ENTITY = "flow_temperature_entity"
 
 CONF_BOOST_ENABLED = "boost_enabled"
 CONF_BOOST_TEMPERATURE_OFFSET = "boost_temperature_offset_c"
@@ -57,6 +58,8 @@ CONF_DESIGN_INDOOR_TEMPERATURE = "design_indoor_temperature_c"
 CONF_DESIGN_OUTDOOR_TEMPERATURE = "design_outdoor_temperature_c"
 CONF_DESIGN_TEMPERATURE_SYSTEM = "design_temperature_system"
 CONF_ROOM_HEAT_LOAD = "room_heat_load_w"
+CONF_ROOM_AREA = "room_area_m2"
+CONF_CONSTRUCTION = "construction"
 CONF_MPC_DEMAND_HYSTERESIS_PCT = "mpc_demand_hysteresis_pct"
 CONF_MPC_HOLD_TIME = "mpc_hold_time_s"
 CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT = "mpc_hold_override_demand_pct"
@@ -120,6 +123,26 @@ class DesignTemperatureSystem(StrEnum):
     SYSTEM_35_30 = "system_35_30"
 
 
+class Construction(StrEnum):
+    """Building construction class after ISO 13790, table 12."""
+
+    VERY_LIGHT = "very_light"
+    LIGHT = "light"
+    MEDIUM = "medium"
+    HEAVY = "heavy"
+    VERY_HEAVY = "very_heavy"
+
+
+# Effective internal heat capacity per floor area, ISO 13790 table 12.
+CONSTRUCTION_CAPACITY_KJ_PER_M2K = {
+    Construction.VERY_LIGHT: 80.0,
+    Construction.LIGHT: 110.0,
+    Construction.MEDIUM: 165.0,
+    Construction.HEAVY: 260.0,
+    Construction.VERY_HEAVY: 370.0,
+}
+
+
 class RoomTemperatureStrategy(StrEnum):
     ROOM_SENSOR = "room_sensor"
     TRV_AVERAGE = "trv_average"
@@ -145,3 +168,18 @@ class UaBalanceOutcome(StrEnum):
     DRIFT = "drift"
     SMALL_TEMPERATURE_DIFFERENCE = "small_temperature_difference"
     TOO_SHORT = "too_short"
+    IMPLAUSIBLE_TARGET = "implausible_target"
+    STORAGE_DOMINATED = "storage_dominated"
+
+
+class CapacityOutcome(StrEnum):
+    LEARNED = "learned"
+    STATIONARY = "stationary"
+    SMALL_ERROR = "small_error"
+    SMALL_CHANGE = "small_change"
+    OUTSIDE_WINDOW = "outside_window"
+    DISTURBED = "disturbed"
+    SUPPRESSED = "suppressed"
+    PAUSED = "paused"
+    WAITING = "waiting"
+    DISABLED = "disabled"

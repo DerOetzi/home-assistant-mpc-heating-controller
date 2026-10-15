@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+from ....const import CONSTRUCTION_CAPACITY_KJ_PER_M2K
 from ..math_helper import clamp
 from ..types import RoomThermalConfig
-
-DEFAULT_CAPACITY_SECONDS = 7200
 
 MIN_LEARNED_CAPACITY_FACTOR = 0.5
 MAX_LEARNED_CAPACITY_FACTOR = 3.0
@@ -12,8 +11,13 @@ MAX_LEARNED_CAPACITY_FACTOR = 3.0
 class ThermalCapacityModel:
     def __init__(self, config: RoomThermalConfig) -> None:
         self._learned_capacity_factor = 1.0
+        # Effective heat capacity from floor area and construction class
+        # (ISO 13790). The learned factor covers furniture, open doors and
+        # what neighbouring rooms exchange.
         self._base_capacity_j_per_k = (
-            config.room_heat_load_w * DEFAULT_CAPACITY_SECONDS
+            config.room_area_m2
+            * CONSTRUCTION_CAPACITY_KJ_PER_M2K[config.construction]
+            * 1000
         )
 
     def predict_temperature_change_c(

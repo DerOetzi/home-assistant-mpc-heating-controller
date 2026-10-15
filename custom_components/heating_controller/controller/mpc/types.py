@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 
 from ...const import (
     DEFAULT_FLOW_THRESHOLD_C,
+    Construction,
     DesignTemperatureSystem,
     HeatEmitterType,
     LearningStatus,
@@ -37,6 +38,9 @@ class RoomThermalConfig:
     )
     room_heat_load_w: float = 1000.0
     flow_threshold_c: float = DEFAULT_FLOW_THRESHOLD_C
+    _: KW_ONLY
+    room_area_m2: float
+    construction: Construction
 
 
 @dataclass

@@ -1,17 +1,22 @@
+import pytest
 from homeassistant import config_entries
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.data_entry_flow import FlowResultType, InvalidData
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from heating_controller.const import (
     CONF_COMFORT_CONDITION_ENTITIES,
+    CONF_CONSTRUCTION,
     CONF_DESIGN_TEMPERATURE_SYSTEM,
+    CONF_FLOW_TEMPERATURE_ENTITY,
     CONF_FLOW_THRESHOLD_ENTITY,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
     CONF_LEARNING_ENABLED_ENTITY,
     CONF_LEARNING_WINDOW_ENTITY,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PV_BOOST_ENTITY,
+    CONF_ROOM_AREA,
     CONF_ROOM_NAME,
     CONF_STATIONARY_RANGE,
     CONF_TRV_ACTIVE_SWITCH,
@@ -63,6 +68,7 @@ async def test_full_config_flow_creates_entry(hass: HomeAssistant) -> None:
             "comfort_condition_entities": ["input_boolean.comfort_release"],
             "outdoor_temperature_entity": "sensor.outdoor_temperature",
             "heat_source_climate_entity": "climate.heat_source",
+            "flow_temperature_entity": "sensor.flow_temperature",
             "flow_threshold_entity": "input_number.flow_threshold",
             "pv_boost_entity": "binary_sensor.pv_boost",
             "learning_window_entity": "input_boolean.nachtmodus",
@@ -89,6 +95,8 @@ async def test_full_config_flow_creates_entry(hass: HomeAssistant) -> None:
             "design_outdoor_temperature_c": -12.0,
             "design_temperature_system": "system_55_45",
             "room_heat_load_w": 1000.0,
+            "room_area_m2": 21.0,
+            "construction": "medium",
             "mpc_demand_hysteresis_pct": 5.0,
             "mpc_hold_time_s": 300.0,
             "mpc_hold_override_demand_pct": 40.0,
@@ -105,6 +113,9 @@ async def test_full_config_flow_creates_entry(hass: HomeAssistant) -> None:
     assert data[CONF_DESIGN_TEMPERATURE_SYSTEM] == "system_55_45"
     assert data[CONF_OUTDOOR_TEMPERATURE_ENTITY] == "sensor.outdoor_temperature"
     assert data[CONF_HEAT_SOURCE_CLIMATE_ENTITY] == "climate.heat_source"
+    assert data[CONF_FLOW_TEMPERATURE_ENTITY] == "sensor.flow_temperature"
+    assert data[CONF_ROOM_AREA] == 21.0
+    assert data[CONF_CONSTRUCTION] == "medium"
     assert data[CONF_FLOW_THRESHOLD_ENTITY] == "input_number.flow_threshold"
     assert data[CONF_PV_BOOST_ENTITY] == "binary_sensor.pv_boost"
     assert data[CONF_LEARNING_WINDOW_ENTITY] == "input_boolean.nachtmodus"
@@ -145,6 +156,7 @@ async def test_duplicate_room_name_is_aborted(hass: HomeAssistant) -> None:
                 "comfort_condition_entities": ["input_boolean.comfort_release"],
                 "outdoor_temperature_entity": "sensor.outdoor_temperature",
                 "heat_source_climate_entity": "climate.heat_source",
+                "flow_temperature_entity": "sensor.flow_temperature",
                 "pv_boost_entity": "binary_sensor.pv_boost",
             },
         )
@@ -165,6 +177,8 @@ async def test_duplicate_room_name_is_aborted(hass: HomeAssistant) -> None:
                 "design_outdoor_temperature_c": -12.0,
                 "design_temperature_system": "system_55_45",
                 "room_heat_load_w": 1000.0,
+                "room_area_m2": 7.0,
+                "construction": "heavy",
                 "mpc_demand_hysteresis_pct": 5.0,
                 "mpc_hold_time_s": 300.0,
                 "mpc_hold_override_demand_pct": 40.0,
@@ -234,3 +248,126 @@ async def test_options_flow_writes_entry_data_and_covers_trvs(
     assert entry.data[CONF_TRVS][0][CONF_TRV_ACTIVE_SWITCH] == (
         "switch.heizung_wohnzimmer_trv_active"
     )
+
+
+def _register_noop_services(hass: HomeAssistant) -> None:
+    async def handler(call: ServiceCall) -> None:
+        return None
+
+    hass.services.async_register("climate", "set_temperature", handler)
+    hass.services.async_register("switch", "turn_on", handler)
+    hass.services.async_register("switch", "turn_off", handler)
+
+
+async def _start_flow_at_mpc(hass: HomeAssistant) -> str:
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"room_name": "Bad", "trv_count": 1}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"entity_id": "climate.heizung_bad", "emitter_type": "towel"}
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "outdoor_temperature_entity": "sensor.outdoor_temperature",
+            "heat_source_climate_entity": "climate.heat_source",
+            "flow_temperature_entity": "sensor.flow_temperature",
+            "pv_boost_entity": "binary_sensor.pv_boost",
+        },
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["step_id"] == "mpc"
+    return result["flow_id"]
+
+
+@pytest.mark.parametrize("missing", [CONF_ROOM_AREA, CONF_CONSTRUCTION])
+async def test_room_area_and_construction_have_no_default(
+    hass: HomeAssistant, missing: str
+) -> None:
+    flow_id = await _start_flow_at_mpc(hass)
+    user_input = {CONF_ROOM_AREA: 8.0, CONF_CONSTRUCTION: "medium"}
+    del user_input[missing]
+
+    with pytest.raises(InvalidData):
+        await hass.config_entries.flow.async_configure(flow_id, user_input)
+
+
+async def test_flow_temperature_entity_is_required(hass: HomeAssistant) -> None:
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"room_name": "Bad", "trv_count": 1}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"entity_id": "climate.heizung_bad", "emitter_type": "towel"}
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    with pytest.raises(InvalidData):
+        await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                "outdoor_temperature_entity": "sensor.outdoor_temperature",
+                "heat_source_climate_entity": "climate.heat_source",
+                "pv_boost_entity": "binary_sensor.pv_boost",
+            },
+        )
+
+
+async def _run_options_flow_to_mpc(hass: HomeAssistant, entry_id: str) -> str:
+    result = await hass.config_entries.options.async_init(entry_id)
+    for _ in range(4):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {}
+        )
+    assert result["step_id"] == "mpc"
+    return result["flow_id"]
+
+
+async def test_options_flow_keeps_room_area_and_construction(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    _register_noop_services(hass)
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, version=3)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    flow_id = await _run_options_flow_to_mpc(hass, entry.entry_id)
+    result = await hass.config_entries.options.async_configure(flow_id, {})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+
+    assert entry.data[CONF_ROOM_AREA] == ENTRY_DATA[CONF_ROOM_AREA]
+    assert entry.data[CONF_CONSTRUCTION] == ENTRY_DATA[CONF_CONSTRUCTION]
+    assert entry.state is ConfigEntryState.LOADED
+
+
+async def test_options_flow_asks_for_a_missing_room_area(hass: HomeAssistant) -> None:
+    _seed_entities(hass)
+    _register_noop_services(hass)
+    data = {
+        key: value
+        for key, value in ENTRY_DATA.items()
+        if key not in (CONF_ROOM_AREA, CONF_CONSTRUCTION)
+    }
+    entry = MockConfigEntry(domain=DOMAIN, data=data, version=3)
+    entry.add_to_hass(hass)
+
+    flow_id = await _run_options_flow_to_mpc(hass, entry.entry_id)
+    with pytest.raises(InvalidData):
+        await hass.config_entries.options.async_configure(flow_id, {})
+
+    result = await hass.config_entries.options.async_configure(
+        flow_id, {CONF_ROOM_AREA: 13.0, CONF_CONSTRUCTION: "heavy"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    assert entry.data[CONF_ROOM_AREA] == 13.0
+    assert entry.data[CONF_CONSTRUCTION] == "heavy"

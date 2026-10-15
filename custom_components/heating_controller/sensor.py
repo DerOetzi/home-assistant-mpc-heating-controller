@@ -269,9 +269,12 @@ class MpcLearningStatusSensor(_DiagnosticSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        info = self._coordinator.mpc.get_ua_balance_info()
+        mpc = self._coordinator.mpc
+        info = mpc.get_ua_balance_info()
         since_ts = info.collecting_since_ts
         return {
+            "capacity_status": mpc.get_capacity_outcome().value,
+            "capacity_j_per_k": round(mpc.effective_capacity_j_per_k),
             "ua_balance_status": info.outcome.value if info.outcome else None,
             "ua_balance_collecting_since": _iso(since_ts),
             "ua_balance_due": _iso(
