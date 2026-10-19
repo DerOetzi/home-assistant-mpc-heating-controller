@@ -51,14 +51,14 @@ UA_BALANCE_MAX_GAP_S = 20 * 60
 UA_BALANCE_MAX_DRIFT_C = 0.3
 # In mild nights little heat is requested, and heat from neighbouring rooms or
 # appliances weighs too much in the balance.
-UA_BALANCE_MIN_MEAN_DELTA_C = 6.0
+UA_BALANCE_MIN_MEAN_DELTA_C = 8.0
 # Even within the drift limit the stored heat must stay a minor part of the
 # balance; otherwise the result depends on the capacity more than on the
 # losses.
 UA_BALANCE_MAX_STORAGE_SHARE = 0.5
 # A target near zero or negative is a measurement artefact, not a signal:
 # the stretch is discarded instead of pulling the factor towards it.
-UA_BALANCE_MIN_TARGET_FACTOR = 0.3
+UA_BALANCE_MIN_TARGET_FACTOR = 0.15
 UA_BALANCE_MAX_TARGET_FACTOR = 2.0
 UA_BALANCE_WEIGHT = 0.3
 

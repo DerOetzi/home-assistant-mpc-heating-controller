@@ -389,6 +389,17 @@ def test_heat_balance_moves_ua_towards_the_power_that_held_the_room():
     assert learner.consume_persisted_learning_factors() is not None
 
 
+def test_heat_balance_learns_a_low_target_above_the_lower_limit():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    _feed_night(learner, power_w=125.0)
+    learner.run_learning_cycle()
+
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.LEARNED
+    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.2))
+
+
 def test_heat_balance_keeps_collecting_until_the_maximum_window():
     learner, loss_model, _ = make_learner()
     learner.enable()
@@ -839,9 +850,9 @@ def test_heat_balance_skips_mild_nights():
     learner, loss_model, _ = make_learner()
     learner.enable()
 
-    # 5 K mean difference: below the mild-night limit even though the power
+    # 7 K mean difference: below the mild-night limit even though the power
     # matches the modelled losses.
-    _feed_night(learner, outdoor_temp_c=15.0, power_w=156.25)
+    _feed_night(learner, outdoor_temp_c=13.0, power_w=218.75)
     learner.run_learning_cycle()
 
     assert (

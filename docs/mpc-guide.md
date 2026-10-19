@@ -48,7 +48,7 @@ the sensor's attributes:
 
 | Attribute | Meaning |
 |---|---|
-| `ua_balance_status` | Result of the last check: `learned`, `collecting` (stretch still running), `too_short` (stretch ended with fewer than four usable hours), `outside_window` (learning window entity off, or sun), `paused`, `gap` (a sample gap above 20 minutes), `drift` (room ended more than 0.3 K away from where it started), `small_temperature_difference` (room on average less than 6 K above outside), `storage_dominated` (the heat stored in or released by the room was more than half of the heat requested), `implausible_target` (the balance pointed at a factor outside 0.3–2). |
+| `ua_balance_status` | Result of the last check: `learned`, `collecting` (stretch still running), `too_short` (stretch ended with fewer than four usable hours), `outside_window` (learning window entity off, or sun), `paused`, `gap` (a sample gap above 20 minutes), `drift` (room ended more than 0.3 K away from where it started), `small_temperature_difference` (room on average less than 8 K above outside), `storage_dominated` (the heat stored in or released by the room was more than half of the heat requested), `implausible_target` (the balance pointed at a factor outside 0.15–2). |
 | `ua_balance_collecting_since` | Start of the current usable stretch — after the last balance, a restart, a pause, the learning window opening, a window contact or heating being off for longer than a short interruption. |
 | `ua_balance_due` | When that stretch reaches four hours, the earliest it can be balanced. |
 | `ua_balance_last_learned` | End of the last balance that moved the factor. |
@@ -79,13 +79,13 @@ for, whatever the model believes the losses are.
   Shorter interruptions of heating (a missed heat-source poll, the flow briefly under the
   threshold) are bridged and count as no heating. A balance needs at least four gap-free
   hours (no gap above 20 minutes), the room ending within 0.3 K of where it started, and on
-  average at least 6 K between room and outside. Samples where the flow temperature sits
+  average at least 8 K between room and outside. Samples where the flow temperature sits
   more than 5 K above the stretch's median (a hot-water charge) count as no heating. Each
   stretch is used once. Steady gains during the window (people, appliances,
   neighbouring rooms) end up in the factor — that is what the room needs in operation.
   Two checks keep measurement artefacts out: a stretch where the heat stored in or
   released by the room exceeds half of the requested heat depends more on the capacity
-  than on the losses, and a target outside 0.3–2 (near zero or negative in mild nights
+  than on the losses, and a target outside 0.15–2 (near zero or negative in mild nights
   with little heating) is no signal. Both are discarded without moving the factor.
 - **Capacity factor (`capacity_factor`): replay of 30-minute windows.** If the room moved
   further than the **stationary range** (default 0.2 K between the highest and lowest
