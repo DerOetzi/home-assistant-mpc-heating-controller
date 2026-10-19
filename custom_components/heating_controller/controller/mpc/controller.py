@@ -137,6 +137,7 @@ class RoomMpcController:
         trvs: list[TrvConfig],
         rate_limit_config: MpcRateLimitConfig,
         max_sensor_age_s: float,
+        room_sensor_configured: bool,
         flow_gate_config: FlowGateConfig | None = None,
     ) -> None:
         self._rate_limit_config = rate_limit_config
@@ -145,7 +146,9 @@ class RoomMpcController:
         self._live_flow_gate = _SurplusFlowGate(gate_config)
         self._preview_flow_gate = _SurplusFlowGate(gate_config)
 
-        self._sensors = RoomMpcSensors(trvs, max_sensor_age_s)
+        self._sensors = RoomMpcSensors(
+            trvs, max_sensor_age_s, room_sensor_configured
+        )
         self._emitter_model = HeatEmitterModel(thermal_config, trvs)
         self._loss_model = RoomLossModel(thermal_config)
         self._capacity_model = ThermalCapacityModel(thermal_config)
@@ -501,6 +504,9 @@ class RoomMpcController:
 
     def set_learning_paused(self, paused: bool, now_ts: float) -> None:
         self._learner.set_learning_paused(paused, now_ts)
+
+    def set_window_open(self, window_open: bool, now_ts: float) -> None:
+        self._learner.set_window_open(window_open, now_ts)
 
     def set_sun_condition(self, sun_condition: callable[[float], bool]) -> None:
         self._learner.set_sun_condition(sun_condition)

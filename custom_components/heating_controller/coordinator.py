@@ -105,7 +105,6 @@ SENSOR_POLL_INTERVAL = timedelta(minutes=SENSOR_POLL_INTERVAL_MINUTES)
 
 TARGET_TEMPERATURE_TOLERANCE_C = 0.01
 
-WINDOW_OPEN_SUPPRESS_LEARNING_S = 60 * 60
 WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S = 30 * 60
 WINDOW_CLOSED_SUPPRESS_CAPACITY_LEARNING_S = 10 * 60
 
@@ -243,6 +242,7 @@ class HeatingRoomCoordinator:
             trvs=_build_trv_configs(self._trv_entries),
             rate_limit_config=rate_limit_config,
             max_sensor_age_s=self.data[CONF_MAX_SENSOR_AGE],
+            room_sensor_configured=bool(self.data.get(CONF_ROOM_SENSOR_ENTITY)),
             flow_gate_config=flow_gate_config,
         )
         self.mpc.set_stationary_range_c(
@@ -290,6 +290,7 @@ class HeatingRoomCoordinator:
 
         for entity_id in self.data.get(CONF_WINDOW_CONTACT_ENTITIES, []):
             self.state.update_window_state(entity_id, self._is_on(entity_id))
+        self.mpc.set_window_open(self.state.is_window_open, time.time())
 
         self.state.set_pv_boost(self._is_on(self.data[CONF_PV_BOOST_ENTITY]))
 
@@ -533,11 +534,8 @@ class HeatingRoomCoordinator:
             _, is_open = self.state.update_window_state(
                 entity_id, self._bool_from_state(new_state)
             )
-            if is_open and not was_open:
-                self.mpc.suppress_learning_for_interval(
-                    WINDOW_OPEN_SUPPRESS_LEARNING_S, WINDOW_OPEN_SUPPRESS_LEARNING_S
-                )
-            elif was_open and not is_open:
+            self.mpc.set_window_open(is_open, time.time())
+            if was_open and not is_open:
                 self.mpc.suppress_learning_for_interval(
                     WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S,
                     WINDOW_CLOSED_SUPPRESS_CAPACITY_LEARNING_S,

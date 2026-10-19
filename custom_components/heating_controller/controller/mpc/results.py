@@ -25,6 +25,7 @@ class RoomTemperatureResult:
     used_strategy: RoomTemperatureStrategy | None = None
     trv_temperatures: list[float | None] | None = None
     room_sensor_temp_c: float | None = None
+    room_sensor_fallback: bool = False
     error: RoomMpcError | None = None
 
 
@@ -38,6 +39,8 @@ class RoomMpcInput:
     trv_temperatures: list[float | None]
     flow_temp_c: float | None = None
     room_sensor_temp_c: float | None = None
+    # A room sensor is configured but stale or missing, so the TRVs stand in.
+    room_sensor_fallback: bool = False
 
 
 @dataclass

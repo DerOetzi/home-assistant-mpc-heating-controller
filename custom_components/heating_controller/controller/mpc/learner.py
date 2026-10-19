@@ -31,8 +31,9 @@ CAPACITY_LEARNING_RATE = 0.005
 # what the room stored; the UA that balances this is the learning target.
 #
 # The window is a stretch of usable time: it runs until the learning window
-# closes, learning is paused, a window contact opens, heating stays off for
-# longer than a short interruption, or the sun condition ends, and is balanced
+# closes, learning is paused, a window contact opens, the configured room
+# sensor drops out, heating stays off for longer than a short interruption, or
+# the sun condition ends, and is balanced
 # once at that end. A night shortened by a disturbance still counts as long as
 # the remaining stretch is long enough; a stretch that reaches the maximum is
 # balanced right away so a learning window that never closes still learns.
@@ -70,6 +71,8 @@ class LearnerHistoryEntry:
     outdoor_temperature_c: float
     applied_heating_power_w: float
     flow_temperature_c: float | None = None
+    room_sensor_fallback: bool = False
+    window_open: bool = False
 
 
 @dataclass
@@ -127,6 +130,8 @@ class RoomMpcModelLearner:
         self._learning_window_active_since_ts = 0.0
         self._learning_paused = False
         self._learning_resumed_ts = 0.0
+        self._room_sensor_fallback = False
+        self._window_open = False
         self._sun_condition: callable[[float], bool] = lambda _ts: True
         self._pending_persisted_factors: LearningFactors | None = None
 
@@ -211,10 +216,24 @@ class RoomMpcModelLearner:
         if paused and self._enabled:
             self._learning_state = self._create_learning_state(LearningStatus.PAUSED)
 
+    def set_window_open(self, window_open: bool, now_ts: float) -> None:
+        # Blocks both factors for as long as the window is open, however long
+        # that is: the stretch before it is still balanced, the next one starts
+        # no earlier than the close (the caller adds its settling time).
+        if window_open and not self._window_open:
+            self._close_ua_balance(now_ts)
+            self._pending_persisted_factors = None
+        if self._window_open and not window_open:
+            self._ua_blocked_until_ts = max(self._ua_blocked_until_ts, now_ts)
+        self._window_open = window_open
+        if window_open and self._enabled:
+            self._learning_state = self._create_learning_state(LearningStatus.SUPPRESSED)
+
     def set_sun_condition(self, sun_condition: callable[[float], bool]) -> None:
         self._sun_condition = sun_condition
 
     def append_history(self, mpc_input: RoomMpcInput, applied_heating_power_w: float) -> None:
+        self._track_room_sensor_fallback(mpc_input)
         self._history.append(
             LearnerHistoryEntry(
                 timestamp=mpc_input.now_ts,
@@ -222,9 +241,25 @@ class RoomMpcModelLearner:
                 outdoor_temperature_c=mpc_input.outdoor_temp_c,
                 flow_temperature_c=mpc_input.flow_temp_c,
                 applied_heating_power_w=applied_heating_power_w,
+                room_sensor_fallback=mpc_input.room_sensor_fallback,
+                window_open=self._window_open,
             )
         )
         self._cleanup_history(mpc_input.now_ts)
+
+    def _track_room_sensor_fallback(self, mpc_input: RoomMpcInput) -> None:
+        # The TRVs sit at the radiator and read up to a kelvin off the room
+        # sensor, so samples taken while they stand in are invalid, as with an
+        # open window: the stretch up to the last room-sensor sample is still
+        # balanced, the next one starts once the sensor is back.
+        fallback = mpc_input.room_sensor_fallback
+        if fallback and not self._room_sensor_fallback and self._history:
+            self._close_ua_balance(self._history[-1].timestamp)
+        if self._room_sensor_fallback and not fallback:
+            self._ua_blocked_until_ts = max(
+                self._ua_blocked_until_ts, mpc_input.now_ts
+            )
+        self._room_sensor_fallback = fallback
 
     def _cleanup_history(self, now_ts: float) -> None:
         self._history = [
@@ -286,6 +321,12 @@ class RoomMpcModelLearner:
         relevant_history = self._get_relevant_history(self._active_prediction)
         if len(relevant_history) < MIN_HISTORY_SAMPLES:
             return LearningStatus.WAITING_INTERVAL, CapacityOutcome.WAITING
+
+        if any(entry.room_sensor_fallback for entry in relevant_history):
+            return LearningStatus.SUPPRESSED, CapacityOutcome.ROOM_SENSOR_FALLBACK
+
+        if any(entry.window_open for entry in relevant_history):
+            return LearningStatus.SUPPRESSED, CapacityOutcome.SUPPRESSED
 
         if not self._is_history_valid(relevant_history):
             return LearningStatus.DISTURBED, CapacityOutcome.DISTURBED
@@ -375,6 +416,8 @@ class RoomMpcModelLearner:
             not self._history
             or self._learning_paused
             or not self._learning_window_active
+            or self._room_sensor_fallback
+            or self._window_open
         ):
             return
         start_ts = self._ua_balance_start_ts()
@@ -397,6 +440,10 @@ class RoomMpcModelLearner:
             return self._balance_stretch(start_ts, end_ts)
         if self._learning_paused:
             return UaBalanceOutcome.PAUSED
+        if self._room_sensor_fallback:
+            return UaBalanceOutcome.ROOM_SENSOR_FALLBACK
+        if self._window_open:
+            return UaBalanceOutcome.WINDOW_OPEN
         if not self._learning_window_active:
             return UaBalanceOutcome.OUTSIDE_WINDOW
         if not self._history:
@@ -438,6 +485,10 @@ class RoomMpcModelLearner:
             or window[-1].timestamp - window[0].timestamp < UA_BALANCE_MIN_WINDOW_S
         ):
             return UaBalanceOutcome.TOO_SHORT
+        if any(entry.room_sensor_fallback for entry in window):
+            return UaBalanceOutcome.ROOM_SENSOR_FALLBACK
+        if any(entry.window_open for entry in window):
+            return UaBalanceOutcome.WINDOW_OPEN
         end_ts = window[-1].timestamp
 
         flow_temperatures = sorted(

@@ -4,9 +4,9 @@ from heating_controller.controller.mpc.sensors import RoomMpcSensors
 from heating_controller.controller.mpc.types import TrvConfig
 
 
-def make_sensors(trv_count=1, max_sensor_age_s=1800):
+def make_sensors(trv_count=1, max_sensor_age_s=1800, room_sensor_configured=False):
     trvs = [TrvConfig(name=f"trv{i}") for i in range(trv_count)]
-    return RoomMpcSensors(trvs, max_sensor_age_s)
+    return RoomMpcSensors(trvs, max_sensor_age_s, room_sensor_configured)
 
 
 def test_uses_room_sensor_when_fresh():
@@ -138,3 +138,26 @@ def test_outlier_drift_candidate_expires_after_long_gap():
         sensors.set_room_sensor_temperature(27.0, now_ts)
         assert sensors.get_room_temperature(now_ts).temperature_c == 19.9
         now_ts += 601
+
+
+def test_trv_average_is_a_fallback_only_with_a_configured_room_sensor():
+    configured = make_sensors(room_sensor_configured=True)
+    configured.set_trv_temperature(0, 19.0, now_ts=1000)
+    configured.set_outdoor_temperature(5.0, now_ts=1000)
+    without = make_sensors()
+    without.set_trv_temperature(0, 19.0, now_ts=1000)
+
+    assert configured.get_room_temperature(now_ts=1000).room_sensor_fallback is True
+    assert configured.create_input(21.0, now_ts=1000).input.room_sensor_fallback is True
+    assert without.get_room_temperature(now_ts=1000).room_sensor_fallback is False
+
+
+def test_stale_room_sensor_is_a_fallback():
+    sensors = make_sensors(max_sensor_age_s=1800, room_sensor_configured=True)
+    sensors.set_room_sensor_temperature(21.0, now_ts=1000)
+    sensors.set_trv_temperature(0, 19.0, now_ts=2900)
+
+    assert sensors.get_room_temperature(now_ts=2000).room_sensor_fallback is False
+    result = sensors.get_room_temperature(now_ts=2900)
+    assert result.used_strategy == RoomTemperatureStrategy.TRV_AVERAGE
+    assert result.room_sensor_fallback is True

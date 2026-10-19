@@ -34,15 +34,26 @@ def make_learner():
     return RoomMpcModelLearner(loss_model, capacity_model), loss_model, capacity_model
 
 
-def make_input(now_ts, room_temp_c=20.0, outdoor_temp_c=-5.0, flow_temp_c=45.0):
+def make_input(
+    now_ts,
+    room_temp_c=20.0,
+    outdoor_temp_c=-5.0,
+    flow_temp_c=45.0,
+    room_sensor_fallback=False,
+):
     return RoomMpcInput(
         now_ts=now_ts,
         target_temp_c=21.0,
         room_temp_c=room_temp_c,
         outdoor_temp_c=outdoor_temp_c,
         flow_temp_c=flow_temp_c,
-        used_room_sensor_strategy=RoomTemperatureStrategy.ROOM_SENSOR,
+        used_room_sensor_strategy=(
+            RoomTemperatureStrategy.TRV_AVERAGE
+            if room_sensor_fallback
+            else RoomTemperatureStrategy.ROOM_SENSOR
+        ),
         trv_temperatures=[room_temp_c],
+        room_sensor_fallback=room_sensor_fallback,
     )
 
 
@@ -356,6 +367,7 @@ def _feed_night(
     power_w=312.5,
     room_temps=None,
     skip=(),
+    room_sensor_fallback=False,
 ):
     count = int(hours * 3600 / STEP_S) + 1
     for index in range(count):
@@ -367,6 +379,7 @@ def _feed_night(
                 room_temp_c=room_temps[index] if room_temps else room_temp_c,
                 outdoor_temp_c=outdoor_temp_c,
                 flow_temp_c=40.0,
+                room_sensor_fallback=room_sensor_fallback,
             ),
             applied_heating_power_w=power_w,
         )
@@ -944,3 +957,114 @@ def test_capacity_outcome_reports_a_disabled_learner():
     learner.run_learning_cycle()
 
     assert learner.get_capacity_outcome() == CapacityOutcome.DISABLED
+
+
+def test_capacity_skips_windows_with_room_sensor_fallback():
+    learner, _, capacity_model = make_learner()
+    learner.enable()
+    inputs = _inputs(RISING)
+    inputs[2] = make_input(
+        inputs[2].now_ts, room_temp_c=RISING[2], room_sensor_fallback=True
+    )
+
+    _evaluate_window(learner, inputs, power_w=2000.0)
+
+    assert learner.get_learning_state().status == LearningStatus.SUPPRESSED
+    assert learner.get_capacity_outcome() == CapacityOutcome.ROOM_SENSOR_FALLBACK
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_room_sensor_fallback_balances_the_stretch_before_it():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    end_ts = _feed_night(learner, hours=5)
+    _feed_night(
+        learner, hours=0.5, start_ts=end_ts + STEP_S, room_temp_c=19.0,
+        room_sensor_fallback=True,
+    )
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.LEARNED
+    assert info.last_window_s == pytest.approx(5 * 3600)
+    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
+
+
+def test_room_sensor_fallback_blocks_the_heat_balance():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    _feed_night(learner, room_temp_c=19.0, room_sensor_fallback=True)
+    learner.run_learning_cycle()
+
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.ROOM_SENSOR_FALLBACK
+    assert loss_model.learned_ua_factor == 1.0
+
+
+def test_stretch_restarts_when_the_room_sensor_is_back():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    end_ts = _feed_night(learner, hours=2, room_temp_c=19.0, room_sensor_fallback=True)
+    back_ts = end_ts + STEP_S
+    _feed_night(learner, hours=3, start_ts=back_ts)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.COLLECTING
+    assert info.collecting_since_ts == back_ts
+    assert loss_model.learned_ua_factor == 1.0
+
+
+def test_open_window_blocks_capacity_however_long_it_stays_open():
+    learner, _, capacity_model = make_learner()
+    learner.enable()
+    learner.set_window_open(True, START_TS - 3 * 3600)
+
+    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
+
+    assert learner.get_learning_state().status == LearningStatus.SUPPRESSED
+    assert learner.get_capacity_outcome() == CapacityOutcome.SUPPRESSED
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_opening_a_window_balances_the_stretch_before_it():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    end_ts = _feed_night(learner, hours=5)
+    learner.set_window_open(True, end_ts + 60)
+    learner.run_learning_cycle()
+
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.LEARNED
+    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
+
+
+def test_open_window_blocks_the_heat_balance():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+    learner.set_window_open(True, NIGHT_START_TS - 60)
+
+    _feed_night(learner)
+    learner.run_learning_cycle()
+
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.WINDOW_OPEN
+    assert loss_model.learned_ua_factor == 1.0
+
+
+def test_stretch_starts_after_a_long_open_window_closes():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+    learner.set_window_open(True, NIGHT_START_TS - 60)
+
+    end_ts = _feed_night(learner, hours=6)
+    closed_ts = end_ts + 60
+    learner.set_window_open(False, closed_ts)
+    _feed_night(learner, hours=3, start_ts=end_ts + STEP_S)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.COLLECTING
+    assert info.collecting_since_ts == end_ts + STEP_S
+    assert loss_model.learned_ua_factor == 1.0

@@ -170,6 +170,8 @@ class UaBalanceOutcome(StrEnum):
     TOO_SHORT = "too_short"
     IMPLAUSIBLE_TARGET = "implausible_target"
     STORAGE_DOMINATED = "storage_dominated"
+    ROOM_SENSOR_FALLBACK = "room_sensor_fallback"
+    WINDOW_OPEN = "window_open"
 
 
 class CapacityOutcome(StrEnum):
@@ -180,6 +182,7 @@ class CapacityOutcome(StrEnum):
     OUTSIDE_WINDOW = "outside_window"
     DISTURBED = "disturbed"
     SUPPRESSED = "suppressed"
+    ROOM_SENSOR_FALLBACK = "room_sensor_fallback"
     PAUSED = "paused"
     WAITING = "waiting"
     DISABLED = "disabled"

@@ -22,6 +22,7 @@ def make_controller(flow_gate_config=None, **rate_limit_overrides):
         trvs=[TrvConfig(name="trv1")],
         rate_limit_config=MpcRateLimitConfig(**rate_limit_overrides),
         max_sensor_age_s=1800,
+        room_sensor_configured=False,
         flow_gate_config=flow_gate_config,
     )
 
@@ -32,6 +33,7 @@ def make_thermal_controller(thermal_config):
         trvs=[TrvConfig(name="trv1")],
         rate_limit_config=MpcRateLimitConfig(),
         max_sensor_age_s=1800,
+        room_sensor_configured=False,
     )
 
 

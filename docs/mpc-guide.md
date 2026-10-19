@@ -38,7 +38,7 @@ currently doing:
 | Waiting | Not enough recent history yet to draw a conclusion — normal shortly after startup or after a gap. |
 | No correction needed | The room ended up within 0.15 K of what the model gives when replaying the window, the room barely moved (heat-loss factor learns from the heat balance instead, see below), or the replay itself hardly moved, so the cycle carries no correction worth applying. |
 | Window disturbed | The measurement window itself was unusable: the outdoor temperature drifted more than 1 K, or the flow temperature jumped more than 5 K (a hot-water charge, for instance), so the room's response cannot be attributed to the model. |
-| Suppressed | Learning is paused on purpose — a window in the room was opened (60 min) or just closed (30 min for the heat-loss factor, 10 min for the capacity factor), or the configuration changed. For the heat-loss factor this restarts the heat-balance window. Not to be confused with the measurement window above. |
+| Suppressed | Learning is paused on purpose — a window in the room is open (for as long as it stays open) or was just closed (30 min for the heat-loss factor, 10 min for the capacity factor), the configured room sensor is stale or unavailable so the TRVs stand in (until it reports again), or the configuration changed. For the heat-loss factor this restarts the heat-balance window. Not to be confused with the measurement window above. |
 | Outside learning window | The measurement window fell outside the time the room is allowed to learn: the sun was up or had set less than two hours before, or — for the heat-loss factor — the learning window entity was off. See below. |
 | Paused | The learning enabled entity is off, or the measurement window started before it came back on. Neither factor learns. See below. |
 | Disabled | The heat source isn't calling for heat at or above its configured flow threshold right now (e.g. outside the heating season) — learning simply doesn't run, and resumes on its own once heating starts again. |
@@ -48,14 +48,14 @@ the sensor's attributes:
 
 | Attribute | Meaning |
 |---|---|
-| `ua_balance_status` | Result of the last check: `learned`, `collecting` (stretch still running), `too_short` (stretch ended with fewer than four usable hours), `outside_window` (learning window entity off, or sun), `paused`, `gap` (a sample gap above 20 minutes), `drift` (room ended more than 0.3 K away from where it started), `small_temperature_difference` (room on average less than 8 K above outside), `storage_dominated` (the heat stored in or released by the room was more than half of the heat requested), `implausible_target` (the balance pointed at a factor outside 0.15–2). |
-| `ua_balance_collecting_since` | Start of the current usable stretch — after the last balance, a restart, a pause, the learning window opening, a window contact or heating being off for longer than a short interruption. |
+| `ua_balance_status` | Result of the last check: `learned`, `collecting` (stretch still running), `too_short` (stretch ended with fewer than four usable hours), `outside_window` (learning window entity off, or sun), `paused`, `gap` (a sample gap above 20 minutes), `drift` (room ended more than 0.3 K away from where it started), `small_temperature_difference` (room on average less than 8 K above outside), `storage_dominated` (the heat stored in or released by the room was more than half of the heat requested), `implausible_target` (the balance pointed at a factor outside 0.15–2), `room_sensor_fallback` (the configured room sensor is stale or unavailable and the TRVs stand in), `window_open` (a window contact in the room is open). |
+| `ua_balance_collecting_since` | Start of the current usable stretch — after the last balance, a restart, a pause, the learning window opening, a window contact, the room sensor coming back after a dropout or heating being off for longer than a short interruption. |
 | `ua_balance_due` | When that stretch reaches four hours, the earliest it can be balanced. |
 | `ua_balance_last_learned` | End of the last balance that moved the factor. |
 | `ua_balance_last_target_factor` | The factor the last balance pointed at; the learned factor moves 30 % towards it. Also set for a stretch discarded as `storage_dominated` or `implausible_target`, which leaves the factor alone. |
 | `ua_balance_last_drift_c` | How far the room moved over that balance, set like the target factor. |
 | `ua_balance_last_window_h` | How many hours that balance covered. |
-| `capacity_status` | Result of the last capacity check: `learned`, `stationary` (room moved less than the stationary range), `small_error` (replay within 0.15 K), `small_change` (replay moved less than 0.1 K), `outside_window` (sun), `disturbed`, `suppressed`, `paused`, `waiting` (no complete window yet), `disabled` (heating unavailable). |
+| `capacity_status` | Result of the last capacity check: `learned`, `stationary` (room moved less than the stationary range), `small_error` (replay within 0.15 K), `small_change` (replay moved less than 0.1 K), `outside_window` (sun), `disturbed`, `suppressed`, `room_sensor_fallback` (the window holds samples taken while the TRVs stood in for the room sensor), `paused`, `waiting` (no complete window yet), `disabled` (heating unavailable). |
 | `capacity_j_per_k` | Effective heat capacity the model uses: base capacity from area and construction times the learned capacity factor. |
 
 Adjustments per cycle are intentionally small — expect the model to sharpen gradually over
@@ -74,7 +74,8 @@ for, whatever the model believes the losses are.
   stored. The factor that balances this is the target, and each balance moves the learned
   factor 30 % of the way there. A stretch runs as long as learning is possible and is
   balanced once when it ends: the learning window entity turns off, learning is paused, a
-  window contact opens, the sun condition ends, or heating stays off for more than three
+  window contact opens, the configured room sensor drops out (the TRVs read up to a kelvin
+  off at the radiator; the next stretch starts once it reports again), the sun condition ends, or heating stays off for more than three
   controller cycles (15 minutes). A stretch that reaches eight hours is balanced right away.
   Shorter interruptions of heating (a missed heat-source poll, the flow briefly under the
   threshold) are bridged and count as no heating. A balance needs at least four gap-free

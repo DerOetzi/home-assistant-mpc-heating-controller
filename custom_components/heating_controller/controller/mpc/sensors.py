@@ -146,8 +146,14 @@ class SensorEntry:
 
 
 class RoomMpcSensors:
-    def __init__(self, trvs: list[TrvConfig], max_sensor_age_s: float) -> None:
+    def __init__(
+        self,
+        trvs: list[TrvConfig],
+        max_sensor_age_s: float,
+        room_sensor_configured: bool,
+    ) -> None:
         max_age_s = max(0.0, max_sensor_age_s)
+        self._room_sensor_configured = room_sensor_configured
 
         self._trv_temperatures = [
             SensorEntry(max_age_s, name=f"trv{index}")
@@ -218,6 +224,7 @@ class RoomMpcSensors:
             used_strategy=RoomTemperatureStrategy.TRV_AVERAGE,
             trv_temperatures=trv_temperatures,
             room_sensor_temp_c=room_sensor_temperature,
+            room_sensor_fallback=self._room_sensor_configured,
         )
 
     def create_input(
@@ -250,5 +257,6 @@ class RoomMpcSensors:
                 used_room_sensor_strategy=room_temperature_result.used_strategy,
                 trv_temperatures=room_temperature_result.trv_temperatures,
                 room_sensor_temp_c=room_temperature_result.room_sensor_temp_c,
+                room_sensor_fallback=room_temperature_result.room_sensor_fallback,
             ),
         )
