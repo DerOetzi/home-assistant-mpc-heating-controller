@@ -70,6 +70,10 @@ class LearnerHistoryEntry:
     room_temperature_c: float
     outdoor_temperature_c: float
     applied_heating_power_w: float
+    # What the observer estimates the radiators gave off at this time: the
+    # requested power, lagged by the radiator mass.
+    radiator_power_w: float
+    disturbance_w: float = 0.0
     flow_temperature_c: float | None = None
     room_sensor_fallback: bool = False
     window_open: bool = False
@@ -232,7 +236,36 @@ class RoomMpcModelLearner:
     def set_sun_condition(self, sun_condition: callable[[float], bool]) -> None:
         self._sun_condition = sun_condition
 
-    def append_history(self, mpc_input: RoomMpcInput, applied_heating_power_w: float) -> None:
+    def disturbance_update_allowed(
+        self, now_ts: float, room_sensor_fallback: bool
+    ) -> bool:
+        """Whether the observer may move its disturbance estimate now.
+
+        Under the same conditions the factors learn from, minus the learning
+        window: heating available, inputs trusted, window closed and settled,
+        room sensor reporting, no sun. During the day the disturbance from the
+        night is kept; sun would otherwise be taken up and then be missing for
+        hours after sunset. Without heating the radiator model's error drops
+        out of the residual, so what is left would not fit once heating
+        resumes; the disturbance of the last heating night is kept instead.
+        """
+        return (
+            self._enabled
+            and not self._learning_paused
+            and not self._window_open
+            and not room_sensor_fallback
+            and not self._room_sensor_fallback
+            and now_ts >= self._ua_blocked_until_ts
+            and self._sun_condition(now_ts)
+        )
+
+    def append_history(
+        self,
+        mpc_input: RoomMpcInput,
+        applied_heating_power_w: float,
+        radiator_power_w: float,
+        disturbance_w: float = 0.0,
+    ) -> None:
         self._track_room_sensor_fallback(mpc_input)
         self._history.append(
             LearnerHistoryEntry(
@@ -241,6 +274,8 @@ class RoomMpcModelLearner:
                 outdoor_temperature_c=mpc_input.outdoor_temp_c,
                 flow_temperature_c=mpc_input.flow_temp_c,
                 applied_heating_power_w=applied_heating_power_w,
+                radiator_power_w=radiator_power_w,
+                disturbance_w=disturbance_w,
                 room_sensor_fallback=mpc_input.room_sensor_fallback,
                 window_open=self._window_open,
             )
@@ -339,9 +374,10 @@ class RoomMpcModelLearner:
         if not self._is_sun_free_window(self._active_prediction):
             return LearningStatus.OUTSIDE_WINDOW, CapacityOutcome.OUTSIDE_WINDOW
 
-        # Replay the window with the power that was actually requested, not the
-        # plan the prediction was made with: the controller rarely applies the
-        # planned demand for the whole window.
+        # Replay the window with the power the radiators gave off, not the plan
+        # the prediction was made with: the controller rarely applies the
+        # planned demand for the whole window, and the radiators keep heating
+        # after the valve closed.
         simulated_temperatures_c = self._simulate_room_temperatures_c(
             relevant_history
         )
@@ -367,7 +403,8 @@ class RoomMpcModelLearner:
         simulated = [room_temperature_c]
         for previous, current in zip(history, history[1:]):
             net_heating_power_w = (
-                previous.applied_heating_power_w
+                _interval_radiator_power_w(previous, current)
+                + previous.disturbance_w
                 - self._loss_model.calculate_heat_loss_w(
                     room_temperature_c, previous.outdoor_temperature_c
                 )
@@ -506,7 +543,10 @@ class RoomMpcModelLearner:
             duration_s = current.timestamp - previous.timestamp
             if duration_s > UA_BALANCE_MAX_GAP_S:
                 return UaBalanceOutcome.GAP
-            heat_j += self._balance_heating_power_w(previous, median_flow_c) * duration_s
+            heat_j += (
+                self._balance_heating_power_w(previous, current, median_flow_c)
+                * duration_s
+            )
             temperature_difference_ks += (
                 previous.room_temperature_c - previous.outdoor_temperature_c
             ) * duration_s
@@ -557,6 +597,18 @@ class RoomMpcModelLearner:
         return UaBalanceOutcome.LEARNED
 
     def _balance_heating_power_w(
+        self,
+        entry: LearnerHistoryEntry,
+        next_entry: LearnerHistoryEntry,
+        median_flow_c: float | None,
+    ) -> float:
+        # Mean of both ends of the interval, see _interval_radiator_power_w.
+        return (
+            self._balance_point_power_w(entry, median_flow_c)
+            + self._balance_point_power_w(next_entry, median_flow_c)
+        ) / 2
+
+    def _balance_point_power_w(
         self, entry: LearnerHistoryEntry, median_flow_c: float | None
     ) -> float:
         # A domestic hot water charge shows as a flow spike on the shared
@@ -574,7 +626,7 @@ class RoomMpcModelLearner:
             for start_ts, end_ts in self._ua_balance_bridged
         ):
             return 0.0
-        return entry.applied_heating_power_w
+        return entry.radiator_power_w
 
     @staticmethod
     def _mean_room_temperature_c(
@@ -681,3 +733,12 @@ class RoomMpcModelLearner:
             ua_factor=self._loss_model.learned_ua_factor,
             capacity_factor=self._capacity_model.learned_capacity_factor,
         )
+
+
+def _interval_radiator_power_w(
+    entry: LearnerHistoryEntry, next_entry: LearnerHistoryEntry
+) -> float:
+    # The observer's estimate at the next sample already followed the lag
+    # over the interval, so the mean of both ends is close to what the
+    # radiators gave off in between.
+    return (entry.radiator_power_w + next_entry.radiator_power_w) / 2

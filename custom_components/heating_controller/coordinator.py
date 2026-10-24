@@ -53,6 +53,7 @@ from .const import (
     CONF_ROOM_NAME,
     CONF_ROOM_SENSOR_ENTITY,
     CONF_STATIONARY_RANGE,
+    CONF_TARGET_BAND,
     CONF_TRV_ACTIVE_SWITCH,
     CONF_TRV_EMITTER_TYPE,
     CONF_TRV_ENTITY_ID,
@@ -95,7 +96,7 @@ from .controller.mpc.types import (
     TrvConfig,
 )
 from .controller.state import HeatingStateConfig, HeatingStateController
-from .store import FlowGateStateStore, LearningFactorsStore
+from .store import FlowGateStateStore, LearningFactorsStore, ObserverStateStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -107,6 +108,8 @@ TARGET_TEMPERATURE_TOLERANCE_C = 0.01
 
 WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S = 30 * 60
 WINDOW_CLOSED_SUPPRESS_CAPACITY_LEARNING_S = 10 * 60
+# The disturbance moves slowly; saving every small step only wears the disk.
+OBSERVER_PERSIST_MIN_CHANGE_W = 1.0
 
 SUNSET_LEARNING_DELAY = timedelta(hours=2)
 
@@ -243,6 +246,7 @@ class HeatingRoomCoordinator:
             rate_limit_config=rate_limit_config,
             max_sensor_age_s=self.data[CONF_MAX_SENSOR_AGE],
             room_sensor_configured=bool(self.data.get(CONF_ROOM_SENSOR_ENTITY)),
+            target_band_c=self.data[CONF_TARGET_BAND],
             flow_gate_config=flow_gate_config,
         )
         self.mpc.set_stationary_range_c(
@@ -253,6 +257,8 @@ class HeatingRoomCoordinator:
         self.store = LearningFactorsStore(hass, self.room_name, entry.entry_id)
         self.flow_gate_store = FlowGateStateStore(hass, self.room_name, entry.entry_id)
         self._persisted_flow_gate_state: FlowGateState | None = None
+        self.observer_store = ObserverStateStore(hass, self.room_name, entry.entry_id)
+        self._persisted_disturbance_w: float | None = None
         self._awaiting_room_sensor = bool(self.data.get(CONF_ROOM_SENSOR_ENTITY))
 
         self.blocked = False
@@ -284,6 +290,11 @@ class HeatingRoomCoordinator:
         if flow_gate_state is not None:
             self.mpc.restore_flow_gate_state(flow_gate_state)
             self._persisted_flow_gate_state = flow_gate_state
+
+        disturbance_w = await self.observer_store.async_load()
+        if disturbance_w is not None:
+            self.mpc.restore_disturbance(disturbance_w)
+            self._persisted_disturbance_w = disturbance_w
 
         for entity_id in self._comfort_condition_entities:
             self.state.set_comfort_condition(entity_id, self._is_on(entity_id))
@@ -559,7 +570,19 @@ class HeatingRoomCoordinator:
     async def _async_handle_learning_cycle(self, _now: Any) -> None:
         self.mpc.run_learning_cycle()
         await self._async_persist_learning_factors()
+        await self._async_persist_disturbance()
         self._notify_listeners()
+
+    async def _async_persist_disturbance(self) -> None:
+        disturbance_w = self.mpc.disturbance_w
+        if (
+            self._persisted_disturbance_w is not None
+            and abs(disturbance_w - self._persisted_disturbance_w)
+            < OBSERVER_PERSIST_MIN_CHANGE_W
+        ):
+            return
+        await self.observer_store.async_save(disturbance_w)
+        self._persisted_disturbance_w = disturbance_w
 
     async def _async_persist_learning_factors(self) -> None:
         persisted_factors = self.mpc.consume_persisted_learning_factors()
@@ -567,6 +590,27 @@ class HeatingRoomCoordinator:
             await self.store.async_save(persisted_factors)
 
     async def async_recalibrate(
+        self,
+        ua_factor: float | None,
+        capacity_factor: float | None,
+        disturbance_w: float | None = None,
+    ) -> None:
+        if disturbance_w is not None:
+            self.mpc.restore_disturbance(disturbance_w)
+            await self.observer_store.async_save(self.mpc.disturbance_w)
+            self._persisted_disturbance_w = self.mpc.disturbance_w
+            _LOGGER.info(
+                "Recalibrated disturbance for room %s: %s W",
+                self.room_name,
+                self.mpc.disturbance_w,
+            )
+        # Setting the factors discards the running learning windows; a
+        # disturbance-only call leaves them be.
+        if ua_factor is not None or capacity_factor is not None:
+            await self._async_recalibrate_factors(ua_factor, capacity_factor)
+        self._notify_listeners()
+
+    async def _async_recalibrate_factors(
         self, ua_factor: float | None, capacity_factor: float | None
     ) -> None:
         factors = LearningFactors(
@@ -585,7 +629,6 @@ class HeatingRoomCoordinator:
             factors.ua_factor,
             factors.capacity_factor,
         )
-        self._notify_listeners()
 
     def is_sun_condition_met(self, timestamp: float) -> bool:
         moment = dt_util.utc_from_timestamp(timestamp)
@@ -626,6 +669,7 @@ class HeatingRoomCoordinator:
 
         self.trv_active = self._compute_trv_active()
         self.state.set_trv_active(self.trv_active)
+        self.mpc.set_heat_available(self.trv_active)
         if self.trv_active:
             self.mpc.enable_learning()
         else:

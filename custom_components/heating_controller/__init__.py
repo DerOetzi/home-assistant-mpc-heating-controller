@@ -20,9 +20,12 @@ from homeassistant.helpers.service import async_register_admin_service
 from . import frontend
 from .const import (
     ATTR_CAPACITY_FACTOR,
+    ATTR_DISTURBANCE_W,
     ATTR_UA_FACTOR,
     CONF_FLOW_THRESHOLD,
     CONF_ROOM_NAME,
+    CONF_TARGET_BAND,
+    DEFAULT_TARGET_BAND_C,
     DOMAIN,
     SERVICE_RECALIBRATE,
     SERVICE_UNBLOCK,
@@ -33,11 +36,13 @@ from .controller.mpc.models.capacity import (
 )
 from .controller.mpc.models.loss import MAX_LEARNED_UA_FACTOR, MIN_LEARNED_UA_FACTOR
 from .coordinator import HeatingRoomCoordinator
-from .store import FlowGateStateStore, LearningFactorsStore
+from .store import FlowGateStateStore, LearningFactorsStore, ObserverStateStore
 
 _LOGGER = logging.getLogger(__name__)
 
 __all__ = ["DOMAIN"]
+
+MAX_RECALIBRATE_DISTURBANCE_W = 10000.0
 
 RECALIBRATE_SCHEMA = vol.All(
     vol.Schema(
@@ -53,9 +58,17 @@ RECALIBRATE_SCHEMA = vol.All(
                     min=MIN_LEARNED_CAPACITY_FACTOR, max=MAX_LEARNED_CAPACITY_FACTOR
                 ),
             ),
+            # Each room limits it to its own heat load in either direction.
+            vol.Optional(ATTR_DISTURBANCE_W): vol.All(
+                vol.Coerce(float),
+                vol.Range(
+                    min=-MAX_RECALIBRATE_DISTURBANCE_W,
+                    max=MAX_RECALIBRATE_DISTURBANCE_W,
+                ),
+            ),
         }
     ),
-    cv.has_at_least_one_key(ATTR_UA_FACTOR, ATTR_CAPACITY_FACTOR),
+    cv.has_at_least_one_key(ATTR_UA_FACTOR, ATTR_CAPACITY_FACTOR, ATTR_DISTURBANCE_W),
 )
 
 PLATFORMS = [
@@ -102,6 +115,12 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "entity; fill them in through the options flow",
             entry.data.get(CONF_ROOM_NAME),
         )
+    if entry.version == 3:
+        # Before the band the controller aimed at the exact setpoint; rooms
+        # take the default, which the options flow can change.
+        data = dict(entry.data)
+        data[CONF_TARGET_BAND] = DEFAULT_TARGET_BAND_C
+        hass.config_entries.async_update_entry(entry, data=data, version=4)
     return True
 
 
@@ -117,6 +136,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     room_name = entry.data[CONF_ROOM_NAME]
     await LearningFactorsStore(hass, room_name, entry.entry_id).async_remove()
     await FlowGateStateStore(hass, room_name, entry.entry_id).async_remove()
+    await ObserverStateStore(hass, room_name, entry.entry_id).async_remove()
 
 
 def _referenced_coordinators(
@@ -150,7 +170,9 @@ def _async_register_services(hass: HomeAssistant) -> None:
     async def async_handle_recalibrate(call: ServiceCall) -> None:
         for coordinator in _referenced_coordinators(hass, call):
             await coordinator.async_recalibrate(
-                call.data.get(ATTR_UA_FACTOR), call.data.get(ATTR_CAPACITY_FACTOR)
+                call.data.get(ATTR_UA_FACTOR),
+                call.data.get(ATTR_CAPACITY_FACTOR),
+                call.data.get(ATTR_DISTURBANCE_W),
             )
 
     hass.services.async_register(DOMAIN, SERVICE_UNBLOCK, async_handle_unblock)

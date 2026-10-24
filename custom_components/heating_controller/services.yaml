@@ -10,8 +10,9 @@ unblock:
 recalibrate:
   name: Recalibrate
   description: >-
-    Set the learned UA and capacity factors of one or more rooms. A factor
-    left out stays unchanged; pass 1.0 to reset it. Admin only.
+    Set the learned UA and capacity factors and the observer's disturbance of
+    one or more rooms. A value left out stays unchanged; pass 1.0 to reset a
+    factor, 0 to reset the disturbance. Admin only.
   target:
     entity:
       integration: heating_controller
@@ -35,4 +36,17 @@ recalibrate:
           min: 0.5
           max: 3.0
           step: 0.001
+          mode: box
+    disturbance_w:
+      name: Disturbance
+      description: >-
+        Lasting heat the model does not explain, in watts. 0 resets it; the
+        room limits it to its heat load in either direction.
+      example: 0
+      selector:
+        number:
+          min: -10000
+          max: 10000
+          step: 1
+          unit_of_measurement: W
           mode: box

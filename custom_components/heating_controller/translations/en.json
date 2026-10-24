@@ -72,7 +72,8 @@
           "flow_gate_open_surplus_c": "Surplus gate: reopen below setpoint + (K)",
           "flow_gate_hold_time_s": "Surplus gate: hold time before closing (s)",
           "max_sensor_age_s": "Max sensor age (s)",
-          "stationary_range_c": "Stationary range for learning (K)"
+          "stationary_range_c": "Stationary range for learning (K)",
+          "target_band_c": "Target band below setpoint (K)"
         }
       }
     },
@@ -145,7 +146,8 @@
           "flow_gate_open_surplus_c": "Surplus gate: reopen below setpoint + (K)",
           "flow_gate_hold_time_s": "Surplus gate: hold time before closing (s)",
           "max_sensor_age_s": "Max sensor age (s)",
-          "stationary_range_c": "Stationary range for learning (K)"
+          "stationary_range_c": "Stationary range for learning (K)",
+          "target_band_c": "Target band below setpoint (K)"
         }
       }
     }
@@ -234,6 +236,12 @@
       "available_heating_power": {
         "name": "Available heating power"
       },
+      "radiator_heating_power": {
+        "name": "Radiator heating power"
+      },
+      "disturbance_power": {
+        "name": "Disturbance power"
+      },
       "room_temperature": {
         "name": "Room temperature"
       },
@@ -268,7 +276,7 @@
     },
     "recalibrate": {
       "name": "Recalibrate",
-      "description": "Set the learned UA and capacity factors of one or more rooms. A factor left out stays unchanged; pass 1.0 to reset it. Admin only.",
+      "description": "Set the learned UA and capacity factors and the observer's disturbance of one or more rooms. A value left out stays unchanged; pass 1.0 to reset a factor, 0 to reset the disturbance. Admin only.",
       "fields": {
         "ua_factor": {
           "name": "UA factor",
@@ -277,6 +285,10 @@
         "capacity_factor": {
           "name": "Capacity factor",
           "description": "Learned thermal-capacity factor. 1.0 resets it to the design value."
+        },
+        "disturbance_w": {
+          "name": "Disturbance",
+          "description": "Lasting heat the model does not explain, in watts. 0 resets it; the room limits it to its heat load in either direction."
         }
       }
     }

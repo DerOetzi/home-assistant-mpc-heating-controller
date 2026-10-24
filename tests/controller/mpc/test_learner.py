@@ -92,7 +92,9 @@ def _evaluate_window(learner, inputs, power_w=100.0):
     learner.run_learning_cycle()
 
     for mpc_input in inputs:
-        learner.append_history(mpc_input, applied_heating_power_w=power_w)
+        learner.append_history(
+            mpc_input, applied_heating_power_w=power_w, radiator_power_w=power_w
+        )
 
     learner.run_learning_cycle()
 
@@ -248,6 +250,7 @@ def test_capacity_replays_the_applied_power_not_the_plan():
         learner.append_history(
             make_input(START_TS + index * 300, room_temp_c=18.0 + index * 0.0533),
             applied_heating_power_w=2000.0,
+            radiator_power_w=2000.0,
         )
     learner.run_learning_cycle()
 
@@ -382,6 +385,7 @@ def _feed_night(
                 room_sensor_fallback=room_sensor_fallback,
             ),
             applied_heating_power_w=power_w,
+            radiator_power_w=power_w,
         )
     return start_ts + (count - 1) * STEP_S
 
@@ -474,6 +478,7 @@ def test_heat_balance_runs_once_per_window():
     learner.append_history(
         make_input(end_ts + STEP_S, room_temp_c=20.0, outdoor_temp_c=0.0, flow_temp_c=40.0),
         applied_heating_power_w=312.5,
+        radiator_power_w=312.5,
     )
     learner.run_learning_cycle()
 
@@ -522,6 +527,7 @@ def test_heat_balance_counts_hot_water_charges_as_no_heating():
                 flow_temp_c=55.0 if charging else 40.0,
             ),
             applied_heating_power_w=5000.0 if charging else 312.5,
+            radiator_power_w=5000.0 if charging else 312.5,
         )
     learner.run_learning_cycle()
 
@@ -852,6 +858,7 @@ def test_discarded_stretch_is_not_balanced_again():
     learner.append_history(
         make_input(end_ts + STEP_S, room_temp_c=20.0, outdoor_temp_c=0.0, flow_temp_c=40.0),
         applied_heating_power_w=0.0,
+        radiator_power_w=0.0,
     )
     learner.run_learning_cycle()
 
@@ -886,6 +893,7 @@ def _replay_matching_window(learner):
         learner.append_history(
             make_input(START_TS + index * 300, room_temp_c=18.0 + index * 0.0533),
             applied_heating_power_w=2000.0,
+            radiator_power_w=2000.0,
         )
     learner.run_learning_cycle()
 
@@ -1068,3 +1076,65 @@ def test_stretch_starts_after_a_long_open_window_closes():
     assert info.outcome == UaBalanceOutcome.COLLECTING
     assert info.collecting_since_ts == end_ts + STEP_S
     assert loss_model.learned_ua_factor == 1.0
+
+
+def test_disturbance_update_needs_the_learning_conditions():
+    learner, _, _ = make_learner()
+    learner.set_sun_condition(lambda ts: ts >= START_TS)
+
+    # Heating unavailable: the learner is disabled.
+    assert not learner.disturbance_update_allowed(START_TS, False)
+    learner.enable()
+    assert learner.disturbance_update_allowed(START_TS, False)
+    assert not learner.disturbance_update_allowed(START_TS - 1, False)
+    assert not learner.disturbance_update_allowed(START_TS, True)
+
+    learner.set_window_open(True, START_TS)
+    assert not learner.disturbance_update_allowed(START_TS, False)
+    learner.set_window_open(False, START_TS + 60)
+    learner.suppress_for_interval(1800, 600)
+    assert not learner.disturbance_update_allowed(time.time(), False)
+    assert learner.disturbance_update_allowed(time.time() + 1801, False)
+
+    learner.set_learning_paused(True, START_TS)
+    assert not learner.disturbance_update_allowed(time.time() + 1801, False)
+
+
+def _replay_rising_window(radiator_power_w, disturbance_w):
+    learner, _, capacity_model = make_learner()
+    learner.enable()
+    learner.set_prediction(
+        LearnerPrediction(
+            timestamp=START_TS,
+            predicted_room_temperature_c=19.0,
+            prediction_horizon_s=1800,
+        )
+    )
+    learner.run_learning_cycle()
+    for mpc_input in _inputs(RISING):
+        # Nothing is requested any more; only what the observer estimates
+        # reaches the room.
+        learner.append_history(
+            mpc_input,
+            applied_heating_power_w=0.0,
+            radiator_power_w=radiator_power_w,
+            disturbance_w=disturbance_w,
+        )
+    learner.run_learning_cycle()
+    return learner, capacity_model
+
+
+def test_capacity_replay_uses_the_radiator_output_and_disturbance():
+    # 1 K in 25 min takes 4.8 kW net into 7.2 MJ/K, plus ~730 W loss: split
+    # between radiators and disturbance, the replay rises like the room.
+    learner, capacity_model = _replay_rising_window(3000.0, 2530.0)
+
+    assert learner.get_capacity_outcome() == CapacityOutcome.SMALL_ERROR
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_capacity_replay_without_radiator_output_sees_the_error():
+    learner, capacity_model = _replay_rising_window(0.0, 0.0)
+
+    assert learner.get_capacity_outcome() == CapacityOutcome.LEARNED
+    assert capacity_model.learned_capacity_factor != 1.0

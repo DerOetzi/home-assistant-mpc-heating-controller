@@ -40,6 +40,7 @@ from .const import (
     CONF_ROOM_NAME,
     CONF_ROOM_SENSOR_ENTITY,
     CONF_STATIONARY_RANGE,
+    CONF_TARGET_BAND,
     CONF_TRV_ACTIVE_SWITCH,
     CONF_TRV_COUNT,
     CONF_TRV_EMITTER_TYPE,
@@ -57,11 +58,15 @@ from .const import (
     DEFAULT_FLOW_GATE_HOLD_TIME_S,
     DEFAULT_FLOW_GATE_OPEN_SURPLUS_C,
     DEFAULT_STATIONARY_RANGE_C,
+    DEFAULT_TARGET_BAND_C,
     DOMAIN,
     MAX_STATIONARY_RANGE_C,
+    MAX_TARGET_BAND_C,
     MAX_TRV_COUNT,
     MIN_STATIONARY_RANGE_C,
+    MIN_TARGET_BAND_C,
     STATIONARY_RANGE_STEP_C,
+    TARGET_BAND_STEP_C,
     Construction,
     DesignTemperatureSystem,
     HeatEmitterType,
@@ -352,12 +357,24 @@ def _mpc_schema(defaults: dict[str, Any]) -> vol.Schema:
                     unit_of_measurement="K",
                 )
             ),
+            vol.Required(
+                CONF_TARGET_BAND,
+                default=defaults.get(CONF_TARGET_BAND, DEFAULT_TARGET_BAND_C),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=MIN_TARGET_BAND_C,
+                    max=MAX_TARGET_BAND_C,
+                    step=TARGET_BAND_STEP_C,
+                    mode=selector.NumberSelectorMode.BOX,
+                    unit_of_measurement="K",
+                )
+            ),
         }
     )
 
 
 class HeatingControllerConfigFlow(ConfigFlow, domain=DOMAIN):
-    VERSION = 3
+    VERSION = 4
 
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}

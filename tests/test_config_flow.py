@@ -103,6 +103,7 @@ async def test_full_config_flow_creates_entry(hass: HomeAssistant) -> None:
             "mpc_max_demand_step_pct": 20.0,
             "max_sensor_age_s": 1800.0,
             "stationary_range_c": 0.3,
+            "target_band_c": 0.15,
         },
     )
 
@@ -120,6 +121,7 @@ async def test_full_config_flow_creates_entry(hass: HomeAssistant) -> None:
     assert data[CONF_PV_BOOST_ENTITY] == "binary_sensor.pv_boost"
     assert data[CONF_LEARNING_WINDOW_ENTITY] == "input_boolean.nachtmodus"
     assert data[CONF_STATIONARY_RANGE] == 0.3
+    assert data["target_band_c"] == 0.15
     assert data[CONF_COMFORT_CONDITION_ENTITIES] == ["input_boolean.comfort_release"]
     assert len(data[CONF_TRVS]) == 1
     assert data[CONF_TRVS][0][CONF_TRV_ENTITY_ID] == "climate.heizung_wohnzimmer"

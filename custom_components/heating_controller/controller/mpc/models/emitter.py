@@ -29,6 +29,32 @@ PANEL_RADIATOR_REFERENCE_POWER_W_PER_METER: dict[PanelRadiatorType, float] = {
 
 HEIGHT_SCALING_EXPONENT = 0.8
 
+# Water content (l) and steel mass (kg) per metre of a 600 mm panel radiator,
+# typical catalogue values; both scale linearly with the height.
+PANEL_RADIATOR_WATER_L_PER_METER: dict[PanelRadiatorType, float] = {
+    PanelRadiatorType.TYPE_10: 2.8,
+    PanelRadiatorType.TYPE_11: 3.0,
+    PanelRadiatorType.TYPE_21: 5.3,
+    PanelRadiatorType.TYPE_22: 5.9,
+    PanelRadiatorType.TYPE_33: 8.6,
+}
+PANEL_RADIATOR_STEEL_KG_PER_METER: dict[PanelRadiatorType, float] = {
+    PanelRadiatorType.TYPE_10: 11.0,
+    PanelRadiatorType.TYPE_11: 13.5,
+    PanelRadiatorType.TYPE_21: 22.0,
+    PanelRadiatorType.TYPE_22: 27.5,
+    PanelRadiatorType.TYPE_33: 40.5,
+}
+# Towel radiators hold far more water per watt than panels: per watt of
+# nominal power (75/65).
+TOWEL_RADIATOR_WATER_L_PER_W = 0.01
+TOWEL_RADIATOR_STEEL_KG_PER_W = 0.02
+WATER_HEAT_CAPACITY_J_PER_LK = 4186.0
+STEEL_HEAT_CAPACITY_J_PER_KGK = 460.0
+# Below this overtemperature the linearised emitter conductance would go to
+# zero and the time constant to infinity.
+MIN_TIME_CONSTANT_OVERTEMPERATURE_C = 5.0
+
 MIN_RADIATOR_HEIGHT_MM = 150
 MAX_RADIATOR_HEIGHT_MM = 1800
 
@@ -66,6 +92,7 @@ class _PreparedEmitter:
     trv: TrvConfig
     design_reference_power_w: float
     exponent: float
+    heat_capacity_j_per_k: float
     distribution_weight: float = 0.0
 
 
@@ -79,6 +106,7 @@ class HeatEmitterModel:
         self.set_flow_threshold_c(thermal_config.flow_threshold_c)
         prepared = [self._create_prepared_emitter(trv) for trv in trvs]
         self._emitters = self._calculate_distribution_weights(prepared)
+        self._heat_capacity_j_per_k = sum(e.heat_capacity_j_per_k for e in prepared)
 
     def _create_prepared_emitter(self, trv: TrvConfig) -> _PreparedEmitter:
         exponent = self._get_emitter_exponent(trv)
@@ -90,6 +118,29 @@ class HeatEmitterModel:
             trv=trv,
             design_reference_power_w=design_reference_power_w,
             exponent=exponent,
+            heat_capacity_j_per_k=self._calculate_emitter_heat_capacity_j_per_k(trv),
+        )
+
+    @staticmethod
+    def _calculate_emitter_heat_capacity_j_per_k(trv: TrvConfig) -> float:
+        if trv.emitter_type == HeatEmitterType.PANEL:
+            if trv.height_mm is None or trv.width_mm is None or trv.radiator_type is None:
+                return 0.0
+            meters = (trv.width_mm / 1000) * (
+                clamp(trv.height_mm, MIN_RADIATOR_HEIGHT_MM, MAX_RADIATOR_HEIGHT_MM)
+                / REFERENCE_HEIGHT_MM
+            )
+            water_l = PANEL_RADIATOR_WATER_L_PER_METER[trv.radiator_type] * meters
+            steel_kg = PANEL_RADIATOR_STEEL_KG_PER_METER[trv.radiator_type] * meters
+        elif trv.emitter_type == HeatEmitterType.TOWEL:
+            nominal_power_w = trv.nominal_power_w or 0
+            water_l = TOWEL_RADIATOR_WATER_L_PER_W * nominal_power_w
+            steel_kg = TOWEL_RADIATOR_STEEL_KG_PER_W * nominal_power_w
+        else:
+            return 0.0
+        return (
+            water_l * WATER_HEAT_CAPACITY_J_PER_LK
+            + steel_kg * STEEL_HEAT_CAPACITY_J_PER_KGK
         )
 
     @staticmethod
@@ -189,6 +240,56 @@ class HeatEmitterModel:
             for emitter in self._emitters
         )
         return round_to_step(total, 0.01)
+
+    @property
+    def heat_capacity_j_per_k(self) -> float:
+        return self._heat_capacity_j_per_k
+
+    def time_constant_s(
+        self,
+        room_temperature_c: float,
+        flow_temperature_c: float | None,
+        demand_pct: float,
+        heating_up: bool,
+    ) -> float:
+        """How fast the radiators follow a change of the requested power.
+
+        Cooling down, the radiator mass only gives off heat through its
+        surface: capacity over the linearised emitter conductance n * P / dT.
+        Heating up, the water flowing in brings heat as well; with the valve
+        at the demand share of its design flow that adds demand * P / spread
+        at design conditions. The TRV's own valve travel is not modelled.
+        """
+        if self._heat_capacity_j_per_k <= 0:
+            return 0.0
+        effective_flow_temperature_c = (
+            flow_temperature_c
+            if flow_temperature_c is not None
+            else self._design_temperatures.flow_temperature_c
+        )
+        overtemperature_c = max(
+            MIN_TIME_CONSTANT_OVERTEMPERATURE_C,
+            effective_flow_temperature_c
+            - self._design_temperatures.spread_c / 2
+            - room_temperature_c,
+        )
+        conductance_w_per_k = sum(
+            emitter.exponent
+            * emitter.design_reference_power_w
+            * (overtemperature_c / self._design_temperatures.overtemperature_c)
+            ** emitter.exponent
+            / overtemperature_c
+            for emitter in self._emitters
+        )
+        if heating_up and self._design_temperatures.spread_c > 0:
+            conductance_w_per_k += (
+                clamp(demand_pct / 100, 0, 1)
+                * sum(e.design_reference_power_w for e in self._emitters)
+                / self._design_temperatures.spread_c
+            )
+        if conductance_w_per_k <= 0:
+            return 0.0
+        return self._heat_capacity_j_per_k / conductance_w_per_k
 
     def calculate_target_temperatures(self, demand_pct: float) -> list[float]:
         demand = demand_pct / 100

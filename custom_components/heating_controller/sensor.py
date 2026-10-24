@@ -27,6 +27,8 @@ async def async_setup_entry(
             HeatingDemandSensor(coordinator),
             RequestedHeatingPowerSensor(coordinator),
             AvailableHeatingPowerSensor(coordinator),
+            RadiatorHeatingPowerSensor(coordinator),
+            DisturbancePowerSensor(coordinator),
             RoomTemperatureSensor(coordinator),
             BaseTemperatureSensor(coordinator),
             MpcLearningStatusSensor(coordinator),
@@ -209,6 +211,50 @@ class AvailableHeatingPowerSensor(_DiagnosticSensor):
         return result.available_heating_power_w if result else None
 
 
+class RadiatorHeatingPowerSensor(_DiagnosticSensor):
+    """What the observer estimates the radiators give off right now.
+
+    Follows the requested power with the radiator lag: still positive for a
+    while after the valve closed, behind the request after it opened.
+    """
+
+    _attr_translation_key = "radiator_heating_power"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+
+    def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
+        super().__init__(coordinator, "radiator_heating_power")
+
+    @property
+    def native_value(self) -> float | None:
+        result = self._coordinator.last_result
+        if result is None or result.radiator_power_w is None:
+            return None
+        return round(result.radiator_power_w, 1)
+
+
+class DisturbancePowerSensor(_DiagnosticSensor):
+    """Lasting heat the model does not explain, as the observer estimates it.
+
+    Positive: the room gets more than the model accounts for (neighbours,
+    appliances, losses overestimated). Only moves without sun, held during
+    the day.
+    """
+
+    _attr_translation_key = "disturbance_power"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+
+    def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
+        super().__init__(coordinator, "disturbance_power")
+
+    @property
+    def native_value(self) -> float:
+        return round(self._coordinator.mpc.disturbance_w, 1)
+
+
 class RoomTemperatureSensor(_DiagnosticSensor):
     _attr_translation_key = "room_temperature"
     _attr_device_class = SensorDeviceClass.TEMPERATURE
@@ -228,9 +274,16 @@ class RoomTemperatureSensor(_DiagnosticSensor):
         result = self._coordinator.mpc.get_room_temperature_result()
         if not result.valid:
             return {}
+        last_result = self._coordinator.last_result
         return {
             "used_strategy": result.used_strategy,
             "room_sensor_temp_c": result.room_sensor_temp_c,
+            "estimated_temp_c": (
+                round(last_result.estimated_room_temperature_c, 2)
+                if last_result is not None
+                and last_result.estimated_room_temperature_c is not None
+                else None
+            ),
             "trv_temperatures": dict(
                 zip(
                     self._coordinator.trv_entity_ids,

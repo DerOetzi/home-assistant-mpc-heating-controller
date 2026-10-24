@@ -16,6 +16,11 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   and continuously self-calibrated while the room is actively heating. See
   [`docs/mpc-guide.md`](docs/mpc-guide.md) for how modes/setpoints combine, what the
   learning-status sensor means, and how to size a room correctly.
+- **Radiator lag and a room observer** — the radiators follow the requested power with a
+  lag derived from their water and steel mass, and the room model runs alongside the room,
+  correcting itself towards the measurement and estimating a lasting disturbance (heat from
+  neighbours or appliances) that the valve demand then accounts for. See
+  [`docs/mpc-guide.md`](docs/mpc-guide.md#radiator-lag-and-the-room-observer).
 - **Per-TRV emitter modelling** — each thermostatic radiator valve is configured with its
   emitter type (panel radiator or towel radiator), panel radiator type (10/11/21/22/33) and
   dimensions, or a fixed nominal power for towel radiators — used to translate MPC demand

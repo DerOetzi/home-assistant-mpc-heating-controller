@@ -63,3 +63,7 @@ class RoomMpcResult:
     recovery_flow_temperature_c: float | None = None
     recovery_flow_saturated: bool = False
     flow_gate_closed: bool = False
+    # Observer state the demand was planned from.
+    estimated_room_temperature_c: float | None = None
+    radiator_power_w: float | None = None
+    disturbance_w: float | None = None

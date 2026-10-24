@@ -17,6 +17,13 @@ MIN_STATIONARY_RANGE_C = 0.1
 MAX_STATIONARY_RANGE_C = 1.0
 STATIONARY_RANGE_STEP_C = 0.05
 
+# Band below the setpoint the demand counts as on target in: one step of the
+# usual 0.1 K room sensor.
+DEFAULT_TARGET_BAND_C = 0.1
+MIN_TARGET_BAND_C = 0.0
+MAX_TARGET_BAND_C = 0.5
+TARGET_BAND_STEP_C = 0.05
+
 MAX_TRV_COUNT = 3
 
 HEAT_SOURCE_ACTIVE_STATE = "heat"
@@ -69,11 +76,13 @@ CONF_FLOW_GATE_OPEN_SURPLUS = "flow_gate_open_surplus_c"
 CONF_FLOW_GATE_HOLD_TIME = "flow_gate_hold_time_s"
 CONF_MAX_SENSOR_AGE = "max_sensor_age_s"
 CONF_STATIONARY_RANGE = "stationary_range_c"
+CONF_TARGET_BAND = "target_band_c"
 
 SERVICE_UNBLOCK = "unblock"
 SERVICE_RECALIBRATE = "recalibrate"
 ATTR_UA_FACTOR = "ua_factor"
 ATTR_CAPACITY_FACTOR = "capacity_factor"
+ATTR_DISTURBANCE_W = "disturbance_w"
 
 LEARNING_CYCLE_INTERVAL_MINUTES = 30
 SENSOR_POLL_INTERVAL_MINUTES = 5

@@ -23,6 +23,7 @@ def make_controller(flow_gate_config=None, **rate_limit_overrides):
         rate_limit_config=MpcRateLimitConfig(**rate_limit_overrides),
         max_sensor_age_s=1800,
         room_sensor_configured=False,
+        target_band_c=0.0,
         flow_gate_config=flow_gate_config,
     )
 
@@ -34,6 +35,7 @@ def make_thermal_controller(thermal_config):
         rate_limit_config=MpcRateLimitConfig(),
         max_sensor_age_s=1800,
         room_sensor_configured=False,
+        target_band_c=0.0,
     )
 
 
@@ -494,3 +496,169 @@ def test_gated_hold_flow_ignores_the_recovery_part():
     assert result.flow_gate_closed is False
     assert result.gated_hold_flow_temperature_c == result.hold_flow_temperature_c
     assert result.recommended_flow_temperature_c > result.gated_hold_flow_temperature_c
+
+
+class _Clock:
+    def __init__(self, monkeypatch, start_ts=1_000_000.0):
+        self.now_ts = start_ts
+        monkeypatch.setattr(
+            "heating_controller.controller.mpc.sensors.time.time", lambda: self.now_ts
+        )
+
+    def advance(self, seconds):
+        self.now_ts += seconds
+
+
+def _feed(controller, room_temp_c, outdoor_temp_c=5.0, flow_temp_c=50.0):
+    controller.set_room_sensor_temperature(room_temp_c)
+    controller.set_outdoor_temperature(outdoor_temp_c)
+    controller.set_flow_temperature(flow_temp_c)
+
+
+def _unsmoothed_controller():
+    """A 15 m² room one radiator can heat, demand applied as computed."""
+    return RoomMpcController(
+        thermal_config=RoomThermalConfig(
+            room_heat_load_w=600, room_area_m2=15, construction=Construction.MEDIUM
+        ),
+        trvs=[TrvConfig(name="trv1")],
+        rate_limit_config=MpcRateLimitConfig(
+            demand_hysteresis_pct=0, hold_time_s=0, max_demand_step_pct=100
+        ),
+        max_sensor_age_s=1800,
+        room_sensor_configured=False,
+        target_band_c=0.0,
+    )
+
+
+def test_heat_still_in_the_radiator_lowers_the_demand(monkeypatch):
+    clock = _Clock(monkeypatch)
+    heated = _unsmoothed_controller()
+    _feed(heated, 18.0)
+    first = heated.compute(target_temperature_c=21.0)
+    clock.advance(600)
+    _feed(heated, 20.8)
+    after_heating = heated.compute(target_temperature_c=21.0)
+
+    fresh = _unsmoothed_controller()
+    _feed(fresh, 20.8)
+    cold_radiator = fresh.compute(target_temperature_c=21.0)
+
+    assert first.result.demand_pct == 100
+    assert after_heating.result.radiator_power_w > 0
+    assert cold_radiator.result.radiator_power_w == 0
+    assert after_heating.result.demand_pct < cold_radiator.result.demand_pct
+
+
+def test_positive_disturbance_lowers_the_demand(monkeypatch):
+    _Clock(monkeypatch)
+    plain = _unsmoothed_controller()
+    _feed(plain, 20.8)
+    plain_result = plain.compute(target_temperature_c=21.0)
+
+    helped = _unsmoothed_controller()
+    helped.restore_disturbance(150.0)
+    _feed(helped, 20.8)
+    helped_result = helped.compute(target_temperature_c=21.0)
+
+    assert helped_result.result.disturbance_w == 150.0
+    assert 0 < helped_result.result.demand_pct
+    assert helped_result.result.demand_pct < plain_result.result.demand_pct
+
+
+def test_disturbance_leaves_the_flow_requirement_alone(monkeypatch):
+    _Clock(monkeypatch)
+    plain = _unsmoothed_controller()
+    _feed(plain, 20.0)
+    plain_result = plain.compute(target_temperature_c=21.0)
+
+    helped = _unsmoothed_controller()
+    helped.restore_disturbance(600.0)
+    _feed(helped, 20.0)
+    helped_result = helped.compute(target_temperature_c=21.0)
+
+    assert (
+        helped_result.result.hold_flow_temperature_c
+        == plain_result.result.hold_flow_temperature_c
+    )
+    assert (
+        helped_result.result.recovery_flow_temperature_c
+        == plain_result.result.recovery_flow_temperature_c
+    )
+
+
+def test_radiators_stay_cold_while_heat_is_unavailable(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _unsmoothed_controller()
+    controller.set_heat_available(False)
+    _feed(controller, 15.0)
+    controller.compute(target_temperature_c=21.0)
+    clock.advance(600)
+    _feed(controller, 15.0)
+    result = controller.compute(target_temperature_c=21.0)
+
+    assert result.result.demand_pct > 0
+    assert result.result.radiator_power_w == 0
+
+
+def test_preview_compute_leaves_the_observer_alone(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _unsmoothed_controller()
+    _feed(controller, 15.0)
+    controller.compute(target_temperature_c=21.0, apply_side_effects=False)
+    clock.advance(600)
+    _feed(controller, 15.0)
+    result = controller.compute(target_temperature_c=21.0)
+
+    # Nothing was committed by the preview: no heat in the radiators yet.
+    assert result.result.radiator_power_w == 0
+
+
+def _heavy_room_controller(target_band_c):
+    """A heavy 19 m² room whose radiator has little reserve at a low flow."""
+    return RoomMpcController(
+        thermal_config=RoomThermalConfig(
+            room_heat_load_w=340, room_area_m2=19, construction=Construction.HEAVY
+        ),
+        trvs=[TrvConfig(name="trv1")],
+        rate_limit_config=MpcRateLimitConfig(
+            demand_hysteresis_pct=0, hold_time_s=0, max_demand_step_pct=100
+        ),
+        max_sensor_age_s=1800,
+        room_sensor_configured=False,
+        target_band_c=target_band_c,
+    )
+
+
+def _heavy_room_demand(monkeypatch, target_band_c, room_temp_c):
+    _Clock(monkeypatch)
+    controller = _heavy_room_controller(target_band_c)
+    _feed(controller, room_temp_c, outdoor_temp_c=9.0, flow_temp_c=38.0)
+    return controller.compute(target_temperature_c=21.0).result.demand_pct
+
+
+def test_one_sensor_step_below_setpoint_opens_the_valve_fully_without_band(
+    monkeypatch,
+):
+    assert _heavy_room_demand(monkeypatch, 0.0, 20.9) == 100
+
+
+def test_band_holds_one_sensor_step_below_setpoint(monkeypatch):
+    without_band = _heavy_room_demand(monkeypatch, 0.0, 21.0)
+    in_band = _heavy_room_demand(monkeypatch, 0.1, 20.9)
+
+    # Near the hold demand instead of fully open.
+    assert 0 < in_band < 100
+    assert abs(in_band - without_band) <= 20
+
+
+def test_band_does_not_shut_the_valve_at_the_setpoint(monkeypatch):
+    assert _heavy_room_demand(monkeypatch, 0.1, 21.0) > 0
+
+
+def test_band_still_heats_fully_below_it(monkeypatch):
+    assert _heavy_room_demand(monkeypatch, 0.1, 20.5) == 100
+
+
+def test_band_still_closes_above_the_setpoint(monkeypatch):
+    assert _heavy_room_demand(monkeypatch, 0.1, 21.3) == 0

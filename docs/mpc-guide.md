@@ -70,8 +70,9 @@ as a prediction error: the controller keeps the room at the setpoint its predict
 for, whatever the model believes the losses are.
 
 - **Heat-loss factor (`ua_factor`): heat balance over a usable stretch.** Over the
-  stretch the heat the controller requested has to equal what the room lost plus what it
-  stored. The factor that balances this is the target, and each balance moves the learned
+  stretch the heat the radiators gave off (the requested power, lagged as described in
+  [Radiator lag and the room observer](#radiator-lag-and-the-room-observer)) has to equal
+  what the room lost plus what it stored. The observer's disturbance is left out. The factor that balances this is the target, and each balance moves the learned
   factor 30 % of the way there. A stretch runs as long as learning is possible and is
   balanced once when it ends: the learning window entity turns off, learning is paused, a
   window contact opens, the configured room sensor drops out (the TRVs read up to a kelvin
@@ -90,8 +91,8 @@ for, whatever the model believes the losses are.
   with little heating) is no signal. Both are discarded without moving the factor.
 - **Capacity factor (`capacity_factor`): replay of 30-minute windows.** If the room moved
   further than the **stationary range** (default 0.2 K between the highest and lowest
-  reading of the window), the window is replayed with the power that was actually
-  requested and the current heat-loss factor. A room that rose more than the replay, or
+  reading of the window), the window is replayed with the power the radiators gave off,
+  the observer's disturbance and the current heat-loss factor. A room that rose more than the replay, or
   fell more, is lighter than modelled; one that rose or fell less is heavier. Windows the
   room barely moved in, or that the replay hardly moves in (below 0.1 K), are skipped.
 - **Sun.** Neither factor learns while the sun is up or within two hours after sunset,
@@ -132,8 +133,15 @@ data:
 ```
 
 A factor that is left out stays as it is, so a reset needs an explicit `1.0`; at least one
-factor is required. The call discards the measurement window in progress, because its
+value is required. The call discards the measurement window in progress, because its
 prediction was made with the old factors.
+
+The optional `disturbance_w` sets the observer's disturbance (see
+[Radiator lag and the room observer](#radiator-lag-and-the-room-observer)), limited to the
+room's heat load in either direction; `0` resets it. The disturbance makes up for whatever
+the model gets wrong, so after resetting the factors or replacing the room sensor it no
+longer fits — reset it with them, or it only catches up over the next heating night. A
+call with only `disturbance_w` leaves the factors and the running windows alone.
 
 ## Sizing a room correctly
 
@@ -170,6 +178,55 @@ The capacity also drives the valve demand and the recovery flow temperature: a l
 room reaches its setpoint faster in the prediction, so the controller asks for less
 preheating and backs off earlier. After changing a room's area or construction, watch for
 overshoot or demand that switches back and forth before tuning the demand smoothing below.
+
+## Radiator lag and the room observer
+
+A radiator does not stop heating when its valve closes: the water and steel in it keep
+giving off heat for a while, and after the valve opens it takes a while to warm up. The
+model follows the requested power with a first-order lag whose time constant comes from the
+radiator itself — water content and steel mass from panel type and dimensions (towel
+radiators from their nominal power) over the emitter's conductance at the current flow
+temperature. Cooling down only goes through the surface; heating up the inflowing water
+helps, scaled by the demand. A 1 m type 22 radiator at 600 mm cools off over about 20
+minutes at a 40 °C flow and warms up in 5–10.
+
+Each room runs its model alongside the room as a state observer (sensor
+`radiator_heating_power`, attribute `estimated_temp_c` of the room temperature sensor):
+
+- Every calculation propagates the estimate with the power requested last time and pulls it
+  towards the measured temperature (time constant 5 minutes). A difference above 1 K is
+  taken as a jump — a sensor source switching over — and the estimate restarts from the
+  measurement.
+- What remains feeds a **disturbance** (sensor `disturbance_power`): lasting heat the
+  model does not explain, from neighbouring rooms, appliances, or a heat load or radiator
+  sized off. It needs at least twelve hours from zero to its limit (the room's heat load in
+  either direction) and only moves under the conditions the factors learn under — heating
+  available, no sun, window closed and settled, room sensor reporting, learning not paused.
+  During the day it keeps last night's value; otherwise the sun would be taken up and
+  missing for hours after sunset. Without heating it keeps the value of the last heating
+  night: the radiator model's error, part of what it takes up, is missing then. It
+  does not move further in a direction the valve can no longer follow: no rise while the
+  valve is shut (below 5 %) — a room coasting above its setpoint on stored heat is no
+  lasting gain — and no fall while it is fully open (95 % and up). It survives restarts
+  and can be set with `recalibrate`.
+- The valve demand is planned from the estimate, the radiators' current output and the
+  disturbance, so a room whose radiators are still hot closes earlier. The hold and
+  recovery flow temperatures use the lag but leave the disturbance out: the flow
+  requirement stays weather-driven.
+
+## Target band
+
+Each cycle the controller tries every valve demand from 0 to 100 % and predicts the room
+30 minutes ahead. A prediction between the setpoint minus the **target band** (default
+0.1 K, one step of the usual room sensor) and the setpoint counts as on target; among
+those, the demand nearest the one that holds the setpoint wins. Below the band the
+demand that comes closest wins, above the setpoint the lowest one.
+
+Without the band a heavy room with little radiator reserve at a low flow temperature
+cannot climb the last 0.1 K within 30 minutes at any demand, and the valve stayed fully
+open for hours over one sensor step. With it the room settles within the band, a few
+hundredths to a tenth of a kelvin below the setpoint. A band of 0 aims at the exact
+setpoint. The band is set per room in the Configure flow.
 
 ## Demand smoothing
 

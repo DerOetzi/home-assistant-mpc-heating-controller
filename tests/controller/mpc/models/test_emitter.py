@@ -221,3 +221,52 @@ def test_setting_the_flow_threshold_moves_the_search_window():
 
     assert model.flow_search_min_c == 15.0
     assert model.flow_search_max_c == 55.0
+
+
+def test_radiator_heat_capacity_from_water_and_steel():
+    model = make_model([TrvConfig(name="trv", width_mm=1000, height_mm=600)])
+
+    # Type 22, 1 m at 600 mm: 5.9 l water and 27.5 kg steel.
+    assert model.heat_capacity_j_per_k == pytest.approx(5.9 * 4186 + 27.5 * 460)
+
+
+def test_towel_radiator_heat_capacity_scales_with_nominal_power():
+    model = make_model(
+        [
+            TrvConfig(
+                name="towel",
+                emitter_type=HeatEmitterType.TOWEL,
+                radiator_type=None,
+                width_mm=None,
+                height_mm=None,
+                nominal_power_w=500,
+            )
+        ]
+    )
+
+    assert model.heat_capacity_j_per_k == pytest.approx(5.0 * 4186 + 10.0 * 460)
+
+
+def test_radiator_heats_up_faster_than_it_cools_down():
+    model = make_model([TrvConfig(name="trv", width_mm=1000, height_mm=600)])
+
+    cooling_s = model.time_constant_s(21.0, 40.0, 0.0, heating_up=False)
+    heating_half_s = model.time_constant_s(21.0, 40.0, 50.0, heating_up=True)
+    heating_full_s = model.time_constant_s(21.0, 40.0, 100.0, heating_up=True)
+
+    # A type 22 radiator cools off over about 20 minutes at a 40 °C flow.
+    assert 15 * 60 < cooling_s < 25 * 60
+    assert heating_full_s < heating_half_s < cooling_s
+
+
+def test_cold_flow_keeps_the_time_constant_finite():
+    model = make_model([TrvConfig(name="trv", width_mm=1000, height_mm=600)])
+
+    assert 0 < model.time_constant_s(21.0, 15.0, 0.0, heating_up=False) < 4 * 3600
+
+
+def test_emitter_without_dimensions_has_no_lag():
+    model = make_model([TrvConfig(name="trv", width_mm=None, height_mm=None)])
+
+    assert model.heat_capacity_j_per_k == 0
+    assert model.time_constant_s(21.0, 40.0, 50.0, heating_up=True) == 0
