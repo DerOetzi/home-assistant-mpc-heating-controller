@@ -27,6 +27,8 @@ class TrvConfig:
     height_mm: float | None = 600
 
     nominal_power_w: float | None = None
+    # The TRV reports its valve opening (0-100 %) through an entity.
+    valve_position_configured: bool = False
 
 
 @dataclass

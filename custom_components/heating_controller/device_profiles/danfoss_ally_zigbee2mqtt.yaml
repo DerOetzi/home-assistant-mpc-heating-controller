@@ -1,0 +1,32 @@
+# Danfoss Ally (014G2461) paired through Zigbee2MQTT.
+# Zigbee2MQTT names every entity "<ieee>_<property>_zigbee2mqtt" in its
+# unique_id, so the entities are found however they were renamed.
+name: Danfoss Ally (Zigbee2MQTT)
+match:
+  integration: mqtt
+  manufacturer: Danfoss
+  model_ids:
+    - 014G2461
+target_temperature:
+  min: 5
+  max: 35
+  step: 0.5
+entities:
+  climate:
+    domain: climate
+    unique_id_suffix: _climate_zigbee2mqtt
+  valve_position:
+    domain: sensor
+    unique_id_suffix: _pi_heating_demand_zigbee2mqtt
+  heat_available:
+    domain: switch
+    unique_id_suffix: _switch_heat_available_zigbee2mqtt
+  adaptation_status:
+    domain: sensor
+    unique_id_suffix: _adaptation_run_status_zigbee2mqtt
+    # Any write aborts a running adaptation. "lost_in_progress" is a new run
+    # after the valve characteristic was lost.
+    busy:
+      states:
+        - in_progress
+        - lost_in_progress

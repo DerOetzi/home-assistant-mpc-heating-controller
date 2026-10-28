@@ -17,7 +17,7 @@ START_TS = 1_000_000.0
 STEP_S = 300
 
 
-def make_observer(disturbance_limit_w=1000.0):
+def make_observer(disturbance_limit_w=1000.0, target_band_c=0.0):
     # UA 1000 W / 32 K = 31.25 W/K, capacity 15 m² * 165 kJ/m²K = 2.475 MJ/K.
     thermal_config = RoomThermalConfig(
         room_heat_load_w=1000, room_area_m2=15, construction=Construction.MEDIUM
@@ -28,15 +28,21 @@ def make_observer(disturbance_limit_w=1000.0):
     loss_model = RoomLossModel(thermal_config)
     capacity_model = ThermalCapacityModel(thermal_config)
     observer = RoomStateObserver(
-        emitter_model, loss_model, capacity_model, disturbance_limit_w
+        emitter_model,
+        loss_model,
+        capacity_model,
+        disturbance_limit_w,
+        target_band_c=target_band_c,
     )
     return observer, loss_model
 
 
-def make_input(now_ts, room_temp_c=20.0, outdoor_temp_c=0.0, flow_temp_c=40.0):
+def make_input(
+    now_ts, room_temp_c=20.0, outdoor_temp_c=0.0, flow_temp_c=40.0, target_temp_c=20.0
+):
     return RoomMpcInput(
         now_ts=now_ts,
-        target_temp_c=20.0,
+        target_temp_c=target_temp_c,
         room_temp_c=room_temp_c,
         outdoor_temp_c=outdoor_temp_c,
         flow_temp_c=flow_temp_c,
@@ -45,10 +51,23 @@ def make_input(now_ts, room_temp_c=20.0, outdoor_temp_c=0.0, flow_temp_c=40.0):
     )
 
 
-def run(observer, steps, power_w, demand_pct, allowed=True, room_temp_c=20.0, start_ts=START_TS):
+def run(
+    observer,
+    steps,
+    power_w,
+    demand_pct,
+    allowed=True,
+    room_temp_c=20.0,
+    start_ts=START_TS,
+    target_temp_c=20.0,
+):
     estimate = None
     for index in range(steps):
-        mpc_input = make_input(start_ts + index * STEP_S, room_temp_c=room_temp_c)
+        mpc_input = make_input(
+            start_ts + index * STEP_S,
+            room_temp_c=room_temp_c,
+            target_temp_c=target_temp_c,
+        )
         estimate = observer.estimate(mpc_input, disturbance_update_allowed=allowed)
         observer.commit(estimate, mpc_input, power_w, demand_pct)
     return estimate
@@ -170,10 +189,11 @@ def test_disturbance_may_fall_while_the_valve_is_shut():
     # Shut valve, but 800 W disturbance against 625 W loss lets the model
     # expect a rise the room does not show: a lower disturbance asks for heat
     # again, out of the limit.
+    # The room sits below its 20.5 °C setpoint: the controller needs heat.
     observer, _ = make_observer()
     observer.restore_disturbance(800.0)
 
-    estimate = run(observer, 24, power_w=0.0, demand_pct=0)
+    estimate = run(observer, 24, power_w=0.0, demand_pct=0, target_temp_c=20.5)
 
     assert estimate.disturbance_w < 800.0
 
@@ -202,11 +222,43 @@ def test_disturbance_does_not_fall_while_the_valve_is_fully_open():
 def test_disturbance_may_rise_while_the_valve_is_fully_open():
     # 300 W against 625 W loss, yet the room holds: a gain, which lowers the
     # demand out of the limit.
+    # The room sits above its 19.5 °C setpoint: the controller needs less heat.
     observer, _ = make_observer()
 
-    estimate = run(observer, 24, power_w=300.0, demand_pct=100)
+    estimate = run(observer, 24, power_w=300.0, demand_pct=100, target_temp_c=19.5)
 
     assert estimate.disturbance_w > 0
+
+
+def test_disturbance_does_not_ratchet_down_with_the_valve_shut_above_setpoint():
+    # Room above its setpoint, valve shut, the 0.1 K sensor stepping between
+    # 20.0 and 19.9: the model expects cooling, rises are held, and the steps
+    # down must not walk the disturbance down one by one.
+    observer, _ = make_observer(target_band_c=0.1)
+    disturbances_w = []
+    for index in range(48):
+        mpc_input = make_input(
+            START_TS + index * STEP_S,
+            room_temp_c=20.0 if index % 3 else 19.9,
+            target_temp_c=19.0,
+        )
+        estimate = observer.estimate(mpc_input, disturbance_update_allowed=True)
+        observer.commit(estimate, mpc_input, 0.0, 0)
+        disturbances_w.append(estimate.disturbance_w)
+
+    assert min(disturbances_w) == 0.0
+
+
+def test_disturbance_does_not_fall_with_the_valve_shut_inside_the_band():
+    # Inside the band the controller does not want heat either.
+    observer, _ = make_observer(target_band_c=0.1)
+    observer.restore_disturbance(800.0)
+
+    estimate = run(
+        observer, 24, power_w=0.0, demand_pct=0, room_temp_c=20.45, target_temp_c=20.5
+    )
+
+    assert estimate.disturbance_w == 800.0
 
 
 def test_long_gap_restarts_from_the_measurement():

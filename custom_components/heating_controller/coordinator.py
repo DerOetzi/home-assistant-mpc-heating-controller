@@ -18,9 +18,11 @@ from homeassistant.core import Event, EventStateChangedData, HomeAssistant, Stat
 from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.event import (
     async_call_later,
+    async_track_entity_registry_updated_event,
     async_track_state_change_event,
     async_track_time_interval,
 )
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.sun import get_astral_event_date
 from homeassistant.util import dt as dt_util, slugify
 
@@ -54,17 +56,12 @@ from .const import (
     CONF_ROOM_SENSOR_ENTITY,
     CONF_STATIONARY_RANGE,
     CONF_TARGET_BAND,
-    CONF_TRV_ACTIVE_SWITCH,
+    CONF_TRV_SETPOINT_MODE,
     CONF_TRV_EMITTER_TYPE,
-    CONF_TRV_ENTITY_ID,
     CONF_TRV_HEIGHT_MM,
-    CONF_TRV_MAX_TARGET_TEMPERATURE,
-    CONF_TRV_MIN_TARGET_TEMPERATURE,
     CONF_TRV_NOMINAL_POWER_W,
     CONF_TRV_RADIATOR_TYPE,
-    CONF_TRV_TARGET_TEMPERATURE_STEP,
     CONF_TRV_WIDTH_MM,
-    CONF_TRVS,
     CONF_WINDOW_CONTACT_ENTITIES,
     CONF_BOOST_TEMPERATURE_OFFSET,
     CONF_FROST_PROTECTION_TEMPERATURE,
@@ -82,6 +79,7 @@ from .const import (
     LEARNING_CYCLE_INTERVAL_MINUTES,
     SENSOR_POLL_INTERVAL_MINUTES,
     PanelRadiatorType,
+    TrvSetpointMode,
 )
 from .controller.mpc.controller import (
     FlowGateConfig,
@@ -96,6 +94,7 @@ from .controller.mpc.types import (
     TrvConfig,
 )
 from .controller.state import HeatingStateConfig, HeatingStateController
+from .profiles import TrvBinding
 from .store import FlowGateStateStore, LearningFactorsStore, ObserverStateStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -105,6 +104,18 @@ LEARNING_CYCLE_INTERVAL = timedelta(minutes=LEARNING_CYCLE_INTERVAL_MINUTES)
 SENSOR_POLL_INTERVAL = timedelta(minutes=SENSOR_POLL_INTERVAL_MINUTES)
 
 TARGET_TEMPERATURE_TOLERANCE_C = 0.01
+# A Danfoss Ally reports its previous setpoint once more a few seconds after a
+# write. Within this window the written target counts as the TRV's target, so
+# the echo neither triggers a second write nor moves a relative target.
+TARGET_WRITE_SETTLE_S = 120.0
+# A TRV switches between shut (minimum target) and open at most this often,
+# unless frost protection is forced: every switch wakes it twice.
+TRV_SWITCH_MIN_INTERVAL_S = 15 * 60
+# A write aborts a TRV's adaptation run, so nothing is written to a TRV while
+# its profile reports one running -- but no longer than this, so a status that
+# never clears cannot leave the room uncontrolled.
+# A Danfoss Ally calibration took 1 h 46 to 1 h 49 min.
+ADAPTATION_MAX_HOLD_S = 3 * 3600
 
 WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S = 30 * 60
 WINDOW_CLOSED_SUPPRESS_CAPACITY_LEARNING_S = 10 * 60
@@ -128,29 +139,32 @@ _REQUIRED_ENTRY_KEYS = (
 )
 
 
-def _build_trv_configs(trv_entries: list[dict[str, Any]]) -> list[TrvConfig]:
+def _build_trv_configs(trvs: list[TrvBinding]) -> list[TrvConfig]:
     return [
         TrvConfig(
-            name=entry[CONF_TRV_ENTITY_ID],
-            emitter_type=HeatEmitterType(entry[CONF_TRV_EMITTER_TYPE]),
-            min_target_temperature_c=entry[CONF_TRV_MIN_TARGET_TEMPERATURE],
-            max_target_temperature_c=entry[CONF_TRV_MAX_TARGET_TEMPERATURE],
-            target_temperature_step_c=entry[CONF_TRV_TARGET_TEMPERATURE_STEP],
+            name=trv.climate_entity,
+            emitter_type=HeatEmitterType(trv.emitter[CONF_TRV_EMITTER_TYPE]),
+            min_target_temperature_c=trv.min_target_temperature_c,
+            max_target_temperature_c=trv.max_target_temperature_c,
+            target_temperature_step_c=trv.target_temperature_step_c,
             radiator_type=(
-                PanelRadiatorType(entry[CONF_TRV_RADIATOR_TYPE])
-                if CONF_TRV_RADIATOR_TYPE in entry
+                PanelRadiatorType(trv.emitter[CONF_TRV_RADIATOR_TYPE])
+                if CONF_TRV_RADIATOR_TYPE in trv.emitter
                 else None
             ),
-            width_mm=entry.get(CONF_TRV_WIDTH_MM),
-            height_mm=entry.get(CONF_TRV_HEIGHT_MM),
-            nominal_power_w=entry.get(CONF_TRV_NOMINAL_POWER_W),
+            width_mm=trv.emitter.get(CONF_TRV_WIDTH_MM),
+            height_mm=trv.emitter.get(CONF_TRV_HEIGHT_MM),
+            nominal_power_w=trv.emitter.get(CONF_TRV_NOMINAL_POWER_W),
+            valve_position_configured=trv.valve_position_entity is not None,
         )
-        for entry in trv_entries
+        for trv in trvs
     ]
 
 
 class HeatingRoomCoordinator:
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+    def __init__(
+        self, hass: HomeAssistant, entry: ConfigEntry, trvs: list[TrvBinding]
+    ) -> None:
         self.hass = hass
         self.entry = entry
         self.data = entry.data
@@ -162,14 +176,13 @@ class HeatingRoomCoordinator:
                 "fill them in through the options flow"
             )
 
-        self._trv_entries: list[dict[str, Any]] = self.data[CONF_TRVS]
-        self._trv_entity_ids: list[str] = [
-            trv[CONF_TRV_ENTITY_ID] for trv in self._trv_entries
+        self._trvs = trvs
+        self._trv_entity_ids: list[str] = [trv.climate_entity for trv in trvs]
+        self._valve_position_entities: list[str | None] = [
+            trv.valve_position_entity for trv in trvs
         ]
-        self._trv_active_switches: list[str] = [
-            trv[CONF_TRV_ACTIVE_SWITCH]
-            for trv in self._trv_entries
-            if trv.get(CONF_TRV_ACTIVE_SWITCH)
+        self._adaptation_status_entities: list[str] = [
+            trv.adaptation_status_entity for trv in trvs if trv.adaptation_status_entity
         ]
         self.room_comfort_condition_entities: list[str] = list(
             self.data.get(CONF_ROOM_COMFORT_CONDITION_ENTITIES, [])
@@ -242,11 +255,12 @@ class HeatingRoomCoordinator:
         )
         self.mpc = RoomMpcController(
             thermal_config=thermal_config,
-            trvs=_build_trv_configs(self._trv_entries),
+            trvs=_build_trv_configs(trvs),
             rate_limit_config=rate_limit_config,
             max_sensor_age_s=self.data[CONF_MAX_SENSOR_AGE],
             room_sensor_configured=bool(self.data.get(CONF_ROOM_SENSOR_ENTITY)),
             target_band_c=self.data[CONF_TARGET_BAND],
+            trv_setpoint_mode=TrvSetpointMode(self.data[CONF_TRV_SETPOINT_MODE]),
             flow_gate_config=flow_gate_config,
         )
         self.mpc.set_stationary_range_c(
@@ -264,6 +278,11 @@ class HeatingRoomCoordinator:
         self.blocked = False
         self.trv_active = True
         self.last_result: RoomMpcResult | None = None
+        # Target writes per TRV since setup: every write wakes the TRV.
+        self.trv_setpoint_writes: dict[str, int] = {}
+        self._written_targets: dict[str, tuple[float, float]] = {}
+        self._trv_switched_at: dict[str, float] = {}
+        self._adaptation_since: dict[str, float] = {}
         self.normal_result: RoomMpcResult | None = None
         self.normal_heat_mode: HeatMode | None = None
         self.normal_target_temperature_c: float | None = None
@@ -328,6 +347,10 @@ class HeatingRoomCoordinator:
             )
 
         tracked_entities = list(self._trv_entity_ids)
+        tracked_entities.extend(
+            entity_id for entity_id in self._valve_position_entities if entity_id
+        )
+        tracked_entities.extend(self._adaptation_status_entities)
         tracked_entities.extend(self._comfort_condition_entities)
         tracked_entities.extend(self.data.get(CONF_WINDOW_CONTACT_ENTITIES, []))
         tracked_entities.append(self.data[CONF_PV_BOOST_ENTITY])
@@ -347,6 +370,13 @@ class HeatingRoomCoordinator:
         self._unsub.append(
             async_track_state_change_event(
                 self.hass, tracked_entities, self._async_handle_state_change
+            )
+        )
+        self._unsub.append(
+            async_track_entity_registry_updated_event(
+                self.hass,
+                [entity_id for trv in self._trvs for entity_id in trv.entity_ids],
+                self._async_handle_trv_entity_registry_update,
             )
         )
         self._unsub.append(
@@ -401,6 +431,9 @@ class HeatingRoomCoordinator:
                 index,
                 self._climate_temperature_from_state(self.hass.states.get(entity_id)),
             )
+        for index, entity_id in enumerate(self._valve_position_entities):
+            if entity_id:
+                self.mpc.set_valve_position(index, self._float_state(entity_id))
 
         room_sensor_entity = self.data.get(CONF_ROOM_SENSOR_ENTITY)
         if room_sensor_entity:
@@ -415,6 +448,17 @@ class HeatingRoomCoordinator:
         self._update_flow_temperature(
             self.hass.states.get(self._flow_temperature_entity)
         )
+
+    @callback
+    def _async_handle_trv_entity_registry_update(
+        self, event: Event[er.EventEntityRegistryUpdatedData]
+    ) -> None:
+        """Bind the TRVs afresh once one of their entities is renamed or removed."""
+        if event.data["action"] == "update" and "entity_id" not in event.data.get(
+            "changes", {}
+        ):
+            return
+        self.hass.config_entries.async_schedule_reload(self.entry.entry_id)
 
     async def _async_handle_room_sensor_grace_expired(self, _now: Any) -> None:
         if not self._awaiting_room_sensor:
@@ -452,13 +496,40 @@ class HeatingRoomCoordinator:
         flow_temp_c = self.current_flow_temperature_c
         return flow_temp_c is not None and flow_temp_c >= self.flow_threshold_c
 
+    def _adaptation_running(self, trv: TrvBinding, now_ts: float) -> bool:
+        """Whether the TRV runs an adaptation that a write would abort."""
+        if trv.adaptation_busy is None or trv.adaptation_status_entity is None:
+            return False
+        if not trv.adaptation_busy.matches(
+            self.hass.states.get(trv.adaptation_status_entity)
+        ):
+            self._adaptation_since.pop(trv.climate_entity, None)
+            return False
+        since = self._adaptation_since.setdefault(trv.climate_entity, now_ts)
+        if now_ts - since < ADAPTATION_MAX_HOLD_S:
+            return True
+        if since > 0:
+            _LOGGER.warning(
+                "%s still reports an adaptation run after %s s; writing again",
+                trv.climate_entity,
+                ADAPTATION_MAX_HOLD_S,
+            )
+            # Marks the run as warned about; it clears with the status.
+            self._adaptation_since[trv.climate_entity] = -ADAPTATION_MAX_HOLD_S
+        return False
+
     async def _async_apply_trv_active_switches(self, active: bool) -> None:
         desired_state = STATE_ON if active else STATE_OFF
+        now_ts = time.time()
         switches_to_set = [
-            entity_id
-            for entity_id in self._trv_active_switches
-            if (state := self.hass.states.get(entity_id)) is None
-            or state.state != desired_state
+            trv.heat_available_entity
+            for trv in self._trvs
+            if trv.heat_available_entity
+            and not self._adaptation_running(trv, now_ts)
+            and (
+                (state := self.hass.states.get(trv.heat_available_entity)) is None
+                or state.state != desired_state
+            )
         ]
         if not switches_to_set:
             return
@@ -521,6 +592,12 @@ class HeatingRoomCoordinator:
             index = self._trv_entity_ids.index(entity_id)
             self.mpc.set_trv_temperature(
                 index, self._climate_temperature_from_state(new_state)
+            )
+
+        elif entity_id in self._valve_position_entities:
+            self.mpc.set_valve_position(
+                self._valve_position_entities.index(entity_id),
+                self._float_from_state(new_state),
             )
 
         elif entity_id == self.data.get(CONF_ROOM_SENSOR_ENTITY):
@@ -667,6 +744,10 @@ class HeatingRoomCoordinator:
         desired_mode = self.state.desired_automatic_heat_mode(self.blocked)
         self.state.set_active_heat_mode(desired_mode)
 
+        now_ts = time.time()
+        self.mpc.set_trv_adapting(
+            any(self._adaptation_running(trv, now_ts) for trv in self._trvs)
+        )
         self.trv_active = self._compute_trv_active()
         self.state.set_trv_active(self.trv_active)
         self.mpc.set_heat_available(self.trv_active)
@@ -685,6 +766,9 @@ class HeatingRoomCoordinator:
             self.state.determine_base_target_temperature(self.normal_heat_mode)
         )
         self.normal_target_temperature_c = normal_target
+        self.mpc.set_current_trv_targets(
+            [self._current_trv_target(entity_id) for entity_id in self._trv_entity_ids]
+        )
         normal_compute = self.mpc.compute(normal_target, apply_side_effects=False)
         self.normal_result = normal_compute.result if normal_compute.valid else None
 
@@ -700,7 +784,10 @@ class HeatingRoomCoordinator:
         )
         if actual_compute.valid:
             self.last_result = actual_compute.result
-            await self._async_apply_result(actual_compute.result)
+            await self._async_apply_result(
+                actual_compute.result,
+                forced=self.state.should_force_frost_protection(self.blocked),
+            )
         else:
             _LOGGER.debug(
                 "MPC compute failed for room %s: %s",
@@ -720,19 +807,39 @@ class HeatingRoomCoordinator:
         await self.flow_gate_store.async_save(flow_gate_state)
         self._persisted_flow_gate_state = flow_gate_state
 
-    async def _async_apply_result(self, result: RoomMpcResult) -> None:
-        for entity_id, target_temperature_c in zip(
-            self._trv_entity_ids, result.trv_targets, strict=True
+    async def _async_apply_result(
+        self, result: RoomMpcResult, forced: bool = False
+    ) -> None:
+        for trv, target_temperature_c in zip(
+            self._trvs, result.trv_targets, strict=True
         ):
+            entity_id = trv.climate_entity
             # Every write wakes the TRV and can abort a running adaptation run,
-            # so only send a target the TRV does not already report.
-            current_target_c = self._climate_target_from_state(
-                self.hass.states.get(entity_id)
-            )
+            # so only send a target the TRV does not already report, none to a
+            # TRV that cannot take it, and none while it adapts unless frost
+            # protection is forced.
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                continue
+            now_ts = time.time()
+            if not forced and self._adaptation_running(trv, now_ts):
+                continue
+            current_target_c = self._current_trv_target(entity_id)
             if (
                 current_target_c is not None
                 and abs(current_target_c - target_temperature_c)
                 < TARGET_TEMPERATURE_TOLERANCE_C
+            ):
+                continue
+            min_target_c = trv.min_target_temperature_c
+            switches = (current_target_c is None or current_target_c <= min_target_c) != (
+                target_temperature_c <= min_target_c
+            )
+            if (
+                switches
+                and not forced
+                and now_ts - self._trv_switched_at.get(entity_id, 0.0)
+                < TRV_SWITCH_MIN_INTERVAL_S
             ):
                 continue
             await self.hass.services.async_call(
@@ -741,6 +848,19 @@ class HeatingRoomCoordinator:
                 {"entity_id": entity_id, "temperature": target_temperature_c},
                 blocking=False,
             )
+            self.trv_setpoint_writes[entity_id] = (
+                self.trv_setpoint_writes.get(entity_id, 0) + 1
+            )
+            self._written_targets[entity_id] = (target_temperature_c, now_ts)
+            if switches:
+                self._trv_switched_at[entity_id] = now_ts
+
+    def _current_trv_target(self, entity_id: str) -> float | None:
+        """The TRV's target, or the one just written while its echo settles."""
+        written = self._written_targets.get(entity_id)
+        if written is not None and time.time() - written[1] < TARGET_WRITE_SETTLE_S:
+            return written[0]
+        return self._climate_target_from_state(self.hass.states.get(entity_id))
 
     async def async_set_manual_heat_mode(self, mode: HeatMode) -> None:
         self.state.set_active_heat_mode(mode)

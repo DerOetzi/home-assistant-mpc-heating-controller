@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from math import ceil
 
-from ....const import DesignTemperatureSystem, HeatEmitterType, PanelRadiatorType
+from ....const import (
+    DesignTemperatureSystem,
+    HeatEmitterType,
+    PanelRadiatorType,
+    TrvSetpointMode,
+)
 from ..math_helper import clamp, round_to_step
 from ..types import RoomThermalConfig, TrvConfig
 
@@ -51,6 +56,7 @@ TOWEL_RADIATOR_WATER_L_PER_W = 0.01
 TOWEL_RADIATOR_STEEL_KG_PER_W = 0.02
 WATER_HEAT_CAPACITY_J_PER_LK = 4186.0
 STEEL_HEAT_CAPACITY_J_PER_KGK = 460.0
+OUTPUT_SEARCH_ITERATIONS = 40
 # Below this overtemperature the linearised emitter conductance would go to
 # zero and the time constant to infinity.
 MIN_TIME_CONSTANT_OVERTEMPERATURE_C = 5.0
@@ -60,6 +66,22 @@ MAX_RADIATOR_HEIGHT_MM = 1800
 
 MIN_ACTIVE_TRV_TEMPERATURE_C = 18.0
 MIN_ACTIVE_DEMAND = 0.05
+# A shut valve opens only from this demand on; an open one stays open down to
+# MIN_ACTIVE_DEMAND. The smallest demand step otherwise opened and shut a
+# valve every few minutes for a room that hardly needs heat.
+OPEN_ACTIVE_DEMAND = 0.10
+
+# Relative TRV setpoints: the target sits this far above the TRV's own reading,
+# from the smallest active demand to full demand. The TRV regulates its valve
+# on that reading, so a small step opens it only partly, where an absolute
+# target of 20 °C or more opened it almost fully on a few percent of demand.
+# A Danfoss Ally freshly opened about 55 % at 1.1-1.5 K and about 90 % from
+# 2.4 K on; at the old 0.5 K minimum (0.5-1 K after rounding up to its 0.5 K
+# step) the smallest demand thus opened it by half and the room pulsed. The
+# minimum now leaves 0.1-0.6 K, so a small demand can keep a valve slightly
+# open.
+RELATIVE_MIN_OFFSET_C = 0.1
+RELATIVE_MAX_OFFSET_C = 3.0
 
 DISTRIBUTION_ALPHA = 0.7
 
@@ -231,15 +253,129 @@ class HeatEmitterModel:
             return 0.0
 
         total = sum(
-            emitter.design_reference_power_w
-            * (
-                current_overtemperature_c
-                / self._design_temperatures.overtemperature_c
-            )
-            ** emitter.exponent
+            self._emitter_power_w(emitter, current_overtemperature_c)
             for emitter in self._emitters
         )
         return round_to_step(total, 0.01)
+
+    def _emitter_power_w(
+        self, emitter: _PreparedEmitter, overtemperature_c: float
+    ) -> float:
+        return (
+            emitter.design_reference_power_w
+            * (overtemperature_c / self._design_temperatures.overtemperature_c)
+            ** emitter.exponent
+        )
+
+    def calculate_measured_heating_power_w(
+        self,
+        room_temperature_c: float,
+        flow_temperature_c: float | None,
+        valve_openings_pct: list[float | None],
+        demand_pct: float,
+    ) -> float:
+        """Heat the radiators give off at the valve openings the TRVs report.
+
+        Each radiator gives its available power times the share that the
+        reported opening lets through (see power_fraction_at_opening). A
+        radiator without a reported opening falls back to the room's demand,
+        the same assumption the planning makes.
+        """
+        effective_flow_temperature_c = (
+            flow_temperature_c
+            if flow_temperature_c is not None
+            else self._design_temperatures.flow_temperature_c
+        )
+        overtemperature_c = (
+            effective_flow_temperature_c
+            - self._design_temperatures.spread_c / 2
+            - room_temperature_c
+        )
+        if overtemperature_c <= 0:
+            return 0.0
+        total = 0.0
+        for index, emitter in enumerate(self._emitters):
+            opening_pct = (
+                valve_openings_pct[index] if index < len(valve_openings_pct) else None
+            )
+            fraction = (
+                clamp(demand_pct / 100, 0, 1)
+                if opening_pct is None
+                else self.power_fraction_at_opening(
+                    opening_pct,
+                    effective_flow_temperature_c,
+                    room_temperature_c,
+                    emitter.exponent,
+                )
+            )
+            total += self._emitter_power_w(emitter, overtemperature_c) * fraction
+        return round_to_step(total, 0.01)
+
+    def power_fraction_at_opening(
+        self,
+        opening_pct: float,
+        flow_temperature_c: float,
+        room_temperature_c: float,
+        exponent: float = DEFAULT_EMITTER_EXPONENT,
+    ) -> float:
+        """Share of full output at a valve opening, from the radiator itself.
+
+        The flow is taken as proportional to the valve opening. With less
+        water the radiator cools it further, its mean temperature drops less
+        than the flow, and the output stays high: at a 40 °C flow a 10 %
+        opening still gives about 44 % of full output, 50 % about 87 %.
+        """
+        fraction = clamp(opening_pct / 100, 0, 1)
+        if fraction <= 0:
+            return 0.0
+        full = self._relative_output(1.0, flow_temperature_c, room_temperature_c, exponent)
+        if full <= 0:
+            return 0.0
+        return min(
+            1.0,
+            self._relative_output(
+                fraction, flow_temperature_c, room_temperature_c, exponent
+            )
+            / full,
+        )
+
+    def _relative_output(
+        self,
+        flow_fraction: float,
+        flow_temperature_c: float,
+        room_temperature_c: float,
+        exponent: float,
+    ) -> float:
+        """Output relative to design output at a share of the design flow.
+
+        Solves the radiator's own balance: the water gives off
+        output = flow * cp * (flow - return), the surface gives off
+        output = design * (mean overtemperature / design overtemperature)^n.
+        With the design spread s at design flow, the drop at flow share f
+        and relative output x is x * s / f.
+        """
+        spread_c = self._design_temperatures.spread_c
+        design_overtemperature_c = self._design_temperatures.overtemperature_c
+        inlet_overtemperature_c = flow_temperature_c - room_temperature_c
+        if inlet_overtemperature_c <= 0 or design_overtemperature_c <= 0:
+            return 0.0
+        low = 0.0
+        high = (inlet_overtemperature_c / design_overtemperature_c) ** exponent
+        for _ in range(OUTPUT_SEARCH_ITERATIONS):
+            output = (low + high) / 2
+            mean_overtemperature_c = (
+                inlet_overtemperature_c - output * spread_c / (2 * flow_fraction)
+            )
+            surface_output = (
+                (mean_overtemperature_c / design_overtemperature_c) ** exponent
+                if mean_overtemperature_c > 0
+                else 0.0
+            )
+            if output > surface_output:
+                high = output
+            else:
+                low = output
+        return (low + high) / 2
 
     @property
     def heat_capacity_j_per_k(self) -> float:
@@ -291,9 +427,66 @@ class HeatEmitterModel:
             return 0.0
         return self._heat_capacity_j_per_k / conductance_w_per_k
 
-    def calculate_target_temperatures(self, demand_pct: float) -> list[float]:
+    def calculate_target_temperatures(
+        self,
+        demand_pct: float,
+        mode: TrvSetpointMode = TrvSetpointMode.ABSOLUTE,
+        trv_temperatures: list[float | None] | None = None,
+        current_targets: list[float | None] | None = None,
+    ) -> list[float]:
         demand = demand_pct / 100
-        return [self._calculate_target_temperature(e, demand) for e in self._emitters]
+        targets = []
+        for index, emitter in enumerate(self._emitters):
+            local_c = _at(trv_temperatures, index)
+            current_target_c = _at(current_targets, index)
+            if demand < _activation_threshold(emitter.trv, current_target_c):
+                targets.append(emitter.trv.min_target_temperature_c)
+            elif mode == TrvSetpointMode.RELATIVE and local_c is not None:
+                targets.append(
+                    self._calculate_relative_target_temperature(
+                        emitter, demand, local_c, current_target_c
+                    )
+                )
+            else:
+                targets.append(self._calculate_target_temperature(emitter, demand))
+        return targets
+
+    @staticmethod
+    def _calculate_relative_target_temperature(
+        emitter: _PreparedEmitter,
+        demand: float,
+        local_c: float,
+        current_target_c: float | None,
+    ) -> float:
+        """A step above the TRV's own reading, growing with the demand.
+
+        Rounded up to the TRV's step so the target always lies above the
+        reading. The current target is kept while it is still above the
+        reading and within one step of the new one: the reading moves by
+        tenths while the radiator heats, and every write wakes the TRV.
+        """
+        trv = emitter.trv
+        if demand < MIN_ACTIVE_DEMAND:
+            return trv.min_target_temperature_c
+
+        weighted_demand = clamp(demand * emitter.distribution_weight, 0, 1)
+        effective_demand = weighted_demand ** (1 / emitter.exponent)
+        offset_c = RELATIVE_MIN_OFFSET_C + effective_demand * (
+            RELATIVE_MAX_OFFSET_C - RELATIVE_MIN_OFFSET_C
+        )
+        step_c = trv.target_temperature_step_c
+        target_c = clamp(
+            ceil((local_c + offset_c) / step_c) * step_c,
+            trv.min_target_temperature_c,
+            trv.max_target_temperature_c,
+        )
+        if (
+            current_target_c is not None
+            and current_target_c > local_c
+            and abs(current_target_c - target_c) <= step_c
+        ):
+            return current_target_c
+        return target_c
 
     @staticmethod
     def _calculate_target_temperature(emitter: _PreparedEmitter, demand: float) -> float:
@@ -378,3 +571,18 @@ class HeatEmitterModel:
         return min(
             self.round_up_flow_temperature_c(optimal_flow), self._flow_search_max_c
         )
+
+
+def _at(values: list[float | None] | None, index: int) -> float | None:
+    if values is None or index >= len(values):
+        return None
+    return values[index]
+
+
+def _activation_threshold(trv: TrvConfig, current_target_c: float | None) -> float:
+    """Demand a TRV needs to be open: more to open a shut valve than to stay."""
+    is_open = (
+        current_target_c is not None
+        and current_target_c > trv.min_target_temperature_c
+    )
+    return MIN_ACTIVE_DEMAND if is_open else OPEN_ACTIVE_DEMAND

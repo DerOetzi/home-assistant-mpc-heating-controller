@@ -15,7 +15,7 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   (`capacity_factor`) coefficients, learned online from each room's own temperature response
   and continuously self-calibrated while the room is actively heating. See
   [`docs/mpc-guide.md`](docs/mpc-guide.md) for how modes/setpoints combine, what the
-  learning-status sensor means, and how to size a room correctly.
+  learning-status sensors mean, and how to size a room correctly.
 - **Radiator lag and a room observer** — the radiators follow the requested power with a
   lag derived from their water and steel mass, and the room model runs alongside the room,
   correcting itself towards the measurement and estimating a lasting disturbance (heat from
@@ -86,9 +86,9 @@ Add one config entry per room via **Settings → Devices & Services → Add Inte
 Heating Controller**. The setup flow walks through:
 
 1. **Room name and TRV count** — how many thermostatic radiator valves heat this room.
-2. **Per-TRV details** (repeated once per TRV) — the `climate` entity, an optional
-   TRV-active switch, valve target-temperature range/step, emitter type, and (depending on
-   emitter type) panel radiator type/dimensions or nominal power.
+2. **Per-TRV details** (repeated once per TRV) — the thermostat device, emitter type, and
+   (depending on emitter type) panel radiator type/dimensions or nominal power. The
+   device's profile supplies everything else, see [Supported devices](#supported-devices).
 3. **Entities** — optional room temperature sensor, window contacts, room-specific comfort
    conditions, PV-boost entity, optional learning window and learning enabled entities,
    plus the required outdoor
@@ -105,6 +105,38 @@ All of the above is editable afterwards via the entry's **Configure** options fl
 re-runs the same steps pre-filled with the current values.
 
 Deleting a room's config entry removes its entities and its persisted learning-factor file.
+
+## Supported devices
+
+A TRV is picked as a device. A device profile for its model then names the entities the
+controller uses — found by their unique ID, so renaming them breaks nothing — and the
+target temperature range and step:
+
+| Device | Integration | Entities used |
+|---|---|---|
+| Danfoss Ally (014G2461) | Zigbee2MQTT | climate, `pi_heating_demand` (valve opening), `heat_available`, `adaptation_run_status` |
+| Danfoss Ally (eTRV0100, eTRV0101, eTRV0103) | ZHA | the same; not yet tested on a real device |
+
+Only devices with a profile can be picked. For another model please
+[open an issue](https://github.com/DerOetzi/home-assistant-mcp-heating-controller/issues)
+with its manufacturer, model, integration, and the entities the device has (their entity
+IDs and unique IDs, e.g. from the device page or `Settings → Entities`). Profiles are YAML
+files in `custom_components/heating_controller/device_profiles/`, so a pull request with a
+new one is welcome too.
+
+What the controller does with each entity:
+
+- **climate** — reads the TRV's own temperature and writes the target temperature.
+- **Valve opening** — the heat the radiator really gives off, see
+  [docs/mpc-guide.md](docs/mpc-guide.md#valve-position-the-heat-the-radiators-really-get).
+- **Heat available** — switched on while the heat source delivers heat, so the TRV knows
+  whether opening its valve can help.
+- **Adaptation status** — while the TRV calibrates its valve, nothing is written to it
+  (any write aborts the run), for at most three hours and except for forced frost
+  protection; the room does not learn meanwhile.
+
+Upgrading from a version that configured TRVs by entity migrates every TRV to its device.
+A room with a TRV no profile covers stops with a migration error in the log.
 
 ## Dashboard card
 

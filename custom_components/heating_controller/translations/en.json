@@ -12,12 +12,11 @@
       "trv": {
         "title": "TRV {index}",
         "data": {
-          "entity_id": "TRV climate entity",
-          "trv_active_switch": "TRV active switch (optional)",
-          "emitter_type": "Emitter type",
-          "min_target_temperature_c": "Minimum target temperature (°C)",
-          "max_target_temperature_c": "Maximum target temperature (°C)",
-          "target_temperature_step_c": "Target temperature step (°C)"
+          "device_id": "Thermostat device",
+          "emitter_type": "Emitter type"
+        },
+        "data_description": {
+          "device_id": "Only devices with a device profile can be picked; see the README to request another model."
         }
       },
       "trv_details": {
@@ -73,12 +72,18 @@
           "flow_gate_hold_time_s": "Surplus gate: hold time before closing (s)",
           "max_sensor_age_s": "Max sensor age (s)",
           "stationary_range_c": "Stationary range for learning (K)",
-          "target_band_c": "Target band below setpoint (K)"
+          "target_band_c": "Target band below setpoint (K)",
+          "trv_setpoint_mode": "TRV target mode"
         }
       }
     },
     "abort": {
       "already_configured": "This room is already configured."
+    },
+    "error": {
+      "device_missing": "This device no longer exists.",
+      "unsupported_device": "No device profile covers this device.",
+      "climate_missing": "The device has no single enabled climate entity."
     }
   },
   "options": {
@@ -86,12 +91,11 @@
       "trv": {
         "title": "TRV {index}",
         "data": {
-          "entity_id": "TRV climate entity",
-          "trv_active_switch": "TRV active switch (optional)",
-          "emitter_type": "Emitter type",
-          "min_target_temperature_c": "Minimum target temperature (°C)",
-          "max_target_temperature_c": "Maximum target temperature (°C)",
-          "target_temperature_step_c": "Target temperature step (°C)"
+          "device_id": "Thermostat device",
+          "emitter_type": "Emitter type"
+        },
+        "data_description": {
+          "device_id": "Only devices with a device profile can be picked; see the README to request another model."
         }
       },
       "trv_details": {
@@ -147,9 +151,15 @@
           "flow_gate_hold_time_s": "Surplus gate: hold time before closing (s)",
           "max_sensor_age_s": "Max sensor age (s)",
           "stationary_range_c": "Stationary range for learning (K)",
-          "target_band_c": "Target band below setpoint (K)"
+          "target_band_c": "Target band below setpoint (K)",
+          "trv_setpoint_mode": "TRV target mode"
         }
       }
+    },
+    "error": {
+      "device_missing": "This device no longer exists.",
+      "unsupported_device": "No device profile covers this device.",
+      "climate_missing": "The device has no single enabled climate entity."
     }
   },
   "selector": {
@@ -184,6 +194,12 @@
         "medium": "Medium (165 kJ/m²K)",
         "heavy": "Heavy (260 kJ/m²K)",
         "very_heavy": "Very heavy (370 kJ/m²K)"
+      }
+    },
+    "trv_setpoint_mode": {
+      "options": {
+        "absolute": "Absolute (spread over the TRV range)",
+        "relative": "Relative (above the TRV's own reading)"
       }
     }
   },
@@ -239,6 +255,9 @@
       "radiator_heating_power": {
         "name": "Radiator heating power"
       },
+      "measured_heating_power": {
+        "name": "Heating power from valve position"
+      },
       "disturbance_power": {
         "name": "Disturbance power"
       },
@@ -248,24 +267,50 @@
       "base_temperature": {
         "name": "Base temperature"
       },
-      "mpc_learning_status": {
-        "name": "MPC learning status",
-        "state": {
-          "learned": "Learned",
-          "disabled": "Disabled",
-          "no_correction": "No correction needed",
-          "disturbed": "Window disturbed",
-          "suppressed": "Suppressed",
-          "waiting_interval": "Waiting",
-          "outside_window": "Outside learning window",
-          "paused": "Paused"
-        }
-      },
       "ua_factor": {
         "name": "UA factor"
       },
       "capacity_factor": {
         "name": "Capacity factor"
+      },
+      "ua_learning_status": {
+        "name": "UA learning status",
+        "state": {
+          "learned": "Learned",
+          "learned_at_limit": "Learned up to the limit",
+          "collecting": "Collecting",
+          "coasting": "Waiting for the room to settle",
+          "outside_window": "Outside the learning window",
+          "paused": "Paused",
+          "gap": "Discarded: gap in the data",
+          "drift": "Discarded: drift",
+          "small_temperature_difference": "Discarded: mild night",
+          "too_short": "Discarded: too short",
+          "implausible_target": "Discarded: implausible target",
+          "storage_dominated": "Discarded: stored heat dominates",
+          "room_sensor_fallback": "Room sensor missing",
+          "window_open": "Window open",
+          "valve_position_missing": "Valve position missing",
+          "trv_adapting": "TRV calibrating"
+        }
+      },
+      "capacity_learning_status": {
+        "name": "Capacity learning status",
+        "state": {
+          "learned": "Learned",
+          "stationary": "Room stationary",
+          "small_error": "Error too small",
+          "small_change": "Change too small",
+          "outside_window": "Outside the learning window",
+          "disturbed": "Window disturbed",
+          "suppressed": "Suppressed",
+          "room_sensor_fallback": "Room sensor missing",
+          "paused": "Paused",
+          "waiting": "Waiting",
+          "disabled": "Disabled",
+          "valve_position_missing": "Valve position missing",
+          "trv_adapting": "TRV calibrating"
+        }
       }
     }
   },

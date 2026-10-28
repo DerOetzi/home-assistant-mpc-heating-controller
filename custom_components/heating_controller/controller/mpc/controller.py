@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import ceil
 
-from ...const import CapacityOutcome
+from ...const import CapacityOutcome, TrvSetpointMode
 from .learner import LearnerPrediction, RoomMpcModelLearner
 from .math_helper import clamp, round_to_step
 from .models.capacity import ThermalCapacityModel
@@ -144,8 +144,11 @@ class RoomMpcController:
         room_sensor_configured: bool,
         target_band_c: float,
         flow_gate_config: FlowGateConfig | None = None,
+        trv_setpoint_mode: TrvSetpointMode = TrvSetpointMode.ABSOLUTE,
     ) -> None:
         self._rate_limit_config = rate_limit_config
+        self._trv_setpoint_mode = trv_setpoint_mode
+        self._current_trv_targets: list[float | None] = [None] * len(trvs)
         self._target_band_c = max(0.0, target_band_c)
 
         gate_config = flow_gate_config or FlowGateConfig()
@@ -158,7 +161,9 @@ class RoomMpcController:
         self._emitter_model = HeatEmitterModel(thermal_config, trvs)
         self._loss_model = RoomLossModel(thermal_config)
         self._capacity_model = ThermalCapacityModel(thermal_config)
-        self._learner = RoomMpcModelLearner(self._loss_model, self._capacity_model)
+        self._learner = RoomMpcModelLearner(
+            self._loss_model, self._capacity_model, target_band_c=self._target_band_c
+        )
         # A disturbance beyond the design heat load is a model error, not heat
         # from neighbours or appliances.
         self._observer = RoomStateObserver(
@@ -166,6 +171,7 @@ class RoomMpcController:
             self._loss_model,
             self._capacity_model,
             disturbance_limit_w=thermal_config.room_heat_load_w,
+            target_band_c=self._target_band_c,
         )
         self._heat_available = True
 
@@ -228,6 +234,16 @@ class RoomMpcController:
     def set_room_sensor_temperature(self, value: float | None) -> None:
         self._sensors.set_room_sensor_temperature(value)
 
+    def set_current_trv_targets(self, targets: list[float | None]) -> None:
+        """The targets the TRVs report now, so a relative target can stay."""
+        self._current_trv_targets = list(targets)
+
+    def set_valve_position(self, index: int, value: float | None) -> None:
+        self._sensors.set_valve_position(index, value)
+
+    def set_trv_adapting(self, adapting: bool) -> None:
+        self._sensors.set_trv_adapting(adapting)
+
     def set_outdoor_temperature(self, value: float | None) -> None:
         self._sensors.set_outdoor_temperature(value)
 
@@ -256,7 +272,12 @@ class RoomMpcController:
         mpc_input = input_result.input
         estimate = self._observer.estimate(
             mpc_input,
-            disturbance_update_allowed=self._learner.disturbance_update_allowed(
+            # Without a reported valve opening the radiator heat is a guess,
+            # and an adapting TRV ignores the demand; the disturbance would
+            # take up the difference.
+            disturbance_update_allowed=not mpc_input.valve_position_missing
+            and not mpc_input.trv_adapting
+            and self._learner.disturbance_update_allowed(
                 mpc_input.now_ts, mpc_input.room_sensor_fallback
             ),
         )
@@ -284,6 +305,23 @@ class RoomMpcController:
             available_heating_power_w * (stabilized_demand_pct / 100), 0.01
         )
 
+        # The TRVs are thermostats: a small demand can open a valve fully. Where
+        # they report their opening, that is what the radiators get.
+        measured_heating_power_w = self._emitter_model.calculate_measured_heating_power_w(
+            mpc_input.room_temp_c,
+            mpc_input.flow_temp_c,
+            mpc_input.valve_positions_pct,
+            stabilized_demand_pct,
+        )
+        reported_openings_pct = [
+            opening for opening in mpc_input.valve_positions_pct if opening is not None
+        ]
+        effective_opening_pct = (
+            sum(reported_openings_pct) / len(reported_openings_pct)
+            if reported_openings_pct
+            else stabilized_demand_pct
+        )
+
         flow_gate = self._live_flow_gate if apply_side_effects else self._preview_flow_gate
         flow_gate_closed = flow_gate.update(
             surplus_c=mpc_input.room_temp_c - mpc_input.target_temp_c,
@@ -305,9 +343,9 @@ class RoomMpcController:
                 estimate,
                 mpc_input,
                 target_power_w=(
-                    requested_heating_power_w if self._heat_available else 0.0
+                    measured_heating_power_w if self._heat_available else 0.0
                 ),
-                demand_pct=stabilized_demand_pct if self._heat_available else 0.0,
+                demand_pct=effective_opening_pct if self._heat_available else 0.0,
             )
             self._record_learning_telemetry(
                 mpc_input,
@@ -318,7 +356,10 @@ class RoomMpcController:
 
         result = RoomMpcResult(
             trv_targets=self._emitter_model.calculate_target_temperatures(
-                stabilized_demand_pct
+                stabilized_demand_pct,
+                self._trv_setpoint_mode,
+                mpc_input.trv_temperatures,
+                self._current_trv_targets,
             ),
             input=mpc_input,
             demand_pct=stabilized_demand_pct,
@@ -333,6 +374,7 @@ class RoomMpcController:
             estimated_room_temperature_c=estimate.room_temperature_c,
             radiator_power_w=estimate.radiator_power_w,
             disturbance_w=estimate.disturbance_w,
+            measured_heating_power_w=measured_heating_power_w,
         )
         return RoomMpcComputeResult(valid=True, result=result)
 

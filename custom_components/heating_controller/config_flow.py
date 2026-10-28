@@ -41,16 +41,13 @@ from .const import (
     CONF_ROOM_SENSOR_ENTITY,
     CONF_STATIONARY_RANGE,
     CONF_TARGET_BAND,
-    CONF_TRV_ACTIVE_SWITCH,
+    CONF_TRV_SETPOINT_MODE,
     CONF_TRV_COUNT,
+    CONF_TRV_DEVICE_ID,
     CONF_TRV_EMITTER_TYPE,
-    CONF_TRV_ENTITY_ID,
     CONF_TRV_HEIGHT_MM,
-    CONF_TRV_MAX_TARGET_TEMPERATURE,
-    CONF_TRV_MIN_TARGET_TEMPERATURE,
     CONF_TRV_NOMINAL_POWER_W,
     CONF_TRV_RADIATOR_TYPE,
-    CONF_TRV_TARGET_TEMPERATURE_STEP,
     CONF_TRV_WIDTH_MM,
     CONF_TRVS,
     CONF_WINDOW_CONTACT_ENTITIES,
@@ -59,6 +56,7 @@ from .const import (
     DEFAULT_FLOW_GATE_OPEN_SURPLUS_C,
     DEFAULT_STATIONARY_RANGE_C,
     DEFAULT_TARGET_BAND_C,
+    DEFAULT_TRV_SETPOINT_MODE,
     DOMAIN,
     MAX_STATIONARY_RANGE_C,
     MAX_TARGET_BAND_C,
@@ -71,6 +69,14 @@ from .const import (
     DesignTemperatureSystem,
     HeatEmitterType,
     PanelRadiatorType,
+    TrvSetpointMode,
+)
+from .profiles import (
+    DeviceProfile,
+    TrvResolveError,
+    async_get_profiles,
+    device_selector_filters,
+    resolve_trv,
 )
 
 TRV_COUNT_OPTIONS = list(range(1, MAX_TRV_COUNT + 1))
@@ -80,18 +86,17 @@ _WINDOW_DEVICE_CLASSES = ["window", "door", "garage_door", "opening"]
 _FLOW_THRESHOLD_DOMAINS = ["input_number", "number", "sensor"]
 
 
-def _trv_step_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+def _trv_step_schema(
+    profiles: tuple[DeviceProfile, ...], defaults: dict[str, Any] | None = None
+) -> vol.Schema:
     defaults = defaults or {}
     return vol.Schema(
         {
-            _marker(vol.Required, CONF_TRV_ENTITY_ID, defaults): (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="climate")
-                )
-            ),
-            _marker(vol.Optional, CONF_TRV_ACTIVE_SWITCH, defaults): (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="switch")
+            _marker(vol.Required, CONF_TRV_DEVICE_ID, defaults): (
+                selector.DeviceSelector(
+                    selector.DeviceSelectorConfig(
+                        filter=device_selector_filters(profiles)
+                    )
                 )
             ),
             vol.Required(
@@ -104,19 +109,32 @@ def _trv_step_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     translation_key=CONF_TRV_EMITTER_TYPE,
                 )
             ),
-            vol.Required(
-                CONF_TRV_MIN_TARGET_TEMPERATURE,
-                default=defaults.get(CONF_TRV_MIN_TARGET_TEMPERATURE, 5.0),
-            ): vol.Coerce(float),
-            vol.Required(
-                CONF_TRV_MAX_TARGET_TEMPERATURE,
-                default=defaults.get(CONF_TRV_MAX_TARGET_TEMPERATURE, 30.0),
-            ): vol.Coerce(float),
-            vol.Required(
-                CONF_TRV_TARGET_TEMPERATURE_STEP,
-                default=defaults.get(CONF_TRV_TARGET_TEMPERATURE_STEP, 0.5),
-            ): vol.Coerce(float),
         }
+    )
+
+
+async def _async_trv_step(
+    flow: ConfigFlow | OptionsFlow,
+    user_input: dict[str, Any] | None,
+    trv_index: int,
+    defaults: dict[str, Any] | None = None,
+) -> Any:
+    """Show the TRV step, or the device's error, or None once it is bound."""
+    profiles = await async_get_profiles(flow.hass)
+    errors: dict[str, str] = {}
+    if user_input is not None:
+        try:
+            resolve_trv(flow.hass, profiles, user_input)
+        except TrvResolveError as err:
+            errors[CONF_TRV_DEVICE_ID] = err.reason
+        else:
+            return None
+        defaults = user_input
+    return flow.async_show_form(
+        step_id="trv",
+        data_schema=_trv_step_schema(profiles, defaults),
+        errors=errors,
+        description_placeholders={"index": str(trv_index + 1)},
     )
 
 
@@ -369,12 +387,22 @@ def _mpc_schema(defaults: dict[str, Any]) -> vol.Schema:
                     unit_of_measurement="K",
                 )
             ),
+            vol.Required(
+                CONF_TRV_SETPOINT_MODE,
+                default=defaults.get(CONF_TRV_SETPOINT_MODE, DEFAULT_TRV_SETPOINT_MODE),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[mode.value for mode in TrvSetpointMode],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    translation_key=CONF_TRV_SETPOINT_MODE,
+                )
+            ),
         }
     )
 
 
 class HeatingControllerConfigFlow(ConfigFlow, domain=DOMAIN):
-    VERSION = 4
+    VERSION = 7
 
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}
@@ -407,15 +435,11 @@ class HeatingControllerConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_trv(
         self, user_input: dict[str, Any] | None = None
     ) -> Any:
-        if user_input is not None:
-            self._pending_trv = dict(user_input)
-            return await self.async_step_trv_details()
-
-        return self.async_show_form(
-            step_id="trv",
-            data_schema=_trv_step_schema(),
-            description_placeholders={"index": str(self._trv_index + 1)},
-        )
+        form = await _async_trv_step(self, user_input, self._trv_index)
+        if form is not None:
+            return form
+        self._pending_trv = dict(user_input)
+        return await self.async_step_trv_details()
 
     async def async_step_trv_details(
         self, user_input: dict[str, Any] | None = None
@@ -503,15 +527,13 @@ class HeatingControllerOptionsFlow(OptionsFlow):
     async def async_step_trv(
         self, user_input: dict[str, Any] | None = None
     ) -> Any:
-        if user_input is not None:
-            self._pending_trv = dict(user_input)
-            return await self.async_step_trv_details()
-
-        return self.async_show_form(
-            step_id="trv",
-            data_schema=_trv_step_schema(self._trv_defaults()),
-            description_placeholders={"index": str(self._trv_index + 1)},
+        form = await _async_trv_step(
+            self, user_input, self._trv_index, self._trv_defaults()
         )
+        if form is not None:
+            return form
+        self._pending_trv = dict(user_input)
+        return await self.async_step_trv_details()
 
     async def async_step_trv_details(
         self, user_input: dict[str, Any] | None = None

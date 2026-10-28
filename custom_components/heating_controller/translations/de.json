@@ -12,12 +12,11 @@
       "trv": {
         "title": "Heizkörperthermostat {index}",
         "data": {
-          "entity_id": "Climate-Entity des Thermostats",
-          "trv_active_switch": "TRV-Aktiv-Switch (optional)",
-          "emitter_type": "Heizkörpertyp",
-          "min_target_temperature_c": "Minimale Zieltemperatur (°C)",
-          "max_target_temperature_c": "Maximale Zieltemperatur (°C)",
-          "target_temperature_step_c": "Zieltemperatur-Schrittweite (°C)"
+          "device_id": "Thermostat-Gerät",
+          "emitter_type": "Heizkörpertyp"
+        },
+        "data_description": {
+          "device_id": "Wählbar sind nur Geräte mit Geräteprofil; weitere Modelle per Issue anfragen, siehe README."
         }
       },
       "trv_details": {
@@ -73,12 +72,18 @@
           "flow_gate_hold_time_s": "Überschuss-Gate: Haltezeit vor dem Schließen (s)",
           "max_sensor_age_s": "Max. Sensoralter (s)",
           "stationary_range_c": "Stationäre Spannweite fürs Lernen (K)",
-          "target_band_c": "Zielband unter Sollwert (K)"
+          "target_band_c": "Zielband unter Sollwert (K)",
+          "trv_setpoint_mode": "TRV-Sollwert-Modus"
         }
       }
     },
     "abort": {
       "already_configured": "Dieser Raum ist bereits konfiguriert."
+    },
+    "error": {
+      "device_missing": "Dieses Gerät gibt es nicht mehr.",
+      "unsupported_device": "Für dieses Gerät gibt es kein Geräteprofil.",
+      "climate_missing": "Das Gerät hat keine eindeutige aktive Climate-Entity."
     }
   },
   "options": {
@@ -86,12 +91,11 @@
       "trv": {
         "title": "Heizkörperthermostat {index}",
         "data": {
-          "entity_id": "Climate-Entity des Thermostats",
-          "trv_active_switch": "TRV-Aktiv-Switch (optional)",
-          "emitter_type": "Heizkörpertyp",
-          "min_target_temperature_c": "Minimale Zieltemperatur (°C)",
-          "max_target_temperature_c": "Maximale Zieltemperatur (°C)",
-          "target_temperature_step_c": "Zieltemperatur-Schrittweite (°C)"
+          "device_id": "Thermostat-Gerät",
+          "emitter_type": "Heizkörpertyp"
+        },
+        "data_description": {
+          "device_id": "Wählbar sind nur Geräte mit Geräteprofil; weitere Modelle per Issue anfragen, siehe README."
         }
       },
       "trv_details": {
@@ -147,9 +151,15 @@
           "flow_gate_hold_time_s": "Überschuss-Gate: Haltezeit vor dem Schließen (s)",
           "max_sensor_age_s": "Max. Sensoralter (s)",
           "stationary_range_c": "Stationäre Spannweite fürs Lernen (K)",
-          "target_band_c": "Zielband unter Sollwert (K)"
+          "target_band_c": "Zielband unter Sollwert (K)",
+          "trv_setpoint_mode": "TRV-Sollwert-Modus"
         }
       }
+    },
+    "error": {
+      "device_missing": "Dieses Gerät gibt es nicht mehr.",
+      "unsupported_device": "Für dieses Gerät gibt es kein Geräteprofil.",
+      "climate_missing": "Das Gerät hat keine eindeutige aktive Climate-Entity."
     }
   },
   "selector": {
@@ -184,6 +194,12 @@
         "medium": "Mittel (165 kJ/m²K)",
         "heavy": "Schwer (260 kJ/m²K)",
         "very_heavy": "Sehr schwer (370 kJ/m²K)"
+      }
+    },
+    "trv_setpoint_mode": {
+      "options": {
+        "absolute": "Absolut (über den TRV-Bereich verteilt)",
+        "relative": "Relativ (über der TRV-eigenen Messung)"
       }
     }
   },
@@ -239,6 +255,9 @@
       "radiator_heating_power": {
         "name": "Heizkörperleistung"
       },
+      "measured_heating_power": {
+        "name": "Heizleistung aus Ventilstellung"
+      },
       "disturbance_power": {
         "name": "Fremdwärme"
       },
@@ -248,24 +267,50 @@
       "base_temperature": {
         "name": "Basistemperatur"
       },
-      "mpc_learning_status": {
-        "name": "MPC-Lernstatus",
-        "state": {
-          "learned": "Gelernt",
-          "disabled": "Deaktiviert",
-          "no_correction": "Kein Lernbedarf",
-          "disturbed": "Messfenster gestört",
-          "suppressed": "Unterdrückt",
-          "waiting_interval": "Wartet",
-          "outside_window": "Außerhalb des Lernfensters",
-          "paused": "Pausiert"
-        }
-      },
       "ua_factor": {
         "name": "UA-Faktor"
       },
       "capacity_factor": {
         "name": "Kapazitätsfaktor"
+      },
+      "ua_learning_status": {
+        "name": "UA-Lernstatus",
+        "state": {
+          "learned": "Gelernt",
+          "learned_at_limit": "Bis zur Grenze gelernt",
+          "collecting": "Sammelt",
+          "coasting": "Wartet auf Einpendeln",
+          "outside_window": "Außerhalb des Lernfensters",
+          "paused": "Pausiert",
+          "gap": "Verworfen: Datenlücke",
+          "drift": "Verworfen: Drift",
+          "small_temperature_difference": "Verworfen: milde Nacht",
+          "too_short": "Verworfen: zu kurz",
+          "implausible_target": "Verworfen: unplausibles Ziel",
+          "storage_dominated": "Verworfen: Speicherwärme überwiegt",
+          "room_sensor_fallback": "Raumsensor fehlt",
+          "window_open": "Fenster offen",
+          "valve_position_missing": "Ventilstellung fehlt",
+          "trv_adapting": "TRV kalibriert"
+        }
+      },
+      "capacity_learning_status": {
+        "name": "Kapazitäts-Lernstatus",
+        "state": {
+          "learned": "Gelernt",
+          "stationary": "Raum stationär",
+          "small_error": "Fehler zu klein",
+          "small_change": "Änderung zu klein",
+          "outside_window": "Außerhalb des Lernfensters",
+          "disturbed": "Messfenster gestört",
+          "suppressed": "Unterdrückt",
+          "room_sensor_fallback": "Raumsensor fehlt",
+          "paused": "Pausiert",
+          "waiting": "Wartet",
+          "disabled": "Deaktiviert",
+          "valve_position_missing": "Ventilstellung fehlt",
+          "trv_adapting": "TRV kalibriert"
+        }
       }
     }
   },

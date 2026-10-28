@@ -159,6 +159,12 @@ class RoomMpcSensors:
             SensorEntry(max_age_s, name=f"trv{index}")
             for index, _ in enumerate(trvs[:MAX_TRV_COUNT])
         ]
+        self._valve_positions = [
+            SensorEntry(max_age_s, name=f"valve{index}", outlier_filter=False)
+            if trv.valve_position_configured
+            else None
+            for index, trv in enumerate(trvs[:MAX_TRV_COUNT])
+        ]
         self._room_sensor = SensorEntry(max_age_s, name="room")
         self._outdoor_temperature_sensor = SensorEntry(max_age_s, name="outdoor")
         # Flow temperature jumps are physical (compressor start, defrost, a DHW
@@ -167,6 +173,10 @@ class RoomMpcSensors:
         self._flow_temperature_sensor = SensorEntry(
             max_age_s, name="flow", outlier_filter=False
         )
+        self._trv_adapting = False
+
+    def set_trv_adapting(self, adapting: bool) -> None:
+        self._trv_adapting = adapting
 
     def set_trv_temperature(
         self, index: int, value: float | None, now_ts: float | None = None
@@ -174,6 +184,15 @@ class RoomMpcSensors:
         if index >= len(self._trv_temperatures):
             return
         self._trv_temperatures[index].set_value(value, now_ts)
+
+    def set_valve_position(
+        self, index: int, value: float | None, now_ts: float | None = None
+    ) -> None:
+        if index >= len(self._valve_positions):
+            return
+        entry = self._valve_positions[index]
+        if entry is not None:
+            entry.set_value(value, now_ts)
 
     def set_room_sensor_temperature(
         self, value: float | None, now_ts: float | None = None
@@ -246,6 +265,15 @@ class RoomMpcSensors:
                 ),
             )
 
+        valve_positions_pct = [
+            entry.get_fresh_value(now_ts) if entry is not None else None
+            for entry in self._valve_positions
+        ]
+        valve_position_missing = any(
+            entry is not None and position is None
+            for entry, position in zip(self._valve_positions, valve_positions_pct)
+        )
+
         return RoomMpcInputResult(
             valid=True,
             input=RoomMpcInput(
@@ -258,5 +286,8 @@ class RoomMpcSensors:
                 trv_temperatures=room_temperature_result.trv_temperatures,
                 room_sensor_temp_c=room_temperature_result.room_sensor_temp_c,
                 room_sensor_fallback=room_temperature_result.room_sensor_fallback,
+                valve_positions_pct=valve_positions_pct,
+                valve_position_missing=valve_position_missing,
+                trv_adapting=self._trv_adapting,
             ),
         )

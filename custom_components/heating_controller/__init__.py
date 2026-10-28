@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers import (
     config_validation as cv,
+)
+from homeassistant.helpers import (
+    device_registry as dr,
 )
 from homeassistant.helpers import (
     entity_registry as er,
@@ -25,8 +30,14 @@ from .const import (
     CONF_FLOW_THRESHOLD,
     CONF_ROOM_NAME,
     CONF_TARGET_BAND,
+    CONF_TRV_DEVICE_ID,
+    CONF_TRV_SETPOINT_MODE,
+    CONF_TRVS,
     DEFAULT_TARGET_BAND_C,
+    DEFAULT_TRV_SETPOINT_MODE,
     DOMAIN,
+    LEGACY_CONF_TRV_ENTITY_ID,
+    LEGACY_TRV_KEYS,
     SERVICE_RECALIBRATE,
     SERVICE_UNBLOCK,
 )
@@ -36,6 +47,13 @@ from .controller.mpc.models.capacity import (
 )
 from .controller.mpc.models.loss import MAX_LEARNED_UA_FACTOR, MIN_LEARNED_UA_FACTOR
 from .coordinator import HeatingRoomCoordinator
+from .profiles import (
+    DeviceProfile,
+    TrvResolveError,
+    async_get_profiles,
+    find_profile,
+    resolve_trv,
+)
 from .store import FlowGateStateStore, LearningFactorsStore, ObserverStateStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -83,7 +101,16 @@ PLATFORMS = [
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await frontend.async_setup(hass)
 
-    coordinator = HeatingRoomCoordinator(hass, entry)
+    profiles = await async_get_profiles(hass)
+    try:
+        trvs = [resolve_trv(hass, profiles, trv) for trv in entry.data[CONF_TRVS]]
+    except TrvResolveError as err:
+        raise ConfigEntryError(
+            f"Room {entry.data[CONF_ROOM_NAME]}: {err}; pick the TRV again "
+            "through the options flow"
+        ) from err
+
+    coordinator = HeatingRoomCoordinator(hass, entry, trvs)
     await coordinator.async_setup()
 
     hass.data.setdefault(DOMAIN, {})
@@ -121,7 +148,52 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         data = dict(entry.data)
         data[CONF_TARGET_BAND] = DEFAULT_TARGET_BAND_C
         hass.config_entries.async_update_entry(entry, data=data, version=4)
+    if entry.version == 4:
+        # Linked a guessed valve position entity; the device profile of
+        # version 7 names it instead.
+        hass.config_entries.async_update_entry(entry, version=5)
+    if entry.version == 5:
+        # Relative targets for every room: the rooms influence each other, so
+        # they switch together; the options flow can set one back.
+        data = dict(entry.data)
+        data[CONF_TRV_SETPOINT_MODE] = DEFAULT_TRV_SETPOINT_MODE.value
+        hass.config_entries.async_update_entry(entry, data=data, version=6)
+    if entry.version == 6:
+        # A TRV is its device now; the profile names its entities and range.
+        profiles = await async_get_profiles(hass)
+        trvs = []
+        for trv in entry.data[CONF_TRVS]:
+            migrated = _trv_by_device(hass, profiles, trv)
+            if migrated is None:
+                _LOGGER.error(
+                    "Room %s: %s is not a supported TRV device; see the README "
+                    "on supported devices and open an issue for this model",
+                    entry.data.get(CONF_ROOM_NAME),
+                    trv.get(LEGACY_CONF_TRV_ENTITY_ID),
+                )
+                return False
+            trvs.append(migrated)
+        data = {**entry.data, CONF_TRVS: trvs}
+        hass.config_entries.async_update_entry(entry, data=data, version=7)
     return True
+
+
+def _trv_by_device(
+    hass: HomeAssistant, profiles: tuple[DeviceProfile, ...], trv: dict[str, Any]
+) -> dict[str, Any] | None:
+    """The TRV stored by the device of its climate entity, if a profile covers it."""
+    if CONF_TRV_DEVICE_ID in trv:
+        return trv
+    registry_entry = er.async_get(hass).async_get(trv.get(LEGACY_CONF_TRV_ENTITY_ID, ""))
+    if registry_entry is None or registry_entry.device_id is None:
+        return None
+    device = dr.async_get(hass).async_get(registry_entry.device_id)
+    if device is None or find_profile(hass, profiles, device) is None:
+        return None
+    return {
+        CONF_TRV_DEVICE_ID: device.id,
+        **{key: value for key, value in trv.items() if key not in LEGACY_TRV_KEYS},
+    }
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

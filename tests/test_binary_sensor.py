@@ -5,7 +5,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from heating_controller.const import DOMAIN
 
-from test_coordinator import ENTRY_DATA, _seed_entities
+from test_coordinator import ENTRY_DATA, _room_data, _seed_entities
 
 
 def _register_stub_services(hass: HomeAssistant) -> None:
@@ -27,7 +27,7 @@ async def _setup(hass: HomeAssistant, data: dict) -> None:
 
 
 async def test_exposes_configured_window_contacts(hass: HomeAssistant) -> None:
-    await _setup(hass, ENTRY_DATA)
+    await _setup(hass, _room_data(hass))
 
     state = hass.states.get("binary_sensor.wohnzimmer_heating_automation")
     assert state is not None
@@ -37,7 +37,7 @@ async def test_exposes_configured_window_contacts(hass: HomeAssistant) -> None:
 
 
 async def test_window_contacts_empty_when_room_has_none(hass: HomeAssistant) -> None:
-    data = {**ENTRY_DATA, "window_contact_entities": []}
+    data = {**_room_data(hass), "window_contact_entities": []}
     await _setup(hass, data)
 
     state = hass.states.get("binary_sensor.wohnzimmer_heating_automation")
@@ -46,7 +46,7 @@ async def test_window_contacts_empty_when_room_has_none(hass: HomeAssistant) -> 
 
 
 async def test_window_contacts_present_when_key_missing(hass: HomeAssistant) -> None:
-    data = {k: v for k, v in ENTRY_DATA.items() if k != "window_contact_entities"}
+    data = {k: v for k, v in _room_data(hass).items() if k != "window_contact_entities"}
     await _setup(hass, data)
 
     state = hass.states.get("binary_sensor.wohnzimmer_heating_automation")
@@ -58,7 +58,7 @@ async def test_exposes_only_room_specific_comfort_conditions(
     hass: HomeAssistant,
 ) -> None:
     data = {
-        **ENTRY_DATA,
+        **_room_data(hass),
         "room_comfort_condition_entities": ["input_boolean.gast_zu_besuch"],
     }
     await _setup(hass, data)
@@ -71,8 +71,8 @@ async def test_exposes_only_room_specific_comfort_conditions(
 
 
 async def test_comfort_conditions_empty_when_key_missing(hass: HomeAssistant) -> None:
-    assert "room_comfort_condition_entities" not in ENTRY_DATA
-    await _setup(hass, ENTRY_DATA)
+    assert "room_comfort_condition_entities" not in _room_data(hass)
+    await _setup(hass, _room_data(hass))
 
     state = hass.states.get("binary_sensor.wohnzimmer_heating_automation")
     assert state is not None

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from ...const import RoomTemperatureStrategy
@@ -41,6 +41,13 @@ class RoomMpcInput:
     room_sensor_temp_c: float | None = None
     # A room sensor is configured but stale or missing, so the TRVs stand in.
     room_sensor_fallback: bool = False
+    # Valve opening per TRV in %, None where none is configured or reported.
+    valve_positions_pct: list[float | None] = field(default_factory=list)
+    # A valve position entity is configured but stale or unavailable.
+    valve_position_missing: bool = False
+    # A TRV calibrates its valve: it moves the valve by itself, whatever the
+    # controller asks for.
+    trv_adapting: bool = False
 
 
 @dataclass
@@ -63,6 +70,8 @@ class RoomMpcResult:
     recovery_flow_temperature_c: float | None = None
     recovery_flow_saturated: bool = False
     flow_gate_closed: bool = False
+    # Heat at the reported valve openings, before the radiator lag.
+    measured_heating_power_w: float | None = None
     # Observer state the demand was planned from.
     estimated_room_temperature_c: float | None = None
     radiator_power_w: float | None = None

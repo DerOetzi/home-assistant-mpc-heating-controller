@@ -270,3 +270,113 @@ def test_emitter_without_dimensions_has_no_lag():
 
     assert model.heat_capacity_j_per_k == 0
     assert model.time_constant_s(21.0, 40.0, 50.0, heating_up=True) == 0
+
+
+def test_power_fraction_follows_the_radiator_not_the_valve():
+    model = make_model([TrvConfig(name="trv", width_mm=1000, height_mm=600)])
+    fractions = [
+        model.power_fraction_at_opening(pct, 40.0, 20.0, 1.3)
+        for pct in (0, 10, 20, 50, 80, 100)
+    ]
+
+    assert fractions[0] == 0
+    assert fractions[-1] == pytest.approx(1.0)
+    assert fractions == sorted(fractions)
+    # Less water cools further: a small opening still gives a large share.
+    assert 0.35 < fractions[1] < 0.55
+    assert 0.8 < fractions[3] < 0.95
+
+
+def test_measured_power_mixes_reported_openings_and_demand():
+    model = make_model(
+        [
+            TrvConfig(name="a", width_mm=1000, height_mm=600),
+            TrvConfig(name="b", width_mm=1000, height_mm=600),
+        ]
+    )
+    available = model.calculate_available_heating_power_w(20.0, 40.0)
+
+    full = model.calculate_measured_heating_power_w(20.0, 40.0, [100, 100], 0)
+    by_demand = model.calculate_measured_heating_power_w(20.0, 40.0, [None, None], 30)
+    mixed = model.calculate_measured_heating_power_w(20.0, 40.0, [0, None], 50)
+
+    assert full == pytest.approx(available, abs=0.05)
+    assert by_demand == pytest.approx(available * 0.3, abs=0.05)
+    assert mixed == pytest.approx(available / 2 * 0.5, abs=0.05)
+
+
+def _relative_model():
+    from heating_controller.const import TrvSetpointMode
+
+    model = make_model(
+        [
+            TrvConfig(
+                name="trv",
+                width_mm=1000,
+                height_mm=600,
+                min_target_temperature_c=5.0,
+                max_target_temperature_c=30.0,
+                target_temperature_step_c=0.5,
+            )
+        ]
+    )
+    return model, TrvSetpointMode.RELATIVE
+
+
+def test_relative_target_sits_a_step_above_the_trv_reading():
+    model, mode = _relative_model()
+
+    closed = model.calculate_target_temperatures(2, mode, [19.3])
+    small = model.calculate_target_temperatures(10, mode, [19.3])
+    full = model.calculate_target_temperatures(100, mode, [19.3])
+
+    assert closed == [5.0]
+    # Just above the reading, rounded up to the TRV's step.
+    assert 19.4 <= small[0] <= 20.0
+    assert full == [22.5]
+
+
+def test_the_smallest_demand_keeps_a_valve_barely_open():
+    model, mode = _relative_model()
+
+    # 5 % keeps an open valve open with less than half a kelvin of step, so
+    # the TRV can hold it slightly open instead of the room pulsing.
+    trickle = model.calculate_target_temperatures(5, mode, [21.6], [22.0])
+
+    assert trickle == [22.0]
+    assert trickle[0] - 21.6 < 0.5
+
+
+def test_relative_target_keeps_the_current_one_within_a_step():
+    model, mode = _relative_model()
+
+    # 10 % demand: about 0.6 K above 19.4 °C, rounded up to 20.0 °C.
+    kept = model.calculate_target_temperatures(10, mode, [19.4], [20.0])
+    replaced = model.calculate_target_temperatures(10, mode, [20.1], [20.0])
+
+    # Still above the reading and within a step: no write.
+    assert kept == [20.0]
+    # The reading caught up with it: the target moves on.
+    assert replaced[0] > 20.1
+
+
+def test_relative_target_without_a_reading_uses_the_absolute_mapping():
+    model, mode = _relative_model()
+    from heating_controller.const import TrvSetpointMode
+
+    assert model.calculate_target_temperatures(
+        40, mode, [None]
+    ) == model.calculate_target_temperatures(40, TrvSetpointMode.ABSOLUTE)
+
+
+def test_a_shut_valve_needs_more_demand_to_open_than_to_stay_open():
+    model, mode = _relative_model()
+
+    # 5 % keeps an open valve open, but does not open a shut one.
+    stays_open = model.calculate_target_temperatures(5, mode, [19.4], [20.0])
+    stays_shut = model.calculate_target_temperatures(5, mode, [19.4], [5.0])
+    opens = model.calculate_target_temperatures(10, mode, [19.4], [5.0])
+
+    assert stays_open[0] > 19.4
+    assert stays_shut == [5.0]
+    assert opens[0] > 19.4

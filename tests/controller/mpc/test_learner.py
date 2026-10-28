@@ -10,7 +10,9 @@ from heating_controller.const import (
     UaBalanceOutcome,
 )
 from heating_controller.controller.mpc.learner import (
+    UA_BALANCE_MAX_DRIFT_C,
     UA_BALANCE_MAX_INTERRUPTION_S,
+    UA_BALANCE_MIN_TARGET_FACTOR,
     UA_BALANCE_MAX_WINDOW_S,
     UA_BALANCE_MIN_WINDOW_S,
     UA_BALANCE_WEIGHT,
@@ -40,10 +42,13 @@ def make_input(
     outdoor_temp_c=-5.0,
     flow_temp_c=45.0,
     room_sensor_fallback=False,
+    valve_position_missing=False,
+    target_temp_c=21.0,
+    trv_adapting=False,
 ):
     return RoomMpcInput(
         now_ts=now_ts,
-        target_temp_c=21.0,
+        target_temp_c=target_temp_c,
         room_temp_c=room_temp_c,
         outdoor_temp_c=outdoor_temp_c,
         flow_temp_c=flow_temp_c,
@@ -54,6 +59,8 @@ def make_input(
         ),
         trv_temperatures=[room_temp_c],
         room_sensor_fallback=room_sensor_fallback,
+        valve_position_missing=valve_position_missing,
+        trv_adapting=trv_adapting,
     )
 
 
@@ -371,6 +378,10 @@ def _feed_night(
     room_temps=None,
     skip=(),
     room_sensor_fallback=False,
+    valve_position_missing=False,
+    # The balance nights hold the room at its setpoint.
+    target_temp_c=20.0,
+    trv_adapting=False,
 ):
     count = int(hours * 3600 / STEP_S) + 1
     for index in range(count):
@@ -383,6 +394,9 @@ def _feed_night(
                 outdoor_temp_c=outdoor_temp_c,
                 flow_temp_c=40.0,
                 room_sensor_fallback=room_sensor_fallback,
+                valve_position_missing=valve_position_missing,
+                target_temp_c=target_temp_c,
+                trv_adapting=trv_adapting,
             ),
             applied_heating_power_w=power_w,
             radiator_power_w=power_w,
@@ -525,6 +539,7 @@ def test_heat_balance_counts_hot_water_charges_as_no_heating():
                 room_temp_c=20.0,
                 outdoor_temp_c=0.0,
                 flow_temp_c=55.0 if charging else 40.0,
+                target_temp_c=20.0,
             ),
             applied_heating_power_w=5000.0 if charging else 312.5,
             radiator_power_w=5000.0 if charging else 312.5,
@@ -779,7 +794,10 @@ def test_balance_info_reports_collecting_with_its_start():
     ("kwargs", "outcome"),
     [
         (
-            {"room_temps": [21.0 - 0.5 * i / (NIGHT_COUNT - 1) for i in range(NIGHT_COUNT)]},
+            {
+                "room_temps": [21.0 - 0.5 * i / (NIGHT_COUNT - 1) for i in range(NIGHT_COUNT)],
+                "target_temp_c": 21.0,
+            },
             UaBalanceOutcome.DRIFT,
         ),
         ({"skip": range(20, 26)}, UaBalanceOutcome.GAP),
@@ -812,11 +830,8 @@ def test_balance_info_reports_an_inactive_learning_window():
     assert info.collecting_since_ts is None
 
 
-@pytest.mark.parametrize(
-    ("power_w", "target_factor"),
-    [(0.0, 0.0), (62.5, 0.1), (1500.0, 2.4)],
-)
-def test_heat_balance_discards_an_implausible_target(power_w, target_factor):
+def test_heat_balance_discards_a_target_above_the_limit():
+    power_w, target_factor = 1500.0, 2.4
     learner, loss_model, _ = make_learner()
     learner.enable()
 
@@ -830,6 +845,46 @@ def test_heat_balance_discards_an_implausible_target(power_w, target_factor):
     assert info.last_drift_c == pytest.approx(0.0)
     assert info.last_learned_ts is None
     assert learner.consume_persisted_learning_factors() is None
+
+
+@pytest.mark.parametrize(
+    ("power_w", "target_factor"),
+    [(0.0, 0.0), (62.5, 0.1)],
+)
+def test_heat_balance_learns_a_low_target_only_down_to_the_limit(
+    power_w, target_factor
+):
+    # A room that lives off its neighbours: the factor moves towards the
+    # limit, the measured target stays visible.
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    _feed_night(learner, power_w=power_w)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.LEARNED_AT_LIMIT
+    assert loss_model.learned_ua_factor == pytest.approx(
+        _expected_factor(UA_BALANCE_MIN_TARGET_FACTOR)
+    )
+    assert info.last_target_factor == pytest.approx(target_factor)
+    assert info.last_learned_ts is not None
+    assert learner.consume_persisted_learning_factors() is not None
+
+
+def test_drift_is_reported_without_a_target():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    falling = [21.0 - 0.5 * index / (NIGHT_COUNT - 1) for index in range(NIGHT_COUNT)]
+    _feed_night(learner, room_temps=falling, target_temp_c=21.0)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.DRIFT
+    assert info.last_drift_c == pytest.approx(-0.47, abs=0.03)
+    assert info.last_target_factor is None
+    assert loss_model.learned_ua_factor == 1.0
 
 
 def test_heat_balance_discards_a_stretch_dominated_by_stored_heat():
@@ -853,12 +908,13 @@ def test_discarded_stretch_is_not_balanced_again():
     learner, loss_model, _ = make_learner()
     learner.enable()
 
-    end_ts = _feed_night(learner, power_w=0.0)
+    # A target of 2.4: above the plausible limit, discarded.
+    end_ts = _feed_night(learner, power_w=1500.0)
     learner.run_learning_cycle()
     learner.append_history(
         make_input(end_ts + STEP_S, room_temp_c=20.0, outdoor_temp_c=0.0, flow_temp_c=40.0),
-        applied_heating_power_w=0.0,
-        radiator_power_w=0.0,
+        applied_heating_power_w=1500.0,
+        radiator_power_w=1500.0,
     )
     learner.run_learning_cycle()
 
@@ -1138,3 +1194,251 @@ def test_capacity_replay_without_radiator_output_sees_the_error():
 
     assert learner.get_capacity_outcome() == CapacityOutcome.LEARNED
     assert capacity_model.learned_capacity_factor != 1.0
+
+
+def _coasting_then_settled():
+    # Starts 0.6 K above the 21 °C setpoint and coasts down over two hours,
+    # then holds just above it.
+    coast_steps = 24
+    return [
+        21.6 - 0.55 * min(index, coast_steps) / coast_steps
+        for index in range(NIGHT_COUNT)
+    ]
+
+
+def test_heat_balance_starts_once_the_room_has_settled():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    temps = _coasting_then_settled()
+    end_ts = _feed_night(learner, hours=6, room_temps=temps, target_temp_c=21.0)
+    learner.run_learning_cycle()
+
+    settled_index = next(i for i, t in enumerate(temps) if t <= 21.1)
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.COLLECTING
+    assert info.collecting_since_ts == NIGHT_START_TS + settled_index * STEP_S
+
+    learner.set_learning_window_active(False, end_ts + 60)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    # Balanced from the start the drift would be about -0.55 K.
+    assert info.outcome == UaBalanceOutcome.LEARNED
+    assert abs(info.last_drift_c) < 0.1
+    assert loss_model.learned_ua_factor < 1.0
+
+
+def test_heat_balance_reports_a_room_that_never_settles():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    # Coasting down 0.1 K an hour all night, always above setpoint + 0.1 K.
+    coasting = [22.5 - 0.1 * index * STEP_S / 3600 for index in range(NIGHT_COUNT)]
+    _feed_night(learner, room_temps=coasting)
+    learner.run_learning_cycle()
+
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.COASTING
+    assert loss_model.learned_ua_factor == 1.0
+
+
+def test_heat_balance_starts_once_a_room_above_setpoint_holds_still():
+    # Kept above its setpoint by its neighbours, the room never comes down:
+    # an hour without a trend is enough to start the stretch, and that hour
+    # counts.
+    learner, _, _ = make_learner()
+    learner.enable()
+
+    _feed_night(learner, hours=3, room_temp_c=21.4, target_temp_c=21.0)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.COLLECTING
+    assert info.collecting_since_ts == NIGHT_START_TS
+
+
+def test_a_still_room_counts_from_the_start_of_its_still_hour():
+    # Coasting down from above its setpoint for an hour, then held above it
+    # by its neighbours: the stretch starts where the room stopped moving.
+    learner, _, _ = make_learner()
+    learner.enable()
+
+    coast_steps = 12
+    temps = [21.8 - 0.4 * min(index, coast_steps) / coast_steps for index in range(37)]
+    _feed_night(learner, hours=3, room_temps=temps, target_temp_c=21.0)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.COLLECTING
+    # The fitted hour already reads still with the last few coasting minutes
+    # in it, a few hundredths of a kelvin.
+    still_since_ts = NIGHT_START_TS + coast_steps * STEP_S
+    assert info.collecting_since_ts == pytest.approx(still_since_ts, abs=3 * STEP_S)
+    assert info.collecting_since_ts < NIGHT_START_TS + 2 * 3600
+
+
+def _pulsing_temps():
+    # Heating pulses every 2.5 hours lift the room 0.5 K, then it coasts back;
+    # the night ends on a peak. The edges differ by ~0.35 K, the trend is flat.
+    period = 30
+    temps = []
+    for index in range(NIGHT_COUNT):
+        phase = index % period
+        temps.append(20.95 + (0.5 * phase / 6 if phase < 6 else 0.5 - 0.5 * (phase - 6) / 24))
+    return temps
+
+
+@pytest.mark.parametrize(
+    "temps",
+    [
+        pytest.param(_pulsing_temps(), id="heating pulses"),
+        # A room sensor reporting once an hour: one low report in the last
+        # half hour.
+        pytest.param([21.0] * (NIGHT_COUNT - 6) + [20.67] * 6, id="hourly sensor"),
+        # A hot-water dip in the first half hour.
+        pytest.param([20.7] * 6 + [21.0] * (NIGHT_COUNT - 6), id="dip at the start"),
+    ],
+)
+def test_drift_follows_the_trend_not_the_edges(temps):
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    _feed_night(learner, room_temps=temps, target_temp_c=21.0)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome != UaBalanceOutcome.DRIFT
+    assert abs(info.last_drift_c) < UA_BALANCE_MAX_DRIFT_C
+    assert loss_model.learned_ua_factor != 1.0
+
+
+def test_drift_weights_samples_by_the_time_they_stand_for():
+    learner, _, _ = make_learner()
+    learner.enable()
+
+    # Flat at 21 °C, but a burst of samples a minute apart in the last half
+    # hour reads 20.5 °C for only five minutes. Counted per sample it would
+    # tilt the trend; weighted by time it hardly does.
+    end_ts = _feed_night(learner, hours=7.5, room_temp_c=21.0, target_temp_c=21.0)
+    for minute in range(1, 6):
+        learner.append_history(
+            make_input(end_ts + minute * 60, room_temp_c=20.5, outdoor_temp_c=0.0, flow_temp_c=40.0),
+            applied_heating_power_w=312.5,
+            radiator_power_w=312.5,
+        )
+    _feed_night(
+        learner, hours=0.5, start_ts=end_ts + 6 * 60, room_temp_c=21.0, target_temp_c=21.0
+    )
+    learner.run_learning_cycle()
+
+    window = learner._history
+    times = [entry.timestamp for entry in window]
+    temps = [entry.room_temperature_c for entry in window]
+    mean_t = sum(times) / len(times)
+    mean_c = sum(temps) / len(temps)
+    per_sample_drift = (
+        sum((t - mean_t) * (c - mean_c) for t, c in zip(times, temps))
+        / sum((t - mean_t) ** 2 for t in times)
+        * (times[-1] - times[0])
+    )
+    weighted_drift = learner.get_ua_balance_info().last_drift_c
+    assert abs(weighted_drift) < 0.03
+    assert abs(weighted_drift) < abs(per_sample_drift) / 2
+
+
+def test_capacity_skips_windows_without_a_valve_position():
+    learner, _, capacity_model = make_learner()
+    learner.enable()
+    inputs = _inputs(RISING)
+    inputs[2] = make_input(
+        inputs[2].now_ts, room_temp_c=RISING[2], valve_position_missing=True
+    )
+
+    _evaluate_window(learner, inputs, power_w=2000.0)
+
+    assert learner.get_capacity_outcome() == CapacityOutcome.VALVE_POSITION_MISSING
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_missing_valve_position_balances_the_stretch_before_it():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    end_ts = _feed_night(learner, hours=5)
+    _feed_night(
+        learner, hours=0.5, start_ts=end_ts + STEP_S, valve_position_missing=True
+    )
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.LEARNED
+    assert info.last_window_s == pytest.approx(5 * 3600)
+
+
+def test_missing_valve_position_blocks_the_heat_balance_and_the_disturbance():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    _feed_night(learner, valve_position_missing=True)
+    learner.run_learning_cycle()
+
+    assert (
+        learner.get_ua_balance_info().outcome
+        == UaBalanceOutcome.VALVE_POSITION_MISSING
+    )
+    assert loss_model.learned_ua_factor == 1.0
+    assert not learner.disturbance_update_allowed(time.time(), False)
+
+
+def test_capacity_skips_windows_while_a_trv_adapts():
+    learner, _, capacity_model = make_learner()
+    learner.enable()
+    inputs = _inputs(RISING)
+    inputs[2] = make_input(inputs[2].now_ts, room_temp_c=RISING[2], trv_adapting=True)
+
+    _evaluate_window(learner, inputs, power_w=2000.0)
+
+    assert learner.get_capacity_outcome() == CapacityOutcome.TRV_ADAPTING
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_an_adapting_trv_ends_the_stretch_before_it():
+    learner, _, _ = make_learner()
+    learner.enable()
+
+    end_ts = _feed_night(learner, hours=5)
+    _feed_night(learner, hours=0.5, start_ts=end_ts + STEP_S, trv_adapting=True)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.LEARNED
+    assert info.last_window_s == pytest.approx(5 * 3600)
+
+
+def test_an_adapting_trv_blocks_the_heat_balance_and_the_disturbance():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    _feed_night(learner, trv_adapting=True)
+    learner.run_learning_cycle()
+
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.TRV_ADAPTING
+    assert loss_model.learned_ua_factor == 1.0
+    assert not learner.disturbance_update_allowed(time.time(), False)
+
+
+def test_heat_balance_starts_once_a_room_below_setpoint_has_recovered():
+    # Back from a valve calibration that kept the radiator shut, the room
+    # climbs back to its setpoint; the stretch starts once it is within the
+    # margin below the target band, not while it still recovers.
+    learner, _, _ = make_learner()
+    learner.enable()
+
+    temps = [min(20.4 + 0.05 * index, 21.0) for index in range(NIGHT_COUNT)]
+    _feed_night(learner, hours=6, room_temps=temps, target_temp_c=21.0)
+    learner.run_learning_cycle()
+
+    recovered_index = next(i for i, t in enumerate(temps) if t >= 20.9 - 1e-9)
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.COLLECTING
+    assert info.collecting_since_ts == NIGHT_START_TS + recovered_index * STEP_S

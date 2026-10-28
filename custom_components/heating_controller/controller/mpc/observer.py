@@ -33,8 +33,12 @@ OBSERVER_MAX_GAP_S = 30 * 60
 # fully open not any more. A room coasting above its setpoint on stored heat
 # (walls after the day, an overshoot) would otherwise be booked as a lasting
 # gain, a room the radiators cannot lift as a lasting loss -- both push the
-# demand further into the limit it already sits at. Below the TRVs' minimum
-# active demand the valve counts as shut.
+# demand further into the limit it already sits at. Moving the other way is
+# only allowed where the controller actually needs out of the limit: below the
+# target band with the valve shut, above the setpoint with it fully open.
+# Otherwise sensor steps against the held direction would ratchet the
+# disturbance one way (a room above setpoint, valve shut, 0.1 K steps down).
+# Below the TRVs' minimum active demand the valve counts as shut.
 VALVE_SHUT_DEMAND_PCT = MIN_ACTIVE_DEMAND * 100
 VALVE_FULL_DEMAND_PCT = 95.0
 
@@ -53,16 +57,26 @@ def step_radiator_power_w(
     )
 
 
-def _drives_into_valve_limit(step_w: float, demand_pct: float) -> bool:
-    """Whether a disturbance step would push the demand past its limit.
+def _held_at_valve_limit(
+    step_w: float,
+    demand_pct: float,
+    room_temperature_c: float,
+    target_temperature_c: float,
+    target_band_c: float,
+) -> bool:
+    """Whether a disturbance step is held while the valve sits at a limit.
 
-    More disturbance means less demand, so a rise is held while the valve is
-    shut and a fall while it is fully open.
+    More disturbance means less demand. With the valve shut a rise is always
+    held and a fall only passes while the room is below the target band;
+    with it fully open a fall is always held and a rise only passes while
+    the room is above the setpoint.
     """
-    if step_w > 0:
-        return demand_pct < VALVE_SHUT_DEMAND_PCT
-    if step_w < 0:
-        return demand_pct >= VALVE_FULL_DEMAND_PCT
+    if step_w == 0:
+        return False
+    if demand_pct < VALVE_SHUT_DEMAND_PCT:
+        return step_w > 0 or room_temperature_c >= target_temperature_c - target_band_c
+    if demand_pct >= VALVE_FULL_DEMAND_PCT:
+        return step_w < 0 or room_temperature_c <= target_temperature_c
     return False
 
 
@@ -101,8 +115,10 @@ class RoomStateObserver:
         loss_model: RoomLossModel,
         capacity_model: ThermalCapacityModel,
         disturbance_limit_w: float,
+        target_band_c: float = 0.0,
     ) -> None:
         self._emitter_model = emitter_model
+        self._target_band_c = max(0.0, target_band_c)
         self._loss_model = loss_model
         self._capacity_model = capacity_model
         self._disturbance_limit_w = max(0.0, disturbance_limit_w)
@@ -177,7 +193,13 @@ class RoomStateObserver:
                 -max_step_w,
                 max_step_w,
             )
-            if _drives_into_valve_limit(step_w, state.demand_pct):
+            if _held_at_valve_limit(
+                step_w,
+                state.demand_pct,
+                measured_c,
+                mpc_input.target_temp_c,
+                self._target_band_c,
+            ):
                 step_w = 0.0
             disturbance_w = clamp(
                 disturbance_w + step_w,

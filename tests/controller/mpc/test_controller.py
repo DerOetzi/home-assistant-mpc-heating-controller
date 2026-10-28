@@ -662,3 +662,55 @@ def test_band_still_heats_fully_below_it(monkeypatch):
 
 def test_band_still_closes_above_the_setpoint(monkeypatch):
     assert _heavy_room_demand(monkeypatch, 0.1, 21.3) == 0
+
+
+def _valve_controller():
+    return RoomMpcController(
+        thermal_config=RoomThermalConfig(
+            room_heat_load_w=600, room_area_m2=15, construction=Construction.MEDIUM
+        ),
+        trvs=[TrvConfig(name="trv1", valve_position_configured=True)],
+        rate_limit_config=MpcRateLimitConfig(
+            demand_hysteresis_pct=0, hold_time_s=0, max_demand_step_pct=100
+        ),
+        max_sensor_age_s=1800,
+        room_sensor_configured=False,
+        target_band_c=0.0,
+    )
+
+
+def test_the_observer_follows_the_reported_valve_not_the_demand(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _valve_controller()
+    _feed(controller, 21.2)
+    controller.set_valve_position(0, 90.0)
+    first = controller.compute(target_temperature_c=21.0)
+    clock.advance(1800)
+    _feed(controller, 21.2)
+    controller.set_valve_position(0, 90.0)
+    later = controller.compute(target_temperature_c=21.0)
+
+    # A small demand, yet the TRV holds its valve 90 % open: the radiator
+    # gives off what the valve lets through.
+    assert first.result.demand_pct <= 10
+    assert (
+        first.result.measured_heating_power_w
+        > 5 * first.result.requested_heating_power_w
+    )
+    assert later.result.radiator_power_w > 0.5 * first.result.measured_heating_power_w
+
+
+def test_a_missing_valve_position_freezes_the_disturbance(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _valve_controller()
+    controller.enable_learning()
+    controller.restore_disturbance(100.0)
+    _feed(controller, 21.0)
+    first = controller.compute(target_temperature_c=21.0)
+    for _ in range(12):
+        clock.advance(300)
+        _feed(controller, 21.0)
+        result = controller.compute(target_temperature_c=21.0)
+
+    assert first.result.input.valve_position_missing is True
+    assert result.result.disturbance_w == 100.0

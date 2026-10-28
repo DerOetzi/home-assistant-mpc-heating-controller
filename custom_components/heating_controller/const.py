@@ -31,16 +31,23 @@ HEAT_SOURCE_ACTIVE_STATE = "heat"
 CONF_ROOM_NAME = "room_name"
 CONF_TRV_COUNT = "trv_count"
 CONF_TRVS = "trvs"
-CONF_TRV_ENTITY_ID = "entity_id"
+CONF_TRV_DEVICE_ID = "device_id"
 CONF_TRV_EMITTER_TYPE = "emitter_type"
-CONF_TRV_MIN_TARGET_TEMPERATURE = "min_target_temperature_c"
-CONF_TRV_MAX_TARGET_TEMPERATURE = "max_target_temperature_c"
-CONF_TRV_TARGET_TEMPERATURE_STEP = "target_temperature_step_c"
 CONF_TRV_RADIATOR_TYPE = "radiator_type"
 CONF_TRV_WIDTH_MM = "width_mm"
 CONF_TRV_HEIGHT_MM = "height_mm"
 CONF_TRV_NOMINAL_POWER_W = "nominal_power_w"
-CONF_TRV_ACTIVE_SWITCH = "trv_active_switch"
+# Up to config version 6 a TRV named its entities and target range itself;
+# since then its device profile does. Only the migration reads these.
+LEGACY_CONF_TRV_ENTITY_ID = "entity_id"
+LEGACY_TRV_KEYS = (
+    LEGACY_CONF_TRV_ENTITY_ID,
+    "trv_active_switch",
+    "valve_position_entity",
+    "min_target_temperature_c",
+    "max_target_temperature_c",
+    "target_temperature_step_c",
+)
 
 CONF_ROOM_SENSOR_ENTITY = "room_sensor_entity"
 CONF_WINDOW_CONTACT_ENTITIES = "window_contact_entities"
@@ -77,6 +84,7 @@ CONF_FLOW_GATE_HOLD_TIME = "flow_gate_hold_time_s"
 CONF_MAX_SENSOR_AGE = "max_sensor_age_s"
 CONF_STATIONARY_RANGE = "stationary_range_c"
 CONF_TARGET_BAND = "target_band_c"
+CONF_TRV_SETPOINT_MODE = "trv_setpoint_mode"
 
 SERVICE_UNBLOCK = "unblock"
 SERVICE_RECALIBRATE = "recalibrate"
@@ -168,8 +176,20 @@ class LearningStatus(StrEnum):
     PAUSED = "paused"
 
 
+class TrvSetpointMode(StrEnum):
+    # Target spread over the TRV's range by demand (18 °C .. max).
+    ABSOLUTE = "absolute"
+    # Target a demand-dependent step above the TRV's own reading.
+    RELATIVE = "relative"
+
+
+DEFAULT_TRV_SETPOINT_MODE = TrvSetpointMode.RELATIVE
+
+
 class UaBalanceOutcome(StrEnum):
     LEARNED = "learned"
+    # The target lay below the lowest plausible factor; learned towards it.
+    LEARNED_AT_LIMIT = "learned_at_limit"
     COLLECTING = "collecting"
     OUTSIDE_WINDOW = "outside_window"
     PAUSED = "paused"
@@ -181,6 +201,13 @@ class UaBalanceOutcome(StrEnum):
     STORAGE_DOMINATED = "storage_dominated"
     ROOM_SENSOR_FALLBACK = "room_sensor_fallback"
     WINDOW_OPEN = "window_open"
+    # A configured valve position entity is stale or unavailable.
+    VALVE_POSITION_MISSING = "valve_position_missing"
+    # A TRV calibrates its valve and moves it by itself.
+    TRV_ADAPTING = "trv_adapting"
+    # The room is not yet near its setpoint -- still coasting down from above
+    # or recovering from below; the stretch starts once it has settled.
+    COASTING = "coasting"
 
 
 class CapacityOutcome(StrEnum):
@@ -192,6 +219,8 @@ class CapacityOutcome(StrEnum):
     DISTURBED = "disturbed"
     SUPPRESSED = "suppressed"
     ROOM_SENSOR_FALLBACK = "room_sensor_fallback"
+    VALVE_POSITION_MISSING = "valve_position_missing"
+    TRV_ADAPTING = "trv_adapting"
     PAUSED = "paused"
     WAITING = "waiting"
     DISABLED = "disabled"

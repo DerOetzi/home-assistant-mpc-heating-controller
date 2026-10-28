@@ -1,0 +1,31 @@
+# Danfoss Ally paired through ZHA. Not tested on a real device; the entities
+# follow the ZHA library's Danfoss Ally entities, whose unique_ids end in
+# "-<property>".
+name: Danfoss Ally (ZHA)
+match:
+  integration: zha
+  manufacturer: Danfoss
+  models:
+    - eTRV0100
+    - eTRV0101
+    - eTRV0103
+target_temperature:
+  min: 5
+  max: 35
+  step: 0.5
+entities:
+  climate:
+    domain: climate
+  valve_position:
+    domain: sensor
+    unique_id_suffix: -pi_heating_demand
+  heat_available:
+    domain: switch
+    unique_id_suffix: -heat_available
+  adaptation_status:
+    domain: sensor
+    unique_id_suffix: -adaptation_run_status
+    # ZHA shows the status bitmap as one attribute per flag.
+    busy:
+      attributes:
+        In_progress: true

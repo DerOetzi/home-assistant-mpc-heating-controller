@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, LearningStatus
+from .const import DOMAIN, CapacityOutcome, UaBalanceOutcome
 from .controller.mpc.learner import UA_BALANCE_MIN_WINDOW_S
 from .coordinator import HeatingRoomCoordinator
 from .entity import HeatingControllerEntity
@@ -28,10 +28,12 @@ async def async_setup_entry(
             RequestedHeatingPowerSensor(coordinator),
             AvailableHeatingPowerSensor(coordinator),
             RadiatorHeatingPowerSensor(coordinator),
+            MeasuredHeatingPowerSensor(coordinator),
             DisturbancePowerSensor(coordinator),
             RoomTemperatureSensor(coordinator),
             BaseTemperatureSensor(coordinator),
-            MpcLearningStatusSensor(coordinator),
+            UaLearningStatusSensor(coordinator),
+            CapacityLearningStatusSensor(coordinator),
             UaFactorSensor(coordinator),
             CapacityFactorSensor(coordinator),
         ]
@@ -177,7 +179,8 @@ class HeatingDemandSensor(_DiagnosticSensor):
         return {
             "trv_target_temps": dict(
                 zip(self._coordinator.trv_entity_ids, result.trv_targets, strict=True)
-            )
+            ),
+            "trv_setpoint_writes": dict(self._coordinator.trv_setpoint_writes),
         }
 
 
@@ -232,6 +235,29 @@ class RadiatorHeatingPowerSensor(_DiagnosticSensor):
         if result is None or result.radiator_power_w is None:
             return None
         return round(result.radiator_power_w, 1)
+
+
+class MeasuredHeatingPowerSensor(_DiagnosticSensor):
+    """Heat at the valve openings the TRVs report, before the radiator lag.
+
+    Where a TRV reports no opening its radiator counts with the demand, like
+    the planning does.
+    """
+
+    _attr_translation_key = "measured_heating_power"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+
+    def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
+        super().__init__(coordinator, "measured_heating_power")
+
+    @property
+    def native_value(self) -> float | None:
+        result = self._coordinator.last_result
+        if result is None or result.measured_heating_power_w is None:
+            return None
+        return round(result.measured_heating_power_w, 1)
 
 
 class DisturbancePowerSensor(_DiagnosticSensor):
@@ -308,45 +334,65 @@ class BaseTemperatureSensor(_DiagnosticSensor):
         return self._coordinator.base_temperature_c
 
 
-class MpcLearningStatusSensor(_DiagnosticSensor):
-    _attr_translation_key = "mpc_learning_status"
+class UaLearningStatusSensor(_DiagnosticSensor):
+    """Where the heat balance for the heat-loss factor stands."""
+
+    _attr_translation_key = "ua_learning_status"
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = [status.value for status in LearningStatus]
+    _attr_options = [outcome.value for outcome in UaBalanceOutcome]
 
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
-        super().__init__(coordinator, "mpc_learning_status")
+        super().__init__(coordinator, "ua_learning_status")
 
     @property
-    def native_value(self) -> str:
-        return self._coordinator.mpc.get_learning_state().status.value
+    def native_value(self) -> str | None:
+        outcome = self._coordinator.mpc.get_ua_balance_info().outcome
+        return outcome.value if outcome else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        mpc = self._coordinator.mpc
-        info = mpc.get_ua_balance_info()
+        info = self._coordinator.mpc.get_ua_balance_info()
         since_ts = info.collecting_since_ts
         return {
-            "capacity_status": mpc.get_capacity_outcome().value,
-            "capacity_j_per_k": round(mpc.effective_capacity_j_per_k),
-            "ua_balance_status": info.outcome.value if info.outcome else None,
-            "ua_balance_collecting_since": _iso(since_ts),
-            "ua_balance_due": _iso(
+            "collecting_since": _iso(since_ts),
+            "due": _iso(
                 since_ts + UA_BALANCE_MIN_WINDOW_S if since_ts is not None else None
             ),
-            "ua_balance_last_learned": _iso(info.last_learned_ts),
-            "ua_balance_last_target_factor": (
+            "last_learned": _iso(info.last_learned_ts),
+            "last_target_factor": (
                 round(info.last_target_factor, 4)
                 if info.last_target_factor is not None
                 else None
             ),
-            "ua_balance_last_drift_c": (
+            "last_drift_c": (
                 round(info.last_drift_c, 2) if info.last_drift_c is not None else None
             ),
-            "ua_balance_last_window_h": (
+            "last_window_h": (
                 round(info.last_window_s / 3600, 2)
                 if info.last_window_s is not None
                 else None
             ),
+        }
+
+
+class CapacityLearningStatusSensor(_DiagnosticSensor):
+    """What the last 30-minute replay did with the capacity factor."""
+
+    _attr_translation_key = "capacity_learning_status"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = [outcome.value for outcome in CapacityOutcome]
+
+    def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
+        super().__init__(coordinator, "capacity_learning_status")
+
+    @property
+    def native_value(self) -> str:
+        return self._coordinator.mpc.get_capacity_outcome().value
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "capacity_j_per_k": round(self._coordinator.mpc.effective_capacity_j_per_k)
         }
 
 

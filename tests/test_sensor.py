@@ -5,7 +5,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from heating_controller.const import DOMAIN, FlowSupplyStatus
 
-from test_coordinator import ENTRY_DATA, _seed_entities
+from test_coordinator import ENTRY_DATA, _room_data, _seed_entities
 
 
 def _register_stub_services(hass: HomeAssistant) -> None:
@@ -35,7 +35,7 @@ async def _setup_coasting_room(hass: HomeAssistant, data: dict) -> None:
 async def test_hold_flow_sensor_keeps_reporting_while_the_gate_is_closed(
     hass: HomeAssistant,
 ) -> None:
-    await _setup_coasting_room(hass, {**ENTRY_DATA, "flow_gate_hold_time_s": 0.0})
+    await _setup_coasting_room(hass, {**_room_data(hass), "flow_gate_hold_time_s": 0.0})
 
     gated = hass.states.get("sensor.wohnzimmer_minimum_flow_temperature")
     hold = hass.states.get("sensor.wohnzimmer_hold_flow_temperature")
@@ -60,7 +60,7 @@ async def test_hold_flow_sensor_keeps_reporting_while_the_gate_is_closed(
 async def test_hold_flow_sensor_matches_min_flow_while_the_gate_is_open(
     hass: HomeAssistant,
 ) -> None:
-    await _setup_coasting_room(hass, ENTRY_DATA)
+    await _setup_coasting_room(hass, _room_data(hass))
 
     gated = hass.states.get("sensor.wohnzimmer_minimum_flow_temperature")
     hold = hass.states.get("sensor.wohnzimmer_hold_flow_temperature")
@@ -81,7 +81,7 @@ async def test_min_flow_sensor_reports_the_recovery_flow_for_a_cold_room(
         "climate.heizung_wohnzimmer", "off", {"current_temperature": 58.0}
     )
     _register_stub_services(hass)
-    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry = MockConfigEntry(domain=DOMAIN, data=_room_data(hass))
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -100,24 +100,33 @@ async def test_min_flow_sensor_reports_the_recovery_flow_for_a_cold_room(
     assert gated.attributes["recovery_flow_saturated"] in (True, False)
 
 
-async def test_learning_status_sensor_exposes_the_heat_balance(
+async def test_ua_learning_status_sensor_exposes_the_heat_balance(
     hass: HomeAssistant,
 ) -> None:
-    await _setup_coasting_room(hass, ENTRY_DATA)
+    await _setup_coasting_room(hass, _room_data(hass))
 
-    status = hass.states.get("sensor.wohnzimmer_mpc_learning_status")
+    status = hass.states.get("sensor.wohnzimmer_ua_learning_status")
     assert status is not None
     for key in (
-        "ua_balance_status",
-        "ua_balance_collecting_since",
-        "ua_balance_due",
-        "ua_balance_last_learned",
-        "ua_balance_last_target_factor",
-        "ua_balance_last_drift_c",
-        "ua_balance_last_window_h",
+        "collecting_since",
+        "due",
+        "last_learned",
+        "last_target_factor",
+        "last_drift_c",
+        "last_window_h",
     ):
         assert key in status.attributes
-    assert status.attributes["ua_balance_last_learned"] is None
-    assert status.attributes["capacity_status"] == "waiting"
+    assert status.attributes["last_learned"] is None
+    assert hass.states.get("sensor.wohnzimmer_mpc_learning_status") is None
+
+
+async def test_capacity_learning_status_sensor_reports_the_replay(
+    hass: HomeAssistant,
+) -> None:
+    await _setup_coasting_room(hass, _room_data(hass))
+
+    status = hass.states.get("sensor.wohnzimmer_capacity_learning_status")
+    assert status is not None
+    assert status.state == "waiting"
     # 20 m² medium construction, learned factor 1.0.
     assert status.attributes["capacity_j_per_k"] == 20 * 165 * 1000
