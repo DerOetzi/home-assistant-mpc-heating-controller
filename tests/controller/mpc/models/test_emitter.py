@@ -380,3 +380,16 @@ def test_a_shut_valve_needs_more_demand_to_open_than_to_stay_open():
     assert stays_open[0] > 19.4
     assert stays_shut == [5.0]
     assert opens[0] > 19.4
+
+
+def test_full_output_fraction_follows_the_flow():
+    model = make_model([TrvConfig(name="trv", width_mm=1200, height_mm=600)])
+
+    # 55/45 system: 30 °C flow at a 20.9 °C room gives about a fifth of
+    # design output, 38 °C at 20.6 °C about two fifths.
+    low = model.full_output_fractions(30.0, 20.9)[0]
+    warm = model.full_output_fractions(38.0, 20.6)[0]
+
+    assert 0.15 < low < 0.25
+    assert 0.35 < warm < 0.5
+    assert model.full_output_fractions(None, 20.9) == [None]

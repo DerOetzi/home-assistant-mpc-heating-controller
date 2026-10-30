@@ -77,3 +77,21 @@ async def test_comfort_conditions_empty_when_key_missing(hass: HomeAssistant) ->
     state = hass.states.get("binary_sensor.wohnzimmer_heating_automation")
     assert state is not None
     assert state.attributes["comfort_condition_entities"] == []
+
+
+async def test_reports_a_radiator_that_stays_cold(hass: HomeAssistant) -> None:
+    await _setup(hass, _room_data(hass))
+    entity_id = "binary_sensor.wohnzimmer_radiator_not_heating"
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert state.state == "off"
+    assert state.attributes["trv_entities"] == []
+
+    coordinator = hass.data[DOMAIN][hass.config_entries.async_entries(DOMAIN)[0].entry_id]
+    coordinator.mpc._radiator_monitors[0].not_heating = True
+    coordinator._notify_listeners()
+    await hass.async_block_till_done()
+
+    state = hass.states.get(entity_id)
+    assert state.state == "on"
+    assert state.attributes["trv_entities"] == ["climate.heizung_wohnzimmer"]

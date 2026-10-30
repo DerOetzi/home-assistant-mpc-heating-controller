@@ -17,7 +17,12 @@ import {
   REQUIRED_ROLES,
 } from "./const.js";
 import { num, localeOf, isOn, entityValue } from "./format.js";
-import { resolveRoles, managedDetailRows, managedHeaderRows } from "./entities.js";
+import {
+  resolveRoles,
+  managedDetailRows,
+  managedHeaderRows,
+  radiatorAlert,
+} from "./entities.js";
 import { migrateLegacyConfig, normalizeItems, normalizeDetail } from "./config.js";
 import { CARD_STYLES, NOTICE_STYLES } from "./card-styles.js";
 import {
@@ -237,6 +242,7 @@ export class HeatingControllerCard extends HTMLElement {
           <button id="unblock" class="unblock" hidden>
             <ha-icon icon="mdi:auto-mode"></ha-icon>${t(this._hass, "unblock")}
           </button>
+          <ha-icon id="radiatorIcon" class="radiator-alert" icon="mdi:radiator-off" hidden></ha-icon>
           <ha-icon id="windowIcon" class="window-icon" icon="mdi:window-open-variant"></ha-icon>
           <ha-icon id="chevron" class="chevron" icon="mdi:chevron-down"></ha-icon>
         </div>
@@ -262,6 +268,11 @@ export class HeatingControllerCard extends HTMLElement {
 
     // Sits inside the header, which toggles the card -- so it has to keep the
     // click to itself.
+    this.shadowRoot.getElementById("radiatorIcon").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const alert = radiatorAlert(this._hass, this._resolveEntities());
+      if (alert) this._moreInfo(alert.entityId);
+    });
     this.shadowRoot.getElementById("unblock").addEventListener("click", (ev) => {
       ev.stopPropagation();
       const roles = this._resolveEntities();
@@ -292,6 +303,12 @@ export class HeatingControllerCard extends HTMLElement {
     root.getElementById("title").textContent = this._deviceName();
     root.getElementById("subtitle").textContent = status.text;
     root.getElementById("windowIcon").hidden = openWindows.length === 0;
+    // Shown on the collapsed card too: entering the dashboard is when it
+    // should catch the eye.
+    const alert = radiatorAlert(this._hass, roles);
+    const radiatorIcon = root.getElementById("radiatorIcon");
+    radiatorIcon.hidden = !alert;
+    radiatorIcon.title = alert?.text ?? "";
 
     // Only while the automation is blocked -- an always-visible button would
     // suggest there is something to do when there isn't.

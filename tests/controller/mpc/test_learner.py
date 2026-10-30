@@ -45,6 +45,8 @@ def make_input(
     valve_position_missing=False,
     target_temp_c=21.0,
     trv_adapting=False,
+    radiator_not_heating=False,
+    valve_positions_pct=(),
 ):
     return RoomMpcInput(
         now_ts=now_ts,
@@ -61,6 +63,8 @@ def make_input(
         room_sensor_fallback=room_sensor_fallback,
         valve_position_missing=valve_position_missing,
         trv_adapting=trv_adapting,
+        radiator_not_heating=radiator_not_heating,
+        valve_positions_pct=list(valve_positions_pct),
     )
 
 
@@ -382,6 +386,8 @@ def _feed_night(
     # The balance nights hold the room at its setpoint.
     target_temp_c=20.0,
     trv_adapting=False,
+    radiator_not_heating=False,
+    valve_positions_pct=(),
 ):
     count = int(hours * 3600 / STEP_S) + 1
     for index in range(count):
@@ -397,6 +403,8 @@ def _feed_night(
                 valve_position_missing=valve_position_missing,
                 target_temp_c=target_temp_c,
                 trv_adapting=trv_adapting,
+                radiator_not_heating=radiator_not_heating,
+                valve_positions_pct=valve_positions_pct,
             ),
             applied_heating_power_w=power_w,
             radiator_power_w=power_w,
@@ -1442,3 +1450,120 @@ def test_heat_balance_starts_once_a_room_below_setpoint_has_recovered():
     info = learner.get_ua_balance_info()
     assert info.outcome == UaBalanceOutcome.COLLECTING
     assert info.collecting_since_ts == NIGHT_START_TS + recovered_index * STEP_S
+
+
+def test_a_learned_factor_takes_its_share_from_the_disturbance():
+    # 31.25 W/K at 20 K: the factor moves from 1.0 to 0.85, so the model now
+    # loses 0.15 * 31.25 W/K * 20 K = 93.75 W less, which the disturbance
+    # held so far.
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    _feed_night(learner)
+    learner.run_learning_cycle()
+
+    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
+    assert learner.consume_disturbance_transfer_w() == pytest.approx(93.75)
+    assert learner.consume_disturbance_transfer_w() == 0.0
+
+
+def test_a_skipped_balance_hands_nothing_over():
+    learner, _, _ = make_learner()
+    learner.enable()
+
+    _feed_night(learner, valve_position_missing=True)
+    learner.run_learning_cycle()
+
+    assert learner.consume_disturbance_transfer_w() == 0.0
+
+
+def test_a_radiator_not_heating_ends_the_stretch_before_it():
+    learner, _, _ = make_learner()
+    learner.enable()
+
+    end_ts = _feed_night(learner, hours=5)
+    _feed_night(learner, hours=0.5, start_ts=end_ts + STEP_S, radiator_not_heating=True)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.LEARNED
+    assert info.last_window_s == pytest.approx(5 * 3600)
+
+
+def test_a_radiator_not_heating_blocks_learning_and_the_disturbance():
+    learner, loss_model, capacity_model = make_learner()
+    learner.enable()
+
+    _feed_night(learner, radiator_not_heating=True)
+    learner.run_learning_cycle()
+
+    assert (
+        learner.get_ua_balance_info().outcome
+        == UaBalanceOutcome.RADIATOR_NOT_HEATING
+    )
+    assert loss_model.learned_ua_factor == 1.0
+    assert not learner.disturbance_update_allowed(time.time(), False)
+
+    learner, _, capacity_model = make_learner()
+    learner.enable()
+    inputs = _inputs(RISING)
+    inputs[2] = make_input(
+        inputs[2].now_ts, room_temp_c=RISING[2], radiator_not_heating=True
+    )
+    _evaluate_window(learner, inputs, power_w=2000.0)
+    assert learner.get_capacity_outcome() == CapacityOutcome.RADIATOR_NOT_HEATING
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_a_night_with_fully_open_valves_below_the_band_is_not_learned():
+    # Study, 28/29 October: valve open all night, room below its setpoint.
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    _feed_night(
+        learner, room_temp_c=20.0, target_temp_c=20.5, valve_positions_pct=(100.0,)
+    )
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.VALVE_SATURATED
+    assert info.last_target_factor == pytest.approx(0.5)
+    assert loss_model.learned_ua_factor == 1.0
+
+
+def test_fully_open_valves_at_the_setpoint_still_learn():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    _feed_night(learner, valve_positions_pct=(100.0,))
+    learner.run_learning_cycle()
+
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.LEARNED
+    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
+
+
+def test_a_drifting_still_start_is_retried_from_where_the_room_came_near():
+    # Living room, 29/30 October: flat at 21.7 for an hour after the evening
+    # (only coasting slower than the sensor steps), then down to its
+    # setpoint. Balanced from the still hour the drift is far too large; from
+    # where it came near its setpoint the night still counts.
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    flat_steps, fall_steps = 12, 12
+    temps = [
+        21.7
+        if index < flat_steps
+        else max(21.0, 21.7 - 0.7 * (index - flat_steps) / fall_steps)
+        for index in range(NIGHT_COUNT)
+    ]
+    end_ts = _feed_night(learner, room_temps=temps, target_temp_c=21.0)
+    learner.set_learning_window_active(False, end_ts + 60)
+    learner.run_learning_cycle()
+
+    near_index = next(i for i, t in enumerate(temps) if t <= 21.1 + 1e-9)
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.LEARNED
+    assert abs(info.last_drift_c) < 0.1
+    assert info.last_window_s == pytest.approx(end_ts - (NIGHT_START_TS + near_index * STEP_S))
+    assert loss_model.learned_ua_factor < 1.0

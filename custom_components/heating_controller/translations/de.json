@@ -218,6 +218,9 @@
     "binary_sensor": {
       "heating_automation": {
         "name": "Heizautomatik"
+      },
+      "radiator_not_heating": {
+        "name": "Heizkörper heizt nicht"
       }
     },
     "button": {
@@ -288,10 +291,12 @@
           "too_short": "Verworfen: zu kurz",
           "implausible_target": "Verworfen: unplausibles Ziel",
           "storage_dominated": "Verworfen: Speicherwärme überwiegt",
+          "valve_saturated": "Verworfen: Ventile ganz offen",
           "room_sensor_fallback": "Raumsensor fehlt",
           "window_open": "Fenster offen",
           "valve_position_missing": "Ventilstellung fehlt",
-          "trv_adapting": "TRV kalibriert"
+          "trv_adapting": "TRV kalibriert",
+          "radiator_not_heating": "Heizkörper heizt nicht"
         }
       },
       "capacity_learning_status": {
@@ -309,7 +314,8 @@
           "waiting": "Wartet",
           "disabled": "Deaktiviert",
           "valve_position_missing": "Ventilstellung fehlt",
-          "trv_adapting": "TRV kalibriert"
+          "trv_adapting": "TRV kalibriert",
+          "radiator_not_heating": "Heizkörper heizt nicht"
         }
       }
     }

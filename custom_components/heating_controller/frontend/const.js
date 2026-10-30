@@ -14,6 +14,7 @@ export const ROLES = {
   room_temperature: "roomTemp",
   min_flow_temperature: "minFlow",
   heating_demand: "demand",
+  radiator_not_heating: "radiatorAlert",
 };
 
 export const REQUIRED_ROLES = ["mode", "automation"];

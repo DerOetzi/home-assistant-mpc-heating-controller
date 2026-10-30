@@ -10,6 +10,7 @@ from .models.capacity import ThermalCapacityModel
 from .models.emitter import HeatEmitterModel
 from .models.loss import RoomLossModel
 from .observer import ObserverEstimate, RoomStateObserver, step_radiator_power_w
+from .radiator_monitor import RadiatorDeliveryMonitor
 from .results import (
     RoomMpcError,
     RoomMpcInput,
@@ -174,6 +175,7 @@ class RoomMpcController:
             target_band_c=self._target_band_c,
         )
         self._heat_available = True
+        self._radiator_monitors = [RadiatorDeliveryMonitor() for _ in trvs]
 
         self._target_demand_pct = 0.0
         self._last_output_demand_pct = 0.0
@@ -207,6 +209,11 @@ class RoomMpcController:
 
     def restore_disturbance(self, disturbance_w: float) -> None:
         self._observer.restore_disturbance(disturbance_w)
+
+    @property
+    def radiators_not_heating(self) -> list[bool]:
+        """Per TRV: the radiator gives off no heat although its valve is open."""
+        return [monitor.not_heating for monitor in self._radiator_monitors]
 
     def set_heat_available(self, available: bool) -> None:
         """Whether the TRVs get hot water; without it the radiators cool down."""
@@ -270,13 +277,35 @@ class RoomMpcController:
             return RoomMpcComputeResult(valid=False, error=input_result.error)
 
         mpc_input = input_result.input
+        if apply_side_effects:
+            for monitor, opening_pct, trv_temperature_c, output_fraction in zip(
+                self._radiator_monitors,
+                mpc_input.valve_positions_pct
+                or [None] * len(self._radiator_monitors),
+                mpc_input.trv_temperatures,
+                self._emitter_model.full_output_fractions(
+                    mpc_input.flow_temp_c, mpc_input.room_temp_c
+                ),
+            ):
+                monitor.update(
+                    mpc_input.now_ts,
+                    opening_pct,
+                    trv_temperature_c,
+                    mpc_input.room_temp_c,
+                    mpc_input.flow_temp_c,
+                    self._heat_available,
+                    output_fraction,
+                )
+        mpc_input.radiator_not_heating = any(self.radiators_not_heating)
         estimate = self._observer.estimate(
             mpc_input,
             # Without a reported valve opening the radiator heat is a guess,
-            # and an adapting TRV ignores the demand; the disturbance would
+            # an adapting TRV ignores the demand and a radiator full of air
+            # gives off less than its opening says; the disturbance would
             # take up the difference.
             disturbance_update_allowed=not mpc_input.valve_position_missing
             and not mpc_input.trv_adapting
+            and not mpc_input.radiator_not_heating
             and self._learner.disturbance_update_allowed(
                 mpc_input.now_ts, mpc_input.room_sensor_fallback
             ),
@@ -654,6 +683,11 @@ class RoomMpcController:
 
     def run_learning_cycle(self) -> None:
         self._learner.run_learning_cycle()
+        transfer_w = self._learner.consume_disturbance_transfer_w()
+        if transfer_w:
+            self._observer.restore_disturbance(
+                self._observer.disturbance_w - transfer_w
+            )
 
     def consume_persisted_learning_factors(self) -> LearningFactors | None:
         return self._learner.consume_persisted_learning_factors()

@@ -78,6 +78,13 @@ UA_BALANCE_MIN_TARGET_FACTOR = 0.15
 # Above this the stretch is a measurement artefact and is discarded.
 UA_BALANCE_MAX_TARGET_FACTOR = 2.0
 UA_BALANCE_WEIGHT = 0.3
+# The heat assumed for a fully open valve is the least certain one: a radiator
+# that is flow-limited gives off less (study, 28/29 October: target 0.54 with
+# the valve open all night, 0.40-0.41 on nights it held its setpoint). A
+# stretch that spent more than this share with every reported valve at least
+# this open and the room below its target band is not learned from.
+VALVE_SATURATED_OPENING_PCT = 95.0
+UA_BALANCE_MAX_SATURATED_SHARE = 0.5
 
 
 @dataclass
@@ -95,6 +102,10 @@ class LearnerHistoryEntry:
     room_sensor_fallback: bool = False
     valve_position_missing: bool = False
     trv_adapting: bool = False
+    radiator_not_heating: bool = False
+    # All reported valves at least VALVE_SATURATED_OPENING_PCT open with the
+    # room below its target band.
+    valve_saturated: bool = False
     window_open: bool = False
 
 
@@ -160,9 +171,11 @@ class RoomMpcModelLearner:
         self._room_sensor_fallback = False
         self._valve_position_missing = False
         self._trv_adapting = False
+        self._radiator_not_heating = False
         self._window_open = False
         self._sun_condition: callable[[float], bool] = lambda _ts: True
         self._pending_persisted_factors: LearningFactors | None = None
+        self._pending_disturbance_transfer_w = 0.0
 
         self._learning_state = self._create_learning_state(LearningStatus.DISABLED)
 
@@ -282,6 +295,7 @@ class RoomMpcModelLearner:
             and not self._room_sensor_fallback
             and not self._valve_position_missing
             and not self._trv_adapting
+            and not self._radiator_not_heating
             and now_ts >= self._ua_blocked_until_ts
             and self._sun_condition(now_ts)
         )
@@ -307,6 +321,8 @@ class RoomMpcModelLearner:
                 room_sensor_fallback=mpc_input.room_sensor_fallback,
                 valve_position_missing=mpc_input.valve_position_missing,
                 trv_adapting=mpc_input.trv_adapting,
+                radiator_not_heating=mpc_input.radiator_not_heating,
+                valve_saturated=self._valve_saturated(mpc_input),
                 window_open=self._window_open,
             )
         )
@@ -323,11 +339,13 @@ class RoomMpcModelLearner:
             mpc_input.room_sensor_fallback
             or mpc_input.valve_position_missing
             or mpc_input.trv_adapting
+            or mpc_input.radiator_not_heating
         )
         was_degraded = (
             self._room_sensor_fallback
             or self._valve_position_missing
             or self._trv_adapting
+            or self._radiator_not_heating
         )
         if degraded and not was_degraded and self._history:
             self._close_ua_balance(self._history[-1].timestamp)
@@ -338,6 +356,7 @@ class RoomMpcModelLearner:
         self._room_sensor_fallback = mpc_input.room_sensor_fallback
         self._valve_position_missing = mpc_input.valve_position_missing
         self._trv_adapting = mpc_input.trv_adapting
+        self._radiator_not_heating = mpc_input.radiator_not_heating
 
     def _cleanup_history(self, now_ts: float) -> None:
         self._history = [
@@ -408,6 +427,9 @@ class RoomMpcModelLearner:
 
         if any(entry.trv_adapting for entry in relevant_history):
             return LearningStatus.SUPPRESSED, CapacityOutcome.TRV_ADAPTING
+
+        if any(entry.radiator_not_heating for entry in relevant_history):
+            return LearningStatus.SUPPRESSED, CapacityOutcome.RADIATOR_NOT_HEATING
 
         if any(entry.window_open for entry in relevant_history):
             return LearningStatus.SUPPRESSED, CapacityOutcome.SUPPRESSED
@@ -505,6 +527,7 @@ class RoomMpcModelLearner:
             or self._room_sensor_fallback
             or self._valve_position_missing
             or self._trv_adapting
+            or self._radiator_not_heating
             or self._window_open
         ):
             return
@@ -537,6 +560,8 @@ class RoomMpcModelLearner:
             return UaBalanceOutcome.VALVE_POSITION_MISSING
         if self._trv_adapting:
             return UaBalanceOutcome.TRV_ADAPTING
+        if self._radiator_not_heating:
+            return UaBalanceOutcome.RADIATOR_NOT_HEATING
         if self._window_open:
             return UaBalanceOutcome.WINDOW_OPEN
         if not self._learning_window_active:
@@ -566,7 +591,9 @@ class RoomMpcModelLearner:
         self._ua_balance_from_ts = end_ts
         return self._balance_stretch(sun_free_ts[0], end_ts)
 
-    def _balance_stretch(self, start_ts: float, end_ts: float) -> UaBalanceOutcome:
+    def _balance_stretch(
+        self, start_ts: float, end_ts: float, retried: bool = False
+    ) -> UaBalanceOutcome:
         info = self._ua_balance_info
         if self._loss_model.base_ua_w_per_k <= 0:
             return UaBalanceOutcome.COLLECTING
@@ -593,6 +620,8 @@ class RoomMpcModelLearner:
             return UaBalanceOutcome.VALVE_POSITION_MISSING
         if any(entry.trv_adapting for entry in window):
             return UaBalanceOutcome.TRV_ADAPTING
+        if any(entry.radiator_not_heating for entry in window):
+            return UaBalanceOutcome.RADIATOR_NOT_HEATING
         if any(entry.window_open for entry in window):
             return UaBalanceOutcome.WINDOW_OPEN
         end_ts = window[-1].timestamp
@@ -608,10 +637,13 @@ class RoomMpcModelLearner:
 
         heat_j = 0.0
         temperature_difference_ks = 0.0
+        saturated_s = 0.0
         for previous, current in zip(window, window[1:]):
             duration_s = current.timestamp - previous.timestamp
             if duration_s > UA_BALANCE_MAX_GAP_S:
                 return UaBalanceOutcome.GAP
+            if previous.valve_saturated:
+                saturated_s += duration_s
             heat_j += (
                 self._balance_heating_power_w(previous, current, median_flow_c)
                 * duration_s
@@ -625,6 +657,21 @@ class RoomMpcModelLearner:
             return UaBalanceOutcome.SMALL_TEMPERATURE_DIFFERENCE
 
         drift_c = self._trend_drift_c(window)
+        if abs(drift_c) > UA_BALANCE_MAX_DRIFT_C and not retried:
+            # A room found holding still above or below its setpoint was
+            # sometimes only coasting slower than its sensor steps and then
+            # moved on. The same night counts from where it came near its
+            # setpoint, if enough of it is left.
+            near_ts = next(
+                (entry.timestamp for entry in window if self._near_setpoint(entry)),
+                None,
+            )
+            if (
+                not self._near_setpoint(window[0])
+                and near_ts is not None
+                and end_ts - near_ts >= UA_BALANCE_MIN_WINDOW_S
+            ):
+                return self._balance_stretch(near_ts, end_ts, retried=True)
         if abs(drift_c) > UA_BALANCE_MAX_DRIFT_C:
             # Kept for diagnostics, without a target: none was computed.
             info.last_target_factor = None
@@ -636,7 +683,9 @@ class RoomMpcModelLearner:
         target_factor = target_ua_w_per_k / self._loss_model.base_ua_w_per_k
 
         rejection = None
-        if abs(stored_heat_j) > UA_BALANCE_MAX_STORAGE_SHARE * heat_j:
+        if saturated_s > UA_BALANCE_MAX_SATURATED_SHARE * window_duration_s:
+            rejection = UaBalanceOutcome.VALVE_SATURATED
+        elif abs(stored_heat_j) > UA_BALANCE_MAX_STORAGE_SHARE * heat_j:
             rejection = UaBalanceOutcome.STORAGE_DOMINATED
         elif target_factor > UA_BALANCE_MAX_TARGET_FACTOR:
             rejection = UaBalanceOutcome.IMPLAUSIBLE_TARGET
@@ -651,6 +700,16 @@ class RoomMpcModelLearner:
         current_factor = self._loss_model.learned_ua_factor
         self._loss_model.learned_ua_factor = current_factor + UA_BALANCE_WEIGHT * (
             learned_target_factor - current_factor
+        )
+        # The balance leaves the disturbance out, so the target takes up the
+        # heat from neighbours; the observer's disturbance held the same heat
+        # against the old factor. Handing over what the factor change now
+        # explains keeps the model's net loss of this stretch unchanged.
+        self._pending_disturbance_transfer_w += (
+            (current_factor - self._loss_model.learned_ua_factor)
+            * self._loss_model.base_ua_w_per_k
+            * temperature_difference_ks
+            / window_duration_s
         )
         self._ua_balance_from_ts = max(self._ua_balance_from_ts, end_ts)
         info.last_learned_ts = end_ts
@@ -673,18 +732,33 @@ class RoomMpcModelLearner:
         for index, entry in enumerate(self._history):
             if entry.timestamp < start_ts:
                 continue
-            if entry.target_temperature_c is None or (
-                entry.target_temperature_c
-                - self._target_band_c
-                - UA_BALANCE_SETTLED_MARGIN_C
-                <= entry.room_temperature_c
-                <= entry.target_temperature_c + UA_BALANCE_SETTLED_MARGIN_C
-            ):
+            if self._near_setpoint(entry):
                 return entry.timestamp
             stationary_since_ts = self._stationary_since_ts(index, start_ts)
             if stationary_since_ts is not None:
                 return stationary_since_ts
         return None
+
+    def _near_setpoint(self, entry: LearnerHistoryEntry) -> bool:
+        """Within the margin around the band the controller aims for."""
+        return entry.target_temperature_c is None or (
+            entry.target_temperature_c
+            - self._target_band_c
+            - UA_BALANCE_SETTLED_MARGIN_C
+            <= entry.room_temperature_c
+            <= entry.target_temperature_c + UA_BALANCE_SETTLED_MARGIN_C
+        )
+
+    def _valve_saturated(self, mpc_input: RoomMpcInput) -> bool:
+        openings_pct = [
+            opening for opening in mpc_input.valve_positions_pct if opening is not None
+        ]
+        return (
+            bool(openings_pct)
+            and min(openings_pct) >= VALVE_SATURATED_OPENING_PCT
+            and mpc_input.room_temp_c
+            < mpc_input.target_temp_c - self._target_band_c
+        )
 
     def _stationary_since_ts(self, index: int, start_ts: float) -> float | None:
         """Start of the hour up to a sample over which the room held still.
@@ -846,6 +920,7 @@ class RoomMpcModelLearner:
 
     def recalibrate(self, factors: LearningFactors) -> None:
         self._pending_persisted_factors = None
+        self._pending_disturbance_transfer_w = 0.0
         self._active_prediction = None
         self._last_prediction = None
         self._ua_balance_closed = None
@@ -854,6 +929,12 @@ class RoomMpcModelLearner:
         self._loss_model.learned_ua_factor = factors.ua_factor
         self._capacity_model.learned_capacity_factor = factors.capacity_factor
         self._learning_state = self._create_learning_state(self._learning_state.status)
+
+    def consume_disturbance_transfer_w(self) -> float:
+        """Disturbance the learned factor took over since the last call."""
+        transfer_w = self._pending_disturbance_transfer_w
+        self._pending_disturbance_transfer_w = 0.0
+        return transfer_w
 
     def consume_persisted_learning_factors(self) -> LearningFactors | None:
         factors = self._pending_persisted_factors

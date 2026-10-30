@@ -260,6 +260,35 @@ def test_resolve_roles_maps_by_translation_key(ctx) -> None:
     assert ctx.eval("roles.automation.entity_id") == "binary_sensor.katharina_heizautomatik"
 
 
+def test_radiator_alert_is_quiet_without_a_cold_radiator(ctx) -> None:
+    ctx.eval(_HASS_FIXTURE)
+    assert ctx.eval("radiatorAlert(hass, roles)") is None
+
+
+def test_radiator_alert_names_the_cold_trvs(ctx) -> None:
+    ctx.eval(_HASS_FIXTURE)
+    ctx.eval(
+        """
+hass.entities["binary_sensor.katharina_heizkorper_heizt_nicht"] = {
+  entity_id: "binary_sensor.katharina_heizkorper_heizt_nicht",
+  device_id: "dev", platform: "heating_controller",
+  translation_key: "radiator_not_heating",
+};
+hass.states["binary_sensor.katharina_heizkorper_heizt_nicht"] = {
+  entity_id: "binary_sensor.katharina_heizkorper_heizt_nicht",
+  state: "on",
+  attributes: { trv_entities: ["climate.klein"] },
+};
+var alertRoles = resolveRoles(hass, "dev");
+var alert = radiatorAlert(hass, alertRoles);
+"""
+    )
+    assert ctx.eval("alert.entityId") == "binary_sensor.katharina_heizkorper_heizt_nicht"
+    assert ctx.eval("alert.text") == (
+        "Radiator not heating – check or bleed it: Heizung klein"
+    )
+
+
 def test_managed_rows_seed_sensor_trvs_and_windows(ctx) -> None:
     ctx.eval(_HASS_FIXTURE)
     keys = _json(ctx, "managedDetailRows(hass, roles).map(function(r){return r.key;})")

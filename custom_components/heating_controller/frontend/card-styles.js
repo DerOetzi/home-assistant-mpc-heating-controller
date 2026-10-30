@@ -34,6 +34,8 @@ export const CARD_STYLES = `
         .subtitle { font-size: 0.85rem; color: var(--secondary-text-color); }
         .window-icon { color: var(--error-color, #db4437); }
         .window-icon[hidden] { display: none; }
+        .radiator-alert { color: var(--warning-color, #ffa600); cursor: pointer; }
+        .radiator-alert[hidden] { display: none; }
         .chevron { transition: transform 0.2s ease; color: var(--secondary-text-color); }
         .chevron.open { transform: rotate(180deg); }
         /* auto-fit fits as many equal columns as the min width allows, so a

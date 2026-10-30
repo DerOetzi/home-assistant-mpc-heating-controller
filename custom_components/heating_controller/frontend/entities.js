@@ -36,6 +36,22 @@ export const resolveRoles = (hass, deviceId) => {
   return roles;
 };
 
+// The header warning while a radiator stays cold although its valve is open
+// (air in it, a valve stuck shut): null while all is well, otherwise the
+// sensor to open and a tooltip naming the TRVs.
+export const radiatorAlert = (hass, roles) => {
+  const sensor = roles.radiatorAlert;
+  if (!sensor || sensor.state !== "on") return null;
+  const trvNames = (sensor.attributes?.trv_entities ?? []).map(
+    (entityId) => hass.states[entityId]?.attributes?.friendly_name || entityId
+  );
+  const text = t(hass, "radiator_not_heating");
+  return {
+    entityId: sensor.entity_id,
+    text: trvNames.length ? `${text}: ${trvNames.join(", ")}` : text,
+  };
+};
+
 // The rows the card seeds itself: the raw room sensor, one per TRV, one per
 // window contact. Each carries a stable `key` so the config can pin order,
 // name and icon without hard-coding entity ids.

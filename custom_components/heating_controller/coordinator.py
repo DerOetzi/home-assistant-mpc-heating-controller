@@ -884,6 +884,17 @@ class HeatingRoomCoordinator:
         return self._trv_entity_ids
 
     @property
+    def radiators_not_heating(self) -> list[str]:
+        """TRVs whose radiator gives off no heat although the valve is open."""
+        return [
+            entity_id
+            for entity_id, not_heating in zip(
+                self._trv_entity_ids, self.mpc.radiators_not_heating
+            )
+            if not_heating
+        ]
+
+    @property
     def current_heat_mode(self) -> HeatMode:
         return self.state.resolve_display_mode(self.blocked)
 

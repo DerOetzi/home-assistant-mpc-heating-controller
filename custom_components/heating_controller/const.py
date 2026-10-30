@@ -205,6 +205,12 @@ class UaBalanceOutcome(StrEnum):
     VALVE_POSITION_MISSING = "valve_position_missing"
     # A TRV calibrates its valve and moves it by itself.
     TRV_ADAPTING = "trv_adapting"
+    # A radiator gives off no heat although its valve reports open.
+    RADIATOR_NOT_HEATING = "radiator_not_heating"
+    # The valves stood fully open with the room below its target band for
+    # most of the stretch: the heat assumed for a full opening is the least
+    # certain one (a flow-limited radiator gives off less).
+    VALVE_SATURATED = "valve_saturated"
     # The room is not yet near its setpoint -- still coasting down from above
     # or recovering from below; the stretch starts once it has settled.
     COASTING = "coasting"
@@ -221,6 +227,7 @@ class CapacityOutcome(StrEnum):
     ROOM_SENSOR_FALLBACK = "room_sensor_fallback"
     VALVE_POSITION_MISSING = "valve_position_missing"
     TRV_ADAPTING = "trv_adapting"
+    RADIATOR_NOT_HEATING = "radiator_not_heating"
     PAUSED = "paused"
     WAITING = "waiting"
     DISABLED = "disabled"

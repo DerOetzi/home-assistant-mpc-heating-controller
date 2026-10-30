@@ -311,6 +311,20 @@ class HeatEmitterModel:
             total += self._emitter_power_w(emitter, overtemperature_c) * fraction
         return round_to_step(total, 0.01)
 
+    def full_output_fractions(
+        self, flow_temperature_c: float | None, room_temperature_c: float
+    ) -> list[float | None]:
+        """Per radiator, its output with the valve fully open, as a share of
+        its design output, at this flow and room temperature."""
+        if flow_temperature_c is None:
+            return [None] * len(self._emitters)
+        return [
+            self._relative_output(
+                1.0, flow_temperature_c, room_temperature_c, emitter.exponent
+            )
+            for emitter in self._emitters
+        ]
+
     def power_fraction_at_opening(
         self,
         opening_pct: float,

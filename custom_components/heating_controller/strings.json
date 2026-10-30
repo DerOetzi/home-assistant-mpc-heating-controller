@@ -218,6 +218,9 @@
     "binary_sensor": {
       "heating_automation": {
         "name": "Heating automation"
+      },
+      "radiator_not_heating": {
+        "name": "Radiator not heating"
       }
     },
     "button": {
@@ -288,10 +291,12 @@
           "too_short": "Discarded: too short",
           "implausible_target": "Discarded: implausible target",
           "storage_dominated": "Discarded: stored heat dominates",
+          "valve_saturated": "Discarded: valves fully open",
           "room_sensor_fallback": "Room sensor missing",
           "window_open": "Window open",
           "valve_position_missing": "Valve position missing",
-          "trv_adapting": "TRV calibrating"
+          "trv_adapting": "TRV calibrating",
+          "radiator_not_heating": "Radiator not heating"
         }
       },
       "capacity_learning_status": {
@@ -309,7 +314,8 @@
           "waiting": "Waiting",
           "disabled": "Disabled",
           "valve_position_missing": "Valve position missing",
-          "trv_adapting": "TRV calibrating"
+          "trv_adapting": "TRV calibrating",
+          "radiator_not_heating": "Radiator not heating"
         }
       }
     }

@@ -48,6 +48,9 @@ class RoomMpcInput:
     # A TRV calibrates its valve: it moves the valve by itself, whatever the
     # controller asks for.
     trv_adapting: bool = False
+    # A radiator gives off no heat although its valve reports open (air in
+    # it, a valve stuck shut).
+    radiator_not_heating: bool = False
 
 
 @dataclass

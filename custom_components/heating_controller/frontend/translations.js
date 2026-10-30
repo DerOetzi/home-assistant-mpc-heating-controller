@@ -12,6 +12,7 @@ export const TRANSLATIONS = {
     status_automatic: "Automatic",
     status_blocked: "Blocked",
     unblock: "Unblock",
+    radiator_not_heating: "Radiator not heating – check or bleed it",
 
     // Card — sections
     section_details: "Details",
@@ -90,6 +91,7 @@ export const TRANSLATIONS = {
     status_automatic: "Automatik",
     status_blocked: "Blockiert",
     unblock: "Entblocken",
+    radiator_not_heating: "Heizkörper heizt nicht – prüfen bzw. entlüften",
 
     section_details: "Details",
     section_controls: "Heizungssteuerung",

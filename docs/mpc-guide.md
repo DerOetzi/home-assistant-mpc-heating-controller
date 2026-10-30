@@ -45,13 +45,15 @@ stands:
 | `paused` | Learning enabled entity off. |
 | `too_short` | The stretch ended with fewer than four usable hours. |
 | `gap` | A sample gap above 20 minutes. |
-| `drift` | The trend over the stretch moved the room more than 0.3 K. |
+| `drift` | The trend over the stretch moved the room more than 0.3 K. A stretch that started on a still room away from its setpoint is first retried from where the room came near its setpoint, if four hours are left. |
 | `small_temperature_difference` | Room on average less than 8 K above outside. |
 | `storage_dominated` | The heat stored in or released by the room was more than half of the radiator heat. |
 | `implausible_target` | The balance pointed at a factor above 2. |
 | `room_sensor_fallback` | The configured room sensor is stale or unavailable and the TRVs stand in. |
 | `valve_position_missing` | A linked valve position entity is stale or unavailable. |
 | `trv_adapting` | A TRV calibrates its valve and moves it by itself. |
+| `radiator_not_heating` | A radiator stays cold although its valve reports open, see [Radiator check](#radiator-check). |
+| `valve_saturated` | For more than half the stretch every valve was at least 95 % open with the room below its target band. The heat assumed for a full opening is the least certain (a flow-limited radiator gives off less), so the factor is left alone; the target is kept for diagnostics. |
 | `window_open` | A window contact in the room is open. |
 
 | Attribute | Meaning |
@@ -78,6 +80,7 @@ capacity factor:
 | `room_sensor_fallback` | The window holds samples taken while the TRVs stood in for the room sensor. |
 | `valve_position_missing` | The window holds samples without a reported valve opening. |
 | `trv_adapting` | The window holds samples taken while a TRV calibrated its valve. |
+| `radiator_not_heating` | The window holds samples taken while a radiator stayed cold. |
 | `paused` | Learning enabled entity off. |
 | `waiting` | No complete window yet. |
 | `disabled` | Heating unavailable. |
@@ -246,6 +249,24 @@ hours at the latest (a run took about 1 h 50 min), and forced frost protection s
 through. As the TRV moves its valve by itself meanwhile, the room learns nothing then (status
 `trv_adapting`) and the disturbance is held.
 
+## Radiator check
+
+Air in a radiator or a valve stuck shut looks the same to the controller: the TRV reports
+its valve open, yet the radiator stays cold. Per TRV, once the valve has reported at least
+90 % for an hour with heating available and a flow warm enough for the fully open radiator
+to give off at least 30 % of its design output (from the design system and the radiator's
+exponent; a 55/45 radiator in a 21 °C room needs about 34 °C), the radiator counts as not
+heating if over that hour the TRV's reading neither rose by 0.3 K nor sits 1 K above the
+room, and it never warmed during that opening. Below that flow even a sound radiator stays
+barely warm, so the hour starts over. A hot-water charge (a flow spike on the shared leaving-water
+sensor) starts the hour over. The verdict holds while the valve is shut and clears as soon
+as an open valve warms the TRV again.
+
+Meanwhile the room learns nothing (status `radiator_not_heating`) and the disturbance is
+held. `binary_sensor.<room>_radiator_not_heating` (problem) is on, its attribute
+`trv_entities` names the TRVs: an automation can send a notification to check — bleed —
+the radiator.
+
 ## Valve position: the heat the radiators really get
 
 A TRV is a thermostat, not a valve positioner: the controller sets its target temperature,
@@ -292,8 +313,12 @@ Each room runs its model alongside the room as a state observer (sensor
   lasting gain — and no fall while it is fully open (95 % and up). The other direction
   only moves where the controller needs out of the limit: with the valve shut a fall only
   while the room is below the target band, fully open a rise only while it is above the
-  setpoint. Otherwise sensor steps would ratchet it one way. It survives restarts and can
-  be set with `recalibrate`.
+  setpoint. Otherwise sensor steps would ratchet it one way. The heat balance leaves the
+  disturbance out, so a learned heat-loss factor takes up the neighbours' heat as well:
+  when a balance moves the factor, the disturbance hands over what the change now
+  explains (factor change × base heat loss × the stretch's mean room-outdoor difference),
+  so the same heat is not counted twice and the model's net loss for that night stays
+  as it was. It survives restarts and can be set with `recalibrate`.
 - The valve demand is planned from the estimate, the radiators' current output and the
   disturbance, so a room whose radiators are still hot closes earlier. The hold and
   recovery flow temperatures use the lag but leave the disturbance out: the flow

@@ -46,6 +46,9 @@ map when you reorder or rename the row, but can't edit it.
 active mode, or "Frost protection enforced" if a window is open or the room's TRVs report as
 inactive. An **Unblock** button appears next to the title whenever the room is currently
 blocked (manually overridden); tapping the header itself expands or collapses the card.
+While a radiator stays cold although its valve is open (`binary_sensor.<room>_radiator_not_heating`,
+see the MPC guide's "Radiator check"), an amber radiator icon shows in the header, collapsed
+or not; its tooltip names the TRVs and tapping it opens that sensor.
 
 **Header values** (always visible): the room's own temperature, followed by any extra
 sensors you've added (humidity, CO₂, PM2.5, …).

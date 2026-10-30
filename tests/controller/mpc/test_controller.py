@@ -714,3 +714,14 @@ def test_a_missing_valve_position_freezes_the_disturbance(monkeypatch):
 
     assert first.result.input.valve_position_missing is True
     assert result.result.disturbance_w == 100.0
+
+
+def test_the_learning_cycle_hands_the_disturbance_to_the_learned_factor():
+    controller = make_controller()
+    controller.restore_disturbance(150.0)
+    controller._learner.consume_disturbance_transfer_w = lambda: 40.0
+    controller._learner.run_learning_cycle = lambda: None
+
+    controller.run_learning_cycle()
+
+    assert controller.disturbance_w == 110.0
