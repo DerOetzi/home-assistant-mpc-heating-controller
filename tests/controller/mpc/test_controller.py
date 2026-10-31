@@ -725,3 +725,58 @@ def test_the_learning_cycle_hands_the_disturbance_to_the_learned_factor():
     controller.run_learning_cycle()
 
     assert controller.disturbance_w == 110.0
+
+
+def _charge(controller, clock, flows_c, room_temp_c=20.5):
+    result = None
+    for flow_c in flows_c:
+        clock.advance(300)
+        _feed(controller, room_temp_c, flow_temp_c=flow_c)
+        result = controller.compute(target_temperature_c=21.0)
+    return result
+
+
+def test_a_hot_water_charge_keeps_the_demand_of_the_heating_flow(monkeypatch):
+    # 31 October, 05:05: the flow jumped from 35 to 56 °C while the
+    # radiators got no water; the valves closed on the hot flow reading.
+    clock = _Clock(monkeypatch)
+    heating = _unsmoothed_controller()
+    steady = _charge(heating, clock, [35.0, 35.0, 35.0, 35.0])
+
+    clock = _Clock(monkeypatch)
+    charging = _unsmoothed_controller()
+    charged = _charge(charging, clock, [35.0, 35.0, 35.0, 56.0])
+
+    assert charged.result.input.hot_water_charge is True
+    assert charged.result.input.flow_temp_c == 35.0
+    assert charged.result.demand_pct == steady.result.demand_pct
+
+
+def test_radiators_get_no_heat_during_a_hot_water_charge(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _unsmoothed_controller()
+    before = _charge(controller, clock, [35.0, 35.0, 35.0], room_temp_c=19.0)
+    during = _charge(controller, clock, [56.0, 56.0, 56.0], room_temp_c=19.0)
+
+    clock = _Clock(monkeypatch)
+    heating = _unsmoothed_controller()
+    steady = _charge(heating, clock, [35.0] * 6, room_temp_c=19.0)
+
+    # The radiators cool down with their own lag.
+    assert before.result.radiator_power_w > 0
+    assert during.result.radiator_power_w < before.result.radiator_power_w
+    assert during.result.radiator_power_w < 0.75 * steady.result.radiator_power_w
+
+
+def test_a_hot_water_charge_freezes_the_disturbance(monkeypatch):
+    # Katharina, 31 October: disturbance 13.6 -> -6.2 W over the charge.
+    clock = _Clock(monkeypatch)
+    controller = _unsmoothed_controller()
+    controller.enable_learning()
+    controller.restore_disturbance(100.0)
+    _charge(controller, clock, [35.0])
+    disturbance_w = controller.disturbance_w
+    result = _charge(controller, clock, [56.0] * 6, room_temp_c=19.5)
+
+    assert result.result.input.hot_water_charge is True
+    assert result.result.disturbance_w == disturbance_w

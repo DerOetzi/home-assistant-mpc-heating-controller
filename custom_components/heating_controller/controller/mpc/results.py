@@ -51,6 +51,12 @@ class RoomMpcInput:
     # A radiator gives off no heat although its valve reports open (air in
     # it, a valve stuck shut).
     radiator_not_heating: bool = False
+    # When the valve of that radiator opened: from then on its heat is in
+    # doubt.
+    radiator_not_heating_since_ts: float | None = None
+    # A domestic hot-water charge runs: the radiators get no water, and
+    # flow_temp_c is the heating flow from before it.
+    hot_water_charge: bool = False
 
 
 @dataclass

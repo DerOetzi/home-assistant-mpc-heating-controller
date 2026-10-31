@@ -47,6 +47,8 @@ def make_input(
     trv_adapting=False,
     radiator_not_heating=False,
     valve_positions_pct=(),
+    radiator_not_heating_since_ts=None,
+    hot_water_charge=False,
 ):
     return RoomMpcInput(
         now_ts=now_ts,
@@ -64,6 +66,8 @@ def make_input(
         valve_position_missing=valve_position_missing,
         trv_adapting=trv_adapting,
         radiator_not_heating=radiator_not_heating,
+        radiator_not_heating_since_ts=radiator_not_heating_since_ts,
+        hot_water_charge=hot_water_charge,
         valve_positions_pct=list(valve_positions_pct),
     )
 
@@ -537,8 +541,8 @@ def test_heat_balance_counts_hot_water_charges_as_no_heating():
     learner.enable()
 
     count = NIGHT_COUNT
-    # Power during the charge is what the model would deliver at the spiked
-    # flow; the radiators actually got nothing.
+    # The observer's power lags into the charge; the radiators actually got
+    # nothing.
     for index in range(count):
         charging = 30 <= index < 36
         learner.append_history(
@@ -546,8 +550,9 @@ def test_heat_balance_counts_hot_water_charges_as_no_heating():
                 NIGHT_START_TS + index * STEP_S,
                 room_temp_c=20.0,
                 outdoor_temp_c=0.0,
-                flow_temp_c=55.0 if charging else 40.0,
+                flow_temp_c=40.0,
                 target_temp_c=20.0,
+                hot_water_charge=charging,
             ),
             applied_heating_power_w=5000.0 if charging else 312.5,
             radiator_power_w=5000.0 if charging else 312.5,
@@ -675,6 +680,51 @@ def test_stretch_starts_once_the_sun_condition_holds():
     learner.run_learning_cycle()
 
     assert learner.get_ua_balance_info().collecting_since_ts == NIGHT_START_TS + 3600
+
+
+def test_a_room_moving_after_sunrise_is_outside_the_window_not_coasting():
+    # Dani and shower room, 31 October: balanced at sunrise, then warming
+    # up in the morning while the night mode was still on.
+    learner, _, _ = make_learner()
+    learner.enable()
+    sunrise_ts = NIGHT_START_TS + 6 * 3600
+    learner.set_sun_condition(lambda ts: ts < sunrise_ts)
+
+    end_ts = _feed_night(
+        learner,
+        hours=6.5,
+        room_temps=[20.0 + 0.05 * max(0, index - 72) for index in range(79)],
+    )
+    learner.run_learning_cycle()
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.LEARNED
+
+    _feed_night(
+        learner,
+        hours=1,
+        start_ts=end_ts + STEP_S,
+        room_temps=[20.35 + 0.05 * index for index in range(13)],
+    )
+    learner.run_learning_cycle()
+
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.OUTSIDE_WINDOW
+
+
+def test_closing_the_learning_window_after_sunrise_balances_nothing():
+    # All rooms, 31 October: night mode off an hour after sunrise.
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+    sunrise_ts = NIGHT_START_TS + 6 * 3600
+    learner.set_sun_condition(lambda ts: ts < sunrise_ts)
+
+    end_ts = _feed_night(learner, hours=7)
+    learner.run_learning_cycle()
+    learned_factor = loss_model.learned_ua_factor
+
+    learner.set_learning_window_active(False, end_ts + 60)
+    learner.run_learning_cycle()
+
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.OUTSIDE_WINDOW
+    assert loss_model.learned_ua_factor == learned_factor
 
 
 def test_ua_suppression_balances_the_stretch_before_it():
@@ -1483,6 +1533,33 @@ def test_a_radiator_not_heating_ends_the_stretch_before_it():
 
     end_ts = _feed_night(learner, hours=5)
     _feed_night(learner, hours=0.5, start_ts=end_ts + STEP_S, radiator_not_heating=True)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.LEARNED
+    assert info.last_window_s == pytest.approx(5 * 3600)
+
+
+def test_a_radiator_not_heating_ends_the_stretch_when_its_valve_opened():
+    # Dining room, 31 October: valve open from 03:38, reported at 04:50; the
+    # hour in between went into the balance with heat the radiator may not
+    # have given off.
+    learner, _, _ = make_learner()
+    learner.enable()
+
+    end_ts = _feed_night(learner, hours=6)
+    opened_ts = end_ts - 3600
+    learner.append_history(
+        make_input(
+            end_ts + STEP_S,
+            room_temp_c=20.0,
+            target_temp_c=20.0,
+            radiator_not_heating=True,
+            radiator_not_heating_since_ts=opened_ts,
+        ),
+        applied_heating_power_w=312.5,
+        radiator_power_w=312.5,
+    )
     learner.run_learning_cycle()
 
     info = learner.get_ua_balance_info()

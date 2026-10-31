@@ -41,7 +41,7 @@ stands:
 | `learned_at_limit` | The target lay below 0.15: the radiators supplied almost nothing and the room lives off its neighbours. The factor moved towards 0.15 only. |
 | `collecting` | A stretch is running. |
 | `coasting` | The room is more than 0.1 K above its setpoint or below its target band; the stretch starts once it is back or has held its temperature for an hour. |
-| `outside_window` | Learning window entity off, or sun. |
+| `outside_window` | Learning window entity off, or sun. A room still moving after sunrise reports this, not `coasting`, and a learning window that closes after sunrise balances nothing. |
 | `paused` | Learning enabled entity off. |
 | `too_short` | The stretch ended with fewer than four usable hours. |
 | `gap` | A sample gap above 20 minutes. |
@@ -75,7 +75,7 @@ capacity factor:
 | `small_error` | The replay ended within 0.15 K of the room. |
 | `small_change` | The replay itself moved less than 0.1 K. |
 | `outside_window` | Sun up or less than two hours after sunset. |
-| `disturbed` | Outdoor temperature drifted more than 1 K or the flow jumped more than 5 K (a hot-water charge, for instance). |
+| `disturbed` | Outdoor temperature drifted more than 1 K or the heating flow jumped more than 5 K. A hot-water charge does not count, see [Hot-water charges](#hot-water-charges). |
 | `suppressed` | A window is open or was just closed (10 min), or the configuration changed. |
 | `room_sensor_fallback` | The window holds samples taken while the TRVs stood in for the room sensor. |
 | `valve_position_missing` | The window holds samples without a reported valve opening. |
@@ -120,8 +120,8 @@ for, whatever the model believes the losses are.
   between room and outside. The drift is taken from a straight line fitted through the
   whole stretch (samples weighted by the time they stand for), not from its edges, so
   heating pulses, a sensor reporting once an hour or a hot-water dip at the start do not
-  count as stored heat. Samples where the flow temperature sits
-  more than 5 K above the stretch's median (a hot-water charge) count as no heating. Each
+  count as stored heat. Samples taken during a hot-water charge (see
+  [Hot-water charges](#hot-water-charges)) count as no heating. Each
   stretch is used once. Steady gains during the window (people, appliances,
   neighbouring rooms) end up in the factor — that is what the room needs in operation.
   Two checks keep measurement artefacts out: a stretch where the heat stored in or
@@ -257,13 +257,19 @@ its valve open, yet the radiator stays cold. Per TRV, once the valve has reporte
 to give off at least 30 % of its design output (from the design system and the radiator's
 exponent; a 55/45 radiator in a 21 °C room needs about 34 °C), the radiator counts as not
 heating if over that hour the TRV's reading neither rose by 0.3 K nor sits 1 K above the
-room, and it never warmed during that opening. Below that flow even a sound radiator stays
-barely warm, so the hour starts over. A hot-water charge (a flow spike on the shared leaving-water
-sensor) starts the hour over. The verdict holds while the valve is shut and clears as soon
-as an open valve warms the TRV again.
+room, and it never warmed during that opening. The rise counts from the lowest reading of
+the 15 minutes before the valve opened: a radiator that gets water warms its TRV within one
+controller cycle. A room that rose by 0.3 K over the hour holds off the verdict for that
+hour as well — where a radiator fan blows room air past the TRV, it reads close to the room
+even next to a warm radiator — but unlike a warm TRV it does not clear the whole opening:
+sun or a neighbour may lift a room too, and room sensors step in 0.1 K. Below that flow even
+a sound radiator stays barely warm, so the hour starts over. A hot-water charge (see
+[Hot-water charges](#hot-water-charges)) starts the hour over. The verdict holds while the
+valve is shut and clears as soon as an open valve warms the TRV again.
 
 Meanwhile the room learns nothing (status `radiator_not_heating`) and the disturbance is
-held. `binary_sensor.<room>_radiator_not_heating` (problem) is on, its attribute
+held. The running heat-balance stretch ends where the valve opened for the hour that led to
+the verdict: that hour's heat is in doubt as well. `binary_sensor.<room>_radiator_not_heating` (problem) is on, its attribute
 `trv_entities` names the TRVs: an automation can send a notification to check — bleed —
 the radiator.
 
@@ -307,7 +313,9 @@ Each room runs its model alongside the room as a state observer (sensor
   available, no sun, window closed and settled, room sensor reporting, learning not paused.
   During the day it keeps last night's value; otherwise the sun would be taken up and
   missing for hours after sunset. Without heating it keeps the value of the last heating
-  night: the radiator model's error, part of what it takes up, is missing then. It
+  night: the radiator model's error, part of what it takes up, is missing then. During a
+  hot-water charge the radiators get no water and cool down with their lag; the disturbance
+  keeps its value. It
   does not move further in a direction the valve can no longer follow: no rise while the
   valve is shut (below 5 %) — a room coasting above its setpoint on stored heat is no
   lasting gain — and no fall while it is fully open (95 % and up). The other direction
@@ -372,6 +380,17 @@ a room's demand; a jump that repeats over a few polls is accepted as a real chan
 The flow temperature is exempt from that filter. Its jumps are physical —
 compressor start, defrost, or a hot-water charge showing up on a shared leaving-water sensor
 — and it only feeds the valve demand, never the minimum flow temperature (see below).
+
+### Hot-water charges
+
+A heat pump charging its hot-water tank sends hot water to the tank, not the radiators,
+while a shared leaving-water sensor reads its flow spiking. A flow more than 5 K above the
+lowest one of the last hour counts as such a charge. Meanwhile the valve demand is planned
+with the heating flow from before the charge, so the valves do not close on the hot reading;
+the observer lets the radiators cool down, the disturbance holds, the heat balance counts
+no heating and the radiator check starts its hour over. A flow raised for more than an hour
+is the new heating flow. While heating is unavailable the reference starts over; a heat
+pump ramping up after such a pause may read as a charge for a while.
 
 ## Flow temperature and an unreachable heat source
 

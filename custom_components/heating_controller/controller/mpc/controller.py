@@ -10,6 +10,7 @@ from .models.capacity import ThermalCapacityModel
 from .models.emitter import HeatEmitterModel
 from .models.loss import RoomLossModel
 from .observer import ObserverEstimate, RoomStateObserver, step_radiator_power_w
+from .hot_water import HotWaterChargeDetector
 from .radiator_monitor import RadiatorDeliveryMonitor
 from .results import (
     RoomMpcError,
@@ -175,6 +176,7 @@ class RoomMpcController:
             target_band_c=self._target_band_c,
         )
         self._heat_available = True
+        self._hot_water = HotWaterChargeDetector()
         self._radiator_monitors = [RadiatorDeliveryMonitor() for _ in trvs]
 
         self._target_demand_pct = 0.0
@@ -278,6 +280,16 @@ class RoomMpcController:
 
         mpc_input = input_result.input
         if apply_side_effects:
+            self._hot_water.update(
+                mpc_input.now_ts, mpc_input.flow_temp_c, self._heat_available
+            )
+        if self._hot_water.charging:
+            # The radiators get no water; the valves keep the demand of the
+            # heating flow they get back once the charge is done.
+            mpc_input.hot_water_charge = True
+            if self._hot_water.heating_flow_c is not None:
+                mpc_input.flow_temp_c = self._hot_water.heating_flow_c
+        if apply_side_effects:
             for monitor, opening_pct, trv_temperature_c, output_fraction in zip(
                 self._radiator_monitors,
                 mpc_input.valve_positions_pct
@@ -292,20 +304,30 @@ class RoomMpcController:
                     opening_pct,
                     trv_temperature_c,
                     mpc_input.room_temp_c,
-                    mpc_input.flow_temp_c,
                     self._heat_available,
                     output_fraction,
+                    hot_water_charge=mpc_input.hot_water_charge,
                 )
         mpc_input.radiator_not_heating = any(self.radiators_not_heating)
+        mpc_input.radiator_not_heating_since_ts = min(
+            (
+                monitor.not_heating_since_ts
+                for monitor in self._radiator_monitors
+                if monitor.not_heating_since_ts is not None
+            ),
+            default=None,
+        )
         estimate = self._observer.estimate(
             mpc_input,
             # Without a reported valve opening the radiator heat is a guess,
-            # an adapting TRV ignores the demand and a radiator full of air
-            # gives off less than its opening says; the disturbance would
-            # take up the difference.
+            # an adapting TRV ignores the demand, a radiator full of air
+            # gives off less than its opening says and during a hot-water
+            # charge the radiators cool down; the disturbance would take up
+            # the difference.
             disturbance_update_allowed=not mpc_input.valve_position_missing
             and not mpc_input.trv_adapting
             and not mpc_input.radiator_not_heating
+            and not mpc_input.hot_water_charge
             and self._learner.disturbance_update_allowed(
                 mpc_input.now_ts, mpc_input.room_sensor_fallback
             ),
@@ -368,13 +390,12 @@ class RoomMpcController:
         )
 
         if apply_side_effects:
+            water_flowing = self._heat_available and not mpc_input.hot_water_charge
             self._observer.commit(
                 estimate,
                 mpc_input,
-                target_power_w=(
-                    measured_heating_power_w if self._heat_available else 0.0
-                ),
-                demand_pct=effective_opening_pct if self._heat_available else 0.0,
+                target_power_w=measured_heating_power_w if water_flowing else 0.0,
+                demand_pct=effective_opening_pct if water_flowing else 0.0,
             )
             self._record_learning_telemetry(
                 mpc_input,

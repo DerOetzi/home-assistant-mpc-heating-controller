@@ -14,8 +14,8 @@ def _feed(
     start_ts=START_TS,
     opening_pct=100.0,
     room_c=20.6,
-    flow_c=38.0,
     heat_available=True,
+    hot_water_charge=False,
 ):
     for index, trv_c in enumerate(trv_temps):
         monitor.update(
@@ -23,8 +23,8 @@ def _feed(
             opening_pct,
             trv_c,
             room_c,
-            flow_c,
             heat_available,
+            hot_water_charge=hot_water_charge,
         )
     return start_ts + (len(trv_temps) - 1) * STEP_S
 
@@ -86,7 +86,9 @@ def test_a_hot_water_charge_starts_the_hour_over():
     monitor = RadiatorDeliveryMonitor()
 
     end_ts = _feed(monitor, [21.1] * (HOUR - 4))
-    end_ts = _feed(monitor, [21.1] * 4, start_ts=end_ts + STEP_S, flow_c=54.0)
+    end_ts = _feed(
+        monitor, [21.1] * 4, start_ts=end_ts + STEP_S, hot_water_charge=True
+    )
     _feed(monitor, [21.1] * 4, start_ts=end_ts + STEP_S)
 
     assert monitor.not_heating is False
@@ -115,7 +117,7 @@ def test_no_verdict_while_the_flow_is_too_cool_for_a_sound_radiator():
 
     for index in range(HOUR + 6):
         monitor.update(
-            START_TS + index * STEP_S, 100.0, 21.1, 20.9, 30.0, True, 0.18
+            START_TS + index * STEP_S, 100.0, 21.1, 20.9, True, 0.18
         )
 
     assert monitor.not_heating is False
@@ -126,7 +128,91 @@ def test_a_cold_radiator_at_a_warm_flow_is_still_reported():
 
     for index in range(HOUR):
         monitor.update(
-            START_TS + index * STEP_S, 100.0, 21.1, 20.6, 38.0, True, 0.42
+            START_TS + index * STEP_S, 100.0, 21.1, 20.6, True, 0.42
         )
 
     assert monitor.not_heating is True
+
+
+def test_the_rise_counts_from_just_before_the_valve_opened():
+    # Dining room, 31 October: valve 90 % from 03:38, its TRV up from 21.01
+    # to 21.36 by 03:53 and steady after, the room at 20.9. The first cycle
+    # with the valve open already read 21.13.
+    monitor = RadiatorDeliveryMonitor()
+    for index, trv_c in enumerate([21.21, 21.11, 21.01]):
+        monitor.update(START_TS + index * 100, 59.0, trv_c, 20.9, True, 0.35)
+
+    _feed(
+        monitor,
+        [21.13, 21.25, 21.36] + [21.36] * HOUR,
+        start_ts=START_TS + 300,
+        room_c=20.9,
+    )
+
+    assert monitor.not_heating is False
+
+
+def test_a_rising_room_counts_as_a_radiator_that_heats():
+    # Bedroom, 30 October: valve open from 21:19, TRV only 21.08 -> 21.30
+    # with the radiator fan blowing, the room 20.8 -> 21.2 in that hour.
+    monitor = RadiatorDeliveryMonitor()
+
+    for index in range(HOUR + 1):
+        monitor.update(
+            START_TS + index * STEP_S,
+            100.0,
+            21.08 + 0.22 * index / HOUR,
+            20.8 + 0.4 * index / HOUR,
+            True,
+            0.35,
+        )
+
+    assert monitor.not_heating is False
+
+
+def test_readings_long_before_the_opening_are_no_baseline():
+    monitor = RadiatorDeliveryMonitor()
+    monitor.update(START_TS, 0.0, 20.5, 20.6, True)
+
+    _feed(monitor, [21.1] * HOUR, start_ts=START_TS + 3600)
+
+    assert monitor.not_heating is True
+
+
+def test_a_room_swinging_by_a_sensor_step_does_not_hide_a_cold_radiator():
+    # Bedroom, 28 October, radiator full of air: the room 20.5 -> 20.7 within
+    # an hour in 0.1 K steps, the TRV within half a kelvin of it.
+    monitor = RadiatorDeliveryMonitor()
+
+    for index in range(HOUR):
+        monitor.update(
+            START_TS + index * STEP_S,
+            100.0,
+            21.0,
+            20.5 + 0.1 * (index // 6),
+            True,
+        )
+
+    assert monitor.not_heating is True
+
+
+def test_a_rising_room_only_holds_off_the_verdict_for_that_hour():
+    monitor = RadiatorDeliveryMonitor()
+    room_temps = [20.6 + 0.4 * index / HOUR for index in range(HOUR)]
+    room_temps += [room_temps[-1]] * (HOUR + 1)
+
+    for index, room_c in enumerate(room_temps):
+        monitor.update(START_TS + index * STEP_S, 100.0, 21.1, room_c, True)
+
+    assert monitor.not_heating is True
+
+
+def test_the_verdict_names_when_the_valve_opened():
+    monitor = RadiatorDeliveryMonitor()
+
+    end_ts = _feed(monitor, [21.1] * HOUR)
+    assert monitor.not_heating is True
+    assert monitor.not_heating_since_ts == START_TS
+
+    _feed(monitor, [21.0, 21.2, 21.5], start_ts=end_ts + STEP_S)
+    assert monitor.not_heating_since_ts is None

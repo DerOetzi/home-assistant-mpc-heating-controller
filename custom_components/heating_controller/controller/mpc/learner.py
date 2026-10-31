@@ -103,6 +103,8 @@ class LearnerHistoryEntry:
     valve_position_missing: bool = False
     trv_adapting: bool = False
     radiator_not_heating: bool = False
+    # A domestic hot-water charge ran: the radiators got no water.
+    hot_water_charge: bool = False
     # All reported valves at least VALVE_SATURATED_OPENING_PCT open with the
     # room below its target band.
     valve_saturated: bool = False
@@ -322,6 +324,7 @@ class RoomMpcModelLearner:
                 valve_position_missing=mpc_input.valve_position_missing,
                 trv_adapting=mpc_input.trv_adapting,
                 radiator_not_heating=mpc_input.radiator_not_heating,
+                hot_water_charge=mpc_input.hot_water_charge,
                 valve_saturated=self._valve_saturated(mpc_input),
                 window_open=self._window_open,
             )
@@ -348,7 +351,15 @@ class RoomMpcModelLearner:
             or self._radiator_not_heating
         )
         if degraded and not was_degraded and self._history:
-            self._close_ua_balance(self._history[-1].timestamp)
+            end_ts = self._history[-1].timestamp
+            if (
+                mpc_input.radiator_not_heating
+                and mpc_input.radiator_not_heating_since_ts is not None
+            ):
+                # The radiator is judged an hour after its valve opened; that
+                # hour's heat is in doubt as well.
+                end_ts = min(end_ts, mpc_input.radiator_not_heating_since_ts)
+            self._close_ua_balance(end_ts)
         if was_degraded and not degraded:
             self._ua_blocked_until_ts = max(
                 self._ua_blocked_until_ts, mpc_input.now_ts
@@ -532,7 +543,9 @@ class RoomMpcModelLearner:
         ):
             return
         start_ts = self._ua_balance_start_ts()
-        if end_ts <= start_ts:
+        if end_ts <= start_ts or not self._has_sun_free_sample(start_ts, end_ts):
+            # Nothing to balance: the stretch lies after sunrise, say, when
+            # the night mode ends later.
             return
         self._ua_balance_closed = (start_ts, end_ts)
         self._ua_balance_from_ts = max(self._ua_balance_from_ts, end_ts)
@@ -569,6 +582,12 @@ class RoomMpcModelLearner:
         if not self._history:
             return UaBalanceOutcome.COLLECTING
 
+        # Checked before the room has to settle: after sunrise a room warming
+        # up is no coasting room.
+        if not self._has_sun_free_sample(
+            self._ua_balance_start_ts(), self._history[-1].timestamp
+        ):
+            return UaBalanceOutcome.OUTSIDE_WINDOW
         start_ts = self._settled_since_ts(self._ua_balance_start_ts())
         if start_ts is None:
             return UaBalanceOutcome.COASTING
@@ -626,15 +645,6 @@ class RoomMpcModelLearner:
             return UaBalanceOutcome.WINDOW_OPEN
         end_ts = window[-1].timestamp
 
-        flow_temperatures = sorted(
-            entry.flow_temperature_c
-            for entry in window
-            if entry.flow_temperature_c is not None
-        )
-        median_flow_c = (
-            flow_temperatures[len(flow_temperatures) // 2] if flow_temperatures else None
-        )
-
         heat_j = 0.0
         temperature_difference_ks = 0.0
         saturated_s = 0.0
@@ -645,8 +655,7 @@ class RoomMpcModelLearner:
             if previous.valve_saturated:
                 saturated_s += duration_s
             heat_j += (
-                self._balance_heating_power_w(previous, current, median_flow_c)
-                * duration_s
+                self._balance_heating_power_w(previous, current) * duration_s
             )
             temperature_difference_ks += (
                 previous.room_temperature_c - previous.outdoor_temperature_c
@@ -720,6 +729,13 @@ class RoomMpcModelLearner:
             return UaBalanceOutcome.LEARNED_AT_LIMIT
         return UaBalanceOutcome.LEARNED
 
+    def _has_sun_free_sample(self, start_ts: float, end_ts: float) -> bool:
+        return any(
+            start_ts <= entry.timestamp <= end_ts
+            and self._sun_condition(entry.timestamp)
+            for entry in self._history
+        )
+
     def _settled_since_ts(self, start_ts: float) -> float | None:
         """First sample from start_ts on where the room has settled.
 
@@ -785,27 +801,18 @@ class RoomMpcModelLearner:
         return window[0].timestamp
 
     def _balance_heating_power_w(
-        self,
-        entry: LearnerHistoryEntry,
-        next_entry: LearnerHistoryEntry,
-        median_flow_c: float | None,
+        self, entry: LearnerHistoryEntry, next_entry: LearnerHistoryEntry
     ) -> float:
         # Mean of both ends of the interval, see _interval_radiator_power_w.
         return (
-            self._balance_point_power_w(entry, median_flow_c)
-            + self._balance_point_power_w(next_entry, median_flow_c)
+            self._balance_point_power_w(entry)
+            + self._balance_point_power_w(next_entry)
         ) / 2
 
-    def _balance_point_power_w(
-        self, entry: LearnerHistoryEntry, median_flow_c: float | None
-    ) -> float:
-        # A domestic hot water charge shows as a flow spike on the shared
-        # leaving-water sensor while the radiators get no water at all.
-        if (
-            median_flow_c is not None
-            and entry.flow_temperature_c is not None
-            and entry.flow_temperature_c > median_flow_c + MAX_FLOW_DELTA_C
-        ):
+    def _balance_point_power_w(self, entry: LearnerHistoryEntry) -> float:
+        # During a domestic hot-water charge the radiators get no water at
+        # all, however slowly the observer lets them cool.
+        if entry.hot_water_charge:
             return 0.0
         # While heating was unavailable the TRVs were closed, whatever the
         # controller kept requesting.
