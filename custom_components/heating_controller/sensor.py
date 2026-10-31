@@ -405,6 +405,7 @@ def _iso(timestamp: float | None) -> str | None:
 class UaFactorSensor(_DiagnosticSensor):
     _attr_translation_key = "ua_factor"
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 3
 
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
         super().__init__(coordinator, "ua_factor")
@@ -417,6 +418,7 @@ class UaFactorSensor(_DiagnosticSensor):
 class CapacityFactorSensor(_DiagnosticSensor):
     _attr_translation_key = "capacity_factor"
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 3
 
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
         super().__init__(coordinator, "capacity_factor")
