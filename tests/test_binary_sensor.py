@@ -95,3 +95,43 @@ async def test_reports_a_radiator_that_stays_cold(hass: HomeAssistant) -> None:
     state = hass.states.get(entity_id)
     assert state.state == "on"
     assert state.attributes["trv_entities"] == ["climate.heizung_wohnzimmer"]
+
+
+async def test_outdoor_temperature_missing_is_off_while_the_mpc_runs(
+    hass: HomeAssistant,
+) -> None:
+    await _setup(hass, _room_data(hass))
+
+    state = hass.states.get("binary_sensor.wohnzimmer_outdoor_temperature_missing")
+    assert state is not None
+    assert state.state == "off"
+    assert state.attributes["since"] is None
+    assert state.attributes["fallback_target_temperature_c"] is None
+
+
+async def test_outdoor_temperature_missing_reports_the_fallback(
+    hass: HomeAssistant,
+) -> None:
+    await _setup(hass, _room_data(hass))
+    hass.states.async_set("sensor.outdoor_temperature", "unavailable")
+    await hass.async_block_till_done()
+
+    state = hass.states.get("binary_sensor.wohnzimmer_outdoor_temperature_missing")
+    assert state.state == "on"
+    assert state.attributes["since"] is not None
+    assert state.attributes["fallback_target_temperature_c"] == 22.0
+
+
+async def test_outdoor_temperature_missing_stays_off_right_after_startup(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set("sensor.outdoor_temperature", "unavailable")
+    _register_stub_services(hass)
+    entry = MockConfigEntry(domain=DOMAIN, data=_room_data(hass))
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get("binary_sensor.wohnzimmer_outdoor_temperature_missing")
+    assert state.state == "off"

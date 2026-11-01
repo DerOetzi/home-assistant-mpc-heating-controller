@@ -656,6 +656,73 @@ def test_pause_balances_the_stretch_before_it():
     assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
 
 
+def test_missing_outdoor_temperature_balances_the_stretch_before_it():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    end_ts = _feed_night(learner, hours=5)
+    learner.set_outdoor_temperature_missing(True, end_ts + 60)
+    learner.run_learning_cycle()
+
+    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
+
+
+def test_missing_outdoor_temperature_blocks_both_factors():
+    learner, loss_model, capacity_model = make_learner()
+    learner.enable()
+    learner.set_outdoor_temperature_missing(True, START_TS - 600)
+
+    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
+
+    assert learner.get_ua_balance_info().outcome == (
+        UaBalanceOutcome.OUTDOOR_TEMPERATURE_MISSING
+    )
+    assert learner.get_capacity_outcome() == (
+        CapacityOutcome.OUTDOOR_TEMPERATURE_MISSING
+    )
+    assert capacity_model.learned_capacity_factor == 1.0
+    assert loss_model.learned_ua_factor == 1.0
+    assert not learner.disturbance_update_allowed(START_TS, False)
+
+
+def test_heat_balance_starts_after_the_outdoor_temperature_is_back():
+    learner, _, _ = make_learner()
+    learner.enable()
+    learner.set_outdoor_temperature_missing(True, NIGHT_START_TS - 600)
+    learner.set_outdoor_temperature_missing(False, NIGHT_START_TS + 3600)
+
+    _feed_night(learner)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.COLLECTING
+    assert info.collecting_since_ts == NIGHT_START_TS + 3600
+
+
+def test_capacity_window_across_a_short_outage_is_discarded():
+    """An outage between two cycles leaves the window open across it."""
+    learner, _, capacity_model = make_learner()
+    learner.enable()
+    learner.set_prediction(
+        LearnerPrediction(
+            timestamp=START_TS,
+            predicted_room_temperature_c=20.0,
+            prediction_horizon_s=1800,
+        )
+    )
+    learner.run_learning_cycle()
+    learner.set_outdoor_temperature_missing(True, START_TS + 600)
+    learner.set_outdoor_temperature_missing(False, START_TS + 900)
+    for mpc_input in _inputs(RISING):
+        learner.append_history(
+            mpc_input, applied_heating_power_w=2000.0, radiator_power_w=2000.0
+        )
+    learner.run_learning_cycle()
+
+    assert learner.get_capacity_outcome() == CapacityOutcome.SUPPRESSED
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
 def test_stretch_ends_at_sunrise():
     learner, loss_model, _ = make_learner()
     learner.enable()

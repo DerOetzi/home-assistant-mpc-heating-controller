@@ -46,7 +46,13 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   `_minimum_flow_temperature`). A surplus gate suppresses the requirement while a room is
   coasting above its setpoint on stored heat, so the value stays usable as a "does this
   room need heat now" signal; `sensor.<room>_hold_flow_temperature` keeps reporting the
-  ungated requirement for diagnosis. See [docs/mpc-guide.md](docs/mpc-guide.md).
+  ungated requirement for diagnosis. Hold and recovery flow use the same design spread as
+  the valve power the factors are learned from. See [docs/mpc-guide.md](docs/mpc-guide.md).
+- **Outdoor temperature outage** — without an outdoor temperature the TRVs get the active
+  mode's target as an absolute setpoint and regulate on their own, learning pauses, and
+  `binary_sensor.<room>_outdoor_temperature_missing` reports it. The MPC takes over again
+  once the value is back. See
+  [docs/mpc-guide.md](docs/mpc-guide.md#sensor-reliability).
 - **Persisted learning** — each room's learned `ua_factor`/`capacity_factor` survive
   restarts (`homeassistant.helpers.storage.Store`, one file per room) and are removed
   cleanly if the room's config entry is deleted. The admin-only

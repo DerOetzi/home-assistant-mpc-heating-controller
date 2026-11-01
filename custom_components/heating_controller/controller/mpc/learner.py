@@ -175,6 +175,7 @@ class RoomMpcModelLearner:
         self._trv_adapting = False
         self._radiator_not_heating = False
         self._window_open = False
+        self._outdoor_temperature_missing = False
         self._sun_condition: callable[[float], bool] = lambda _ts: True
         self._pending_persisted_factors: LearningFactors | None = None
         self._pending_disturbance_transfer_w = 0.0
@@ -273,6 +274,20 @@ class RoomMpcModelLearner:
         if window_open and self._enabled:
             self._learning_state = self._create_learning_state(LearningStatus.SUPPRESSED)
 
+    def set_outdoor_temperature_missing(self, missing: bool, now_ts: float) -> None:
+        # Without an outdoor temperature the controller plans nothing and the
+        # TRVs hold a fixed setpoint on their own: no samples come in, and the
+        # heat the radiators give off meanwhile is unknown. The stretch up to
+        # the last sample is still balanced, the next one starts once the
+        # value is back, and the capacity window across the outage is
+        # discarded.
+        if missing and not self._outdoor_temperature_missing and self._history:
+            self._close_ua_balance(self._history[-1].timestamp)
+        if self._outdoor_temperature_missing and not missing:
+            self._ua_blocked_until_ts = max(self._ua_blocked_until_ts, now_ts)
+            self._capacity_suppression.suppress(now_ts)
+        self._outdoor_temperature_missing = missing
+
     def set_sun_condition(self, sun_condition: callable[[float], bool]) -> None:
         self._sun_condition = sun_condition
 
@@ -298,6 +313,7 @@ class RoomMpcModelLearner:
             and not self._valve_position_missing
             and not self._trv_adapting
             and not self._radiator_not_heating
+            and not self._outdoor_temperature_missing
             and now_ts >= self._ua_blocked_until_ts
             and self._sun_condition(now_ts)
         )
@@ -420,6 +436,12 @@ class RoomMpcModelLearner:
         if self._is_paused_window(self._active_prediction):
             return LearningStatus.PAUSED, CapacityOutcome.PAUSED
 
+        if self._outdoor_temperature_missing:
+            return (
+                LearningStatus.SUPPRESSED,
+                CapacityOutcome.OUTDOOR_TEMPERATURE_MISSING,
+            )
+
         if self._capacity_suppression.current_window_invalid:
             return LearningStatus.SUPPRESSED, CapacityOutcome.SUPPRESSED
 
@@ -540,6 +562,7 @@ class RoomMpcModelLearner:
             or self._trv_adapting
             or self._radiator_not_heating
             or self._window_open
+            or self._outdoor_temperature_missing
         ):
             return
         start_ts = self._ua_balance_start_ts()
@@ -567,6 +590,8 @@ class RoomMpcModelLearner:
             return self._balance_stretch(start_ts, end_ts)
         if self._learning_paused:
             return UaBalanceOutcome.PAUSED
+        if self._outdoor_temperature_missing:
+            return UaBalanceOutcome.OUTDOOR_TEMPERATURE_MISSING
         if self._room_sensor_fallback:
             return UaBalanceOutcome.ROOM_SENSOR_FALLBACK
         if self._valve_position_missing:

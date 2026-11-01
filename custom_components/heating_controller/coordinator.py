@@ -86,6 +86,7 @@ from .controller.mpc.controller import (
     MpcRateLimitConfig,
     RoomMpcController,
 )
+from .controller.mpc.math_helper import clamp, round_to_step
 from .controller.mpc.results import RoomMpcResult
 from .controller.mpc.types import (
     FlowGateState,
@@ -129,6 +130,14 @@ SUNSET_LEARNING_DELAY = timedelta(hours=2)
 # below the room sensor and reopen a restored surplus gate. Wait this long for
 # the room sensor before accepting the fallback.
 ROOM_SENSOR_STARTUP_GRACE_S = 5 * 60
+
+# Right after startup the outdoor entity and the heat source may not have
+# reported yet. Without the heat source state the room reads as unheated and
+# would force frost protection; without the outdoor temperature it would hand
+# the TRVs an absolute fallback. Either is overwritten seconds later and costs
+# TRV and switch writes on every restart. So both wait until the input was
+# read once, or has been missing for a full poll cycle.
+STARTUP_GRACE_S = SENSOR_POLL_INTERVAL_MINUTES * 60
 
 # Added after rooms were already set up; an entry without them stops with a
 # hint to fill them in through the options flow instead of guessing.
@@ -286,6 +295,12 @@ class HeatingRoomCoordinator:
         self.normal_result: RoomMpcResult | None = None
         self.normal_heat_mode: HeatMode | None = None
         self.normal_target_temperature_c: float | None = None
+        # Without an outdoor temperature the TRVs get the room's target as an
+        # absolute setpoint and regulate on their own reading.
+        self.outdoor_fallback_since_ts: float | None = None
+        self.outdoor_fallback_target_c: float | None = None
+        self._outdoor_seen = False
+        self._started_ts = 0.0
 
         self._unsub: list[Callable[[], None]] = []
         self._listeners: list[Callable[[], None]] = []
@@ -299,6 +314,7 @@ class HeatingRoomCoordinator:
             update_callback()
 
     async def async_setup(self) -> None:
+        self._started_ts = time.time()
         factors = await self.store.async_load()
         if factors is not None:
             self.mpc.recalibrate_learning_factors(factors)
@@ -749,6 +765,7 @@ class HeatingRoomCoordinator:
             any(self._adaptation_running(trv, now_ts) for trv in self._trvs)
         )
         self.trv_active = self._compute_trv_active()
+        heat_source_pending = self._heat_source_pending()
         self.state.set_trv_active(self.trv_active)
         self.mpc.set_heat_available(self.trv_active)
         if self.trv_active:
@@ -757,7 +774,19 @@ class HeatingRoomCoordinator:
             self.mpc.disable_learning()
 
         if self._awaiting_room_sensor:
-            await self._async_apply_trv_active_switches(self.trv_active)
+            if not heat_source_pending:
+                await self._async_apply_trv_active_switches(self.trv_active)
+            self._notify_listeners()
+            return
+
+        # The room reads as unheated only because the heat source has not
+        # reported yet: no forced frost protection, nothing to write. A real
+        # reason (open window, a mode the user picked) still goes through.
+        if (
+            heat_source_pending
+            and not self.blocked
+            and not self.state.is_window_open
+        ):
             self._notify_listeners()
             return
 
@@ -782,12 +811,17 @@ class HeatingRoomCoordinator:
                 self.blocked
             ),
         )
+        forced = self.state.should_force_frost_protection(self.blocked)
+        if not self.mpc.outdoor_temperature_missing:
+            self._outdoor_seen = True
         if actual_compute.valid:
+            self._end_outdoor_fallback()
             self.last_result = actual_compute.result
-            await self._async_apply_result(
-                actual_compute.result,
-                forced=self.state.should_force_frost_protection(self.blocked),
+            await self._async_write_trv_targets(
+                actual_compute.result.trv_targets, forced=forced
             )
+        elif self.mpc.outdoor_temperature_missing and self._outdoor_fallback_due():
+            await self._async_apply_outdoor_fallback(actual_target, forced)
         else:
             _LOGGER.debug(
                 "MPC compute failed for room %s: %s",
@@ -795,7 +829,8 @@ class HeatingRoomCoordinator:
                 actual_compute.error,
             )
 
-        await self._async_apply_trv_active_switches(self.trv_active)
+        if not heat_source_pending:
+            await self._async_apply_trv_active_switches(self.trv_active)
         await self._async_persist_learning_factors()
         await self._async_persist_flow_gate_state()
         self._notify_listeners()
@@ -807,12 +842,89 @@ class HeatingRoomCoordinator:
         await self.flow_gate_store.async_save(flow_gate_state)
         self._persisted_flow_gate_state = flow_gate_state
 
-    async def _async_apply_result(
-        self, result: RoomMpcResult, forced: bool = False
+    async def _async_apply_outdoor_fallback(
+        self, target_temperature_c: float, forced: bool
     ) -> None:
-        for trv, target_temperature_c in zip(
-            self._trvs, result.trv_targets, strict=True
-        ):
+        """Hand the room to the TRVs while the outdoor temperature is missing.
+
+        The model cannot plan without it, and keeping the last relative target
+        would leave the valves where they happened to stand. The TRVs get the
+        target of the active mode as an absolute setpoint instead and regulate
+        on their own reading; the MPC takes over again once the value is back.
+        Learning pauses meanwhile (the controller tells the learner).
+        """
+        if self.outdoor_fallback_since_ts is None:
+            self.outdoor_fallback_since_ts = time.time()
+            _LOGGER.warning(
+                "Outdoor temperature missing for room %s; TRVs hold %s °C on "
+                "their own until it is back",
+                self.room_name,
+                target_temperature_c,
+            )
+        self.outdoor_fallback_target_c = target_temperature_c
+        # The planned values no longer apply; showing them would pass stale
+        # numbers off as current.
+        self.last_result = None
+        await self._async_write_trv_targets(
+            [
+                clamp(
+                    round_to_step(target_temperature_c, trv.target_temperature_step_c),
+                    trv.min_target_temperature_c,
+                    trv.max_target_temperature_c,
+                )
+                for trv in self._trvs
+            ],
+            forced=forced,
+        )
+
+    def _outdoor_fallback_due(self) -> bool:
+        """Whether a missing outdoor temperature is an outage, not a startup.
+
+        Until then nothing is written, as for any other missing input;
+        learning pauses all the same (the controller tells the learner).
+        """
+        return (
+            self._outdoor_seen
+            or not self._in_startup_grace()
+        )
+
+    def _in_startup_grace(self) -> bool:
+        return time.time() - self._started_ts < STARTUP_GRACE_S
+
+    def _heat_source_pending(self) -> bool:
+        """The heat source has not reported since startup, within the grace.
+
+        Its state and the flow temperature both decide whether the TRVs get
+        heat; until both were seen the room is not known to be unheated.
+        Without a heat source entity the room is unheated by configuration,
+        nothing to wait for.
+        """
+        if not self._heat_source_climate_entity:
+            return False
+        known = (
+            self._last_heat_source_state is not None
+            and self._flow_temperature_c is not None
+        )
+        return not known and self._in_startup_grace()
+
+    def _end_outdoor_fallback(self) -> None:
+        if self.outdoor_fallback_since_ts is None:
+            return
+        _LOGGER.info(
+            "Outdoor temperature back for room %s; the MPC takes over again",
+            self.room_name,
+        )
+        self.outdoor_fallback_since_ts = None
+        self.outdoor_fallback_target_c = None
+
+    @property
+    def outdoor_fallback_active(self) -> bool:
+        return self.outdoor_fallback_since_ts is not None
+
+    async def _async_write_trv_targets(
+        self, trv_targets: list[float], forced: bool = False
+    ) -> None:
+        for trv, target_temperature_c in zip(self._trvs, trv_targets, strict=True):
             entity_id = trv.climate_entity
             # Every write wakes the TRV and can abort a running adaptation run,
             # so only send a target the TRV does not already report, none to a

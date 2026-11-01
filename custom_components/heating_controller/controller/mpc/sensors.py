@@ -209,6 +209,9 @@ class RoomMpcSensors:
     ) -> None:
         self._flow_temperature_sensor.set_value(value, now_ts)
 
+    def is_outdoor_temperature_missing(self, now_ts: float | None = None) -> bool:
+        return self._outdoor_temperature_sensor.get_fresh_value(now_ts) is None
+
     def get_room_temperature(self, now_ts: float | None = None) -> RoomTemperatureResult:
         now_ts = time.time() if now_ts is None else now_ts
         trv_temperatures = [

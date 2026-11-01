@@ -221,6 +221,9 @@
       },
       "radiator_not_heating": {
         "name": "Heizkörper heizt nicht"
+      },
+      "outdoor_temperature_missing": {
+        "name": "Außentemperatur fehlt"
       }
     },
     "button": {
@@ -296,7 +299,8 @@
           "window_open": "Fenster offen",
           "valve_position_missing": "Ventilstellung fehlt",
           "trv_adapting": "TRV kalibriert",
-          "radiator_not_heating": "Heizkörper heizt nicht"
+          "radiator_not_heating": "Heizkörper heizt nicht",
+          "outdoor_temperature_missing": "Außentemperatur fehlt"
         }
       },
       "capacity_learning_status": {
@@ -315,7 +319,8 @@
           "disabled": "Deaktiviert",
           "valve_position_missing": "Ventilstellung fehlt",
           "trv_adapting": "TRV kalibriert",
-          "radiator_not_heating": "Heizkörper heizt nicht"
+          "radiator_not_heating": "Heizkörper heizt nicht",
+          "outdoor_temperature_missing": "Außentemperatur fehlt"
         }
       }
     }

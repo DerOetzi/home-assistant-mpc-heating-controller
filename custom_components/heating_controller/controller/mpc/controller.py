@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from math import ceil
 
@@ -182,6 +183,7 @@ class RoomMpcController:
         self._target_demand_pct = 0.0
         self._last_output_demand_pct = 0.0
         self._last_demand_update_ts = 0.0
+        self._outdoor_temperature_missing = False
 
     def destroy(self) -> None:
         self._learner.destroy()
@@ -211,6 +213,11 @@ class RoomMpcController:
 
     def restore_disturbance(self, disturbance_w: float) -> None:
         self._observer.restore_disturbance(disturbance_w)
+
+    @property
+    def outdoor_temperature_missing(self) -> bool:
+        """The last applied calculation found no fresh outdoor temperature."""
+        return self._outdoor_temperature_missing
 
     @property
     def radiators_not_heating(self) -> list[bool]:
@@ -274,7 +281,17 @@ class RoomMpcController:
         frost protection: an open window must not keep the valve open for
         the hold time while the demand steps down.
         """
-        input_result = self._sensors.create_input(target_temperature_c)
+        now_ts = time.time()
+        if apply_side_effects:
+            # Learning pauses while the outdoor temperature is missing, also
+            # when the room temperature is missing as well.
+            self._outdoor_temperature_missing = (
+                self._sensors.is_outdoor_temperature_missing(now_ts)
+            )
+            self._learner.set_outdoor_temperature_missing(
+                self._outdoor_temperature_missing, now_ts
+            )
+        input_result = self._sensors.create_input(target_temperature_c, now_ts)
         if not input_result.valid:
             return RoomMpcComputeResult(valid=False, error=input_result.error)
 
@@ -457,13 +474,6 @@ class RoomMpcController:
         if deficit_c <= FLOW_RECOVERY_TOLERANCE_C or hold_power_w <= 0:
             return _RecoveryFlow(0.0)
 
-        estimated_power_w = hold_power_w + (
-            self._capacity_model.effective_capacity_j_per_k
-            * deficit_c
-            / FLOW_RECOVERY_HORIZON_S
-        )
-        spread_c = self._emitter_model.part_load_spread_c(estimated_power_w)
-
         def reaches_target(flow_temperature_c: float) -> bool:
             return (
                 self._simulate_room_temperature_c(
@@ -472,7 +482,6 @@ class RoomMpcController:
                     demand_pct=100,
                     flow_temperature_c=flow_temperature_c,
                     duration_s=FLOW_RECOVERY_HORIZON_S,
-                    spread_c=spread_c,
                 )
                 >= mpc_input.target_temp_c - FLOW_RECOVERY_TOLERANCE_C
             )
@@ -591,7 +600,6 @@ class RoomMpcController:
         demand_pct: float,
         flow_temperature_c: float | None,
         duration_s: float,
-        spread_c: float | None = None,
         disturbance_w: float = 0.0,
     ) -> float:
         """Room temperature after holding a demand, from the observed state.
@@ -607,7 +615,7 @@ class RoomMpcController:
         for _ in range(step_count):
             available_heating_power_w = (
                 self._emitter_model.calculate_available_heating_power_w(
-                    simulated_room_temperature_c, flow_temperature_c, spread_c
+                    simulated_room_temperature_c, flow_temperature_c
                 )
             )
             target_power_w = available_heating_power_w * (demand_pct / 100)

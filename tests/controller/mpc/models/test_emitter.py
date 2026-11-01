@@ -115,39 +115,63 @@ def test_recommended_flow_temperature_zero_when_no_power_required():
     assert model.calculate_recommended_flow_temperature_c(0, 20) == 0
 
 
-def test_recommended_flow_uses_part_load_spread():
-    """At part load the spread collapses, so less flow is needed than the
-    design spread implies. Pinning this against an explicit design-spread
-    calculation keeps the two directions from silently converging again."""
-    model = HeatEmitterModel(
+def _esszimmer_model() -> HeatEmitterModel:
+    return HeatEmitterModel(
         RoomThermalConfig(
-            room_heat_load_w=1200,
-            room_area_m2=108,
+            design_indoor_temperature_c=20.0,
+            design_outdoor_temperature_c=-13.5,
+            room_heat_load_w=853,
+            room_area_m2=19,
+            construction=Construction.HEAVY,
+        ),
+        [
+            TrvConfig(
+                name="trv1",
+                radiator_type=PanelRadiatorType.TYPE_21,
+                width_mm=1200,
+                height_mm=600,
+            )
+        ],
+    )
+
+
+def test_recommended_flow_is_where_the_open_valve_covers_the_power():
+    """The flow requirement uses the spread the valve power and the learning
+    use: at the recommended flow the open valve gives at least the required
+    power, half a degree lower it does not."""
+    model = _esszimmer_model()
+    required_w = 173.3
+
+    flow_c = model.calculate_recommended_flow_temperature_c(required_w, 21.0)
+
+    assert model.calculate_available_heating_power_w(21.0, flow_c) >= required_w
+    assert model.calculate_available_heating_power_w(21.0, flow_c - 0.5) < required_w
+
+
+def test_esszimmer_hold_flow_matches_the_flow_seen_to_hold_it():
+    """Esszimmer 01.11.2026 (outdoor 8.8 °C, loss 173 W): a part-load spread
+    asked for 31.5 °C, while the room held only 20.7 °C at a 34-35 °C flow."""
+    model = _esszimmer_model()
+
+    assert model.calculate_recommended_flow_temperature_c(173.3, 21.0) == 35.5
+
+
+def test_recommended_flow_does_not_depend_on_the_heat_load():
+    """The configured heat load sizes no spread: two rooms with the same
+    radiator need the same flow for the same power."""
+    small = make_model([TrvConfig(name="trv1")])
+    large = HeatEmitterModel(
+        RoomThermalConfig(
+            room_heat_load_w=5000,
+            room_area_m2=90,
             construction=Construction.VERY_LIGHT,
         ),
         [TrvConfig(name="trv1")],
     )
-    required_w = 300
 
-    flow_c = model.calculate_recommended_flow_temperature_c(required_w, 20)
-
-    assert model.calculate_available_heating_power_w(20, flow_c, 2.5) >= required_w
-    assert model.calculate_available_heating_power_w(20, flow_c) < required_w
-
-
-def test_forward_direction_keeps_design_spread():
-    """The valves-throttling direction must not inherit the part-load spread."""
-    model = HeatEmitterModel(
-        RoomThermalConfig(
-            room_heat_load_w=1200,
-            room_area_m2=108,
-            construction=Construction.VERY_LIGHT,
-        ),
-        [TrvConfig(name="trv1")],
-    )
-    assert model.calculate_available_heating_power_w(
-        20, 45
-    ) == model.calculate_available_heating_power_w(20, 45, 10.0)
+    assert small.calculate_recommended_flow_temperature_c(
+        300, 20
+    ) == large.calculate_recommended_flow_temperature_c(300, 20)
 
 
 def test_panel_radiator_at_reference_height_matches_the_table_value():

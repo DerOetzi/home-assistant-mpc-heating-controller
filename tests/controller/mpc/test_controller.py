@@ -1,4 +1,10 @@
-from heating_controller.const import Construction, DesignTemperatureSystem
+from heating_controller.const import (
+    CapacityOutcome,
+    Construction,
+    DesignTemperatureSystem,
+    PanelRadiatorType,
+    UaBalanceOutcome,
+)
 from heating_controller.controller.mpc.controller import (
     FlowGateConfig,
     MpcRateLimitConfig,
@@ -7,6 +13,7 @@ from heating_controller.controller.mpc.controller import (
 from heating_controller.controller.mpc.results import RoomMpcErrorCode
 from heating_controller.controller.mpc.types import (
     FlowGateState,
+    LearningFactors,
     RoomThermalConfig,
     TrvConfig,
 )
@@ -207,6 +214,65 @@ def test_recommended_flow_is_the_hold_flow_within_the_recovery_tolerance():
 
     assert result.recovery_flow_temperature_c == 0
     assert result.recommended_flow_temperature_c == result.hold_flow_temperature_c
+
+
+def _esszimmer_controller():
+    controller = RoomMpcController(
+        thermal_config=RoomThermalConfig(
+            design_indoor_temperature_c=20.0,
+            design_outdoor_temperature_c=-13.5,
+            room_heat_load_w=853,
+            room_area_m2=19,
+            construction=Construction.HEAVY,
+        ),
+        trvs=[
+            TrvConfig(
+                name="trv1",
+                radiator_type=PanelRadiatorType.TYPE_21,
+                width_mm=1200,
+                height_mm=600,
+            )
+        ],
+        rate_limit_config=MpcRateLimitConfig(),
+        max_sensor_age_s=1800,
+        room_sensor_configured=False,
+        target_band_c=0.1,
+    )
+    controller.recalibrate_learning_factors(
+        LearningFactors(ua_factor=0.558, capacity_factor=1.0)
+    )
+    controller.set_outdoor_temperature(8.8)
+    controller.set_flow_temperature(35.0)
+    return controller
+
+
+def test_hold_flow_is_where_the_available_power_meets_the_loss():
+    """Esszimmer 01.11.2026: 173 W loss at 8.8 °C outdoor. The hold flow
+    comes from the same spread as the valve power the factors were learned
+    with; a part-load spread asked for 31.5 °C, while the room held only
+    20.7 °C at a 34-35 °C flow."""
+    controller = _esszimmer_controller()
+    controller.set_room_sensor_temperature(21.0)
+
+    result = controller.compute(target_temperature_c=21.0).result
+    emitter = controller._emitter_model
+    loss_w = controller._loss_model.calculate_heat_loss_w(21.0, 8.8)
+
+    assert result.hold_flow_temperature_c == 35.5
+    assert emitter.calculate_available_heating_power_w(21.0, 35.5) >= loss_w
+    assert emitter.calculate_available_heating_power_w(21.0, 35.0) < loss_w
+
+
+def test_recovery_flow_needs_more_than_the_hold_flow():
+    """Recovery simulates with the same spread: bringing the room back takes
+    more than holding it, never less."""
+    controller = _esszimmer_controller()
+    controller.set_room_sensor_temperature(20.5)
+
+    result = controller.compute(target_temperature_c=21.0).result
+
+    assert result.recovery_flow_temperature_c > result.hold_flow_temperature_c
+    assert result.recommended_flow_temperature_c == result.recovery_flow_temperature_c
 
 
 def test_recommended_flow_is_independent_of_the_measured_flow_temperature():
@@ -780,3 +846,50 @@ def test_a_hot_water_charge_freezes_the_disturbance(monkeypatch):
 
     assert result.result.input.hot_water_charge is True
     assert result.result.disturbance_w == disturbance_w
+
+
+def test_missing_outdoor_temperature_pauses_learning():
+    controller = make_controller()
+    controller.enable_learning()
+    controller.set_room_sensor_temperature(20.0)
+    controller.set_flow_temperature(40.0)
+
+    result = controller.compute(target_temperature_c=21.0)
+    controller.run_learning_cycle()
+
+    assert result.valid is False
+    assert result.error.code == RoomMpcErrorCode.MISSING_OUTDOOR_TEMPERATURE
+    assert controller.outdoor_temperature_missing is True
+    assert controller.get_ua_balance_info().outcome == (
+        UaBalanceOutcome.OUTDOOR_TEMPERATURE_MISSING
+    )
+    assert controller.get_capacity_outcome() == (
+        CapacityOutcome.OUTDOOR_TEMPERATURE_MISSING
+    )
+
+
+def test_learning_resumes_once_the_outdoor_temperature_is_back():
+    controller = make_controller()
+    controller.enable_learning()
+    controller.set_room_sensor_temperature(20.0)
+    controller.set_flow_temperature(40.0)
+    controller.compute(target_temperature_c=21.0)
+
+    controller.set_outdoor_temperature(5.0)
+    result = controller.compute(target_temperature_c=21.0)
+    controller.run_learning_cycle()
+
+    assert result.valid is True
+    assert controller.outdoor_temperature_missing is False
+    assert controller.get_ua_balance_info().outcome != (
+        UaBalanceOutcome.OUTDOOR_TEMPERATURE_MISSING
+    )
+
+
+def test_a_preview_compute_leaves_the_outdoor_state_alone():
+    controller = make_controller()
+    controller.set_room_sensor_temperature(20.0)
+
+    controller.compute(target_temperature_c=21.0, apply_side_effects=False)
+
+    assert controller.outdoor_temperature_missing is False

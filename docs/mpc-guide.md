@@ -53,6 +53,7 @@ stands:
 | `valve_position_missing` | A linked valve position entity is stale or unavailable. |
 | `trv_adapting` | A TRV calibrates its valve and moves it by itself. |
 | `radiator_not_heating` | A radiator stays cold although its valve reports open, see [Radiator check](#radiator-check). |
+| `outdoor_temperature_missing` | The outdoor temperature is missing and the TRVs hold the target on their own, see [Sensor reliability](#sensor-reliability). The stretch before the outage is balanced; the next one starts once the value is back. |
 | `valve_saturated` | For more than half the stretch every valve was at least 95 % open with the room below its target band. The heat assumed for a full opening is the least certain (a flow-limited radiator gives off less), so the factor is left alone; the target is kept for diagnostics. |
 | `window_open` | A window contact in the room is open. |
 
@@ -81,6 +82,7 @@ capacity factor:
 | `valve_position_missing` | The window holds samples without a reported valve opening. |
 | `trv_adapting` | The window holds samples taken while a TRV calibrated its valve. |
 | `radiator_not_heating` | The window holds samples taken while a radiator stayed cold. |
+| `outdoor_temperature_missing` | The outdoor temperature is missing. A window that ran across an outage is discarded (`suppressed`). |
 | `paused` | Learning enabled entity off. |
 | `waiting` | No complete window yet. |
 | `disabled` | Heating unavailable. |
@@ -112,7 +114,8 @@ for, whatever the model believes the losses are.
   balanced once when it ends: the learning window entity turns off, learning is paused, a
   window contact opens, the configured room sensor drops out (the TRVs read up to a kelvin
   off at the radiator; the next stretch starts once it reports again), a TRV starts
-  calibrating its valve, the sun condition ends, or heating stays off for more than three
+  calibrating its valve, the outdoor temperature goes missing (see
+  [Sensor reliability](#sensor-reliability)), the sun condition ends, or heating stays off for more than three
   controller cycles (15 minutes). A stretch that reaches eight hours is balanced right away.
   Shorter interruptions of heating (a missed heat-source poll, the flow briefly under the
   threshold) are bridged and count as no heating. A balance needs at least four gap-free
@@ -149,9 +152,9 @@ for, whatever the model believes the losses are.
 - **Learning enabled entity.** An optional external veto for both factors: while it is off,
   nothing is learned, and a window that started before it came back on is discarded, since
   part of its samples were taken while paused. `unavailable` counts as off. Use it when the
-  inputs themselves cannot be trusted — for instance a template that falls back to an
-  estimated outdoor temperature while the real sensor is down. Without an entity learning is
-  never paused.
+  inputs themselves cannot be trusted — for instance a flow temperature template that falls
+  back to a calculated heating curve while the heat source is unreachable. Without an
+  entity learning is never paused. A missing outdoor temperature pauses learning on its own.
 
 The heat-loss factor may end up well below 1: room heat loads usually come from a design
 calculation for the worst case (neighbouring rooms unheated, full air change), which a room
@@ -373,13 +376,39 @@ resumes from that demand.
 
 Room and outdoor temperature readings are checked against **max sensor age (s)**: once a
 reading is older than that, it's treated as unavailable rather than trusted indefinitely, and
-the room pauses its calculation until a fresh reading arrives. Implausible single-sample
-jumps are also filtered rather than acted on immediately, so one noisy reading doesn't swing
-a room's demand; a jump that repeats over a few polls is accepted as a real change.
+the room pauses its calculation until a fresh reading arrives. The age counts from when the
+room last read the entity, not from its `last_changed`: every room reads all its inputs
+every 5 minutes, so an outdoor sensor that reports whole degrees and keeps one value for
+hours stays fresh. An entity that turns `unavailable` or `unknown` counts as missing at once.
+Implausible single-sample jumps are also filtered rather than acted on immediately, so one
+noisy reading doesn't swing a room's demand; a jump that repeats over a few polls is
+accepted as a real change.
 
 The flow temperature is exempt from that filter. Its jumps are physical —
 compressor start, defrost, or a hot-water charge showing up on a shared leaving-water sensor
 — and it only feeds the valve demand, never the minimum flow temperature (see below).
+
+Without an outdoor temperature the model cannot plan. The room then hands control to its
+TRVs: each gets the target of the active mode (comfort, eco, boost, frost protection, plus a
+PV boost if on) as an absolute setpoint, rounded to its step, and regulates on its own
+reading. Learning pauses for both factors (status `outdoor_temperature_missing`), the
+disturbance is held, and the planned values (demand, powers, flow requirements) read
+unknown. `binary_sensor.<room>_outdoor_temperature_missing` (problem) is on meanwhile, with
+the attributes `since` and `fallback_target_temperature_c`. Once the outdoor temperature is
+back, the MPC takes over on the next calculation; the heat balance starts a new stretch from
+then. Feed the outdoor entity a measured value or nothing: an estimate during an outage would
+be learned from as if it were measured.
+
+Right after startup the outdoor entity and the heat source may not have reported yet. Until
+the outdoor temperature has been read once, or has been missing for a full poll cycle (5
+minutes), the room hands the TRVs no fallback and the binary sensor stays off; learning
+pauses all the same. Likewise, until the heat source entity has reported a known state
+*and* a valid flow temperature has come in, or for at most those 5 minutes, the room does
+not count as unheated: it forces no frost protection, writes no TRV target and leaves the
+heat-available switches alone. The mode shown meanwhile reads frost protection. Frost
+protection for a real reason — an open window, a mode the user picked — still applies at
+once, only the switches wait. If the heat source is still unknown after the 5 minutes, the
+room forces frost protection as before.
 
 ### Hot-water charges
 
@@ -433,6 +462,16 @@ The minimum flow temperature is the larger of two requirements:
   radiator, heat-loss and capacity model the valve demand uses, including the learned
   factors. A room within 0.1 K of its setpoint counts as there, and a room whose outdoor
   temperature is above its setpoint asks for no recovery at all.
+
+Both take the radiator output at the design spread of the configured system (mean water
+temperature = flow − 5 K for 55/45), the same assumption as the valve power, the heat balance
+and the capacity replay. The learned heat-loss factor fits that assumption, so the hold flow
+is the flow at which the open valves give off exactly the modelled loss. An earlier version
+shrank the spread with the load (design spread × power / heat load) for the flow requirement
+only; with learned factors well below 1 that read about 4 K below the flow a room was seen to
+need. The radiator check's 30 % gate and the share a partly open valve lets through still
+come from the radiator's own balance (see [Valve position](#valve-position-the-heat-the-radiators-really-get)): they ask how
+warm the water at the valve is, not how much heat the model books.
 
 Neither depends on the measured flow temperature, so a stale reading or a hot-water charge
 cannot move the requirement. Six hours is deliberately slow: a heat pump recovers more

@@ -207,6 +207,9 @@ class UaBalanceOutcome(StrEnum):
     TRV_ADAPTING = "trv_adapting"
     # A radiator gives off no heat although its valve reports open.
     RADIATOR_NOT_HEATING = "radiator_not_heating"
+    # The outdoor temperature is missing: the TRVs hold the base setpoint on
+    # their own, the radiator heat is unknown.
+    OUTDOOR_TEMPERATURE_MISSING = "outdoor_temperature_missing"
     # The valves stood fully open with the room below its target band for
     # most of the stretch: the heat assumed for a full opening is the least
     # certain one (a flow-limited radiator gives off less).
@@ -228,6 +231,7 @@ class CapacityOutcome(StrEnum):
     VALVE_POSITION_MISSING = "valve_position_missing"
     TRV_ADAPTING = "trv_adapting"
     RADIATOR_NOT_HEATING = "radiator_not_heating"
+    OUTDOOR_TEMPERATURE_MISSING = "outdoor_temperature_missing"
     PAUSED = "paused"
     WAITING = "waiting"
     DISABLED = "disabled"

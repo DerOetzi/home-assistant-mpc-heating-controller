@@ -123,7 +123,6 @@ class HeatEmitterModel:
         self._design_temperatures = DESIGN_SYSTEM_TEMPERATURES[
             thermal_config.design_temperature_system
         ]
-        self._room_heat_load_w = thermal_config.room_heat_load_w
         self._flow_search_max_c = self._design_temperatures.flow_temperature_c
         self.set_flow_threshold_c(thermal_config.flow_threshold_c)
         prepared = [self._create_prepared_emitter(trv) for trv in trvs]
@@ -233,21 +232,25 @@ class HeatEmitterModel:
         self,
         room_temperature_c: float,
         flow_temperature_c: float | None = None,
-        spread_c: float | None = None,
     ) -> float:
+        """Output with the valves fully open, at the design spread.
+
+        Every heat figure the model uses rests on this: the valve power, the
+        heat balance and the replay the factors learn from, the hold and
+        recovery flows. A learned heat-loss factor fits this assumption, so a
+        flow requirement computed with another spread would no longer match
+        what the room was seen to need.
+        """
         effective_flow_temperature_c = (
             flow_temperature_c
             if flow_temperature_c is not None
             else self._design_temperatures.flow_temperature_c
         )
-        effective_spread_c = (
-            spread_c if spread_c is not None else self._design_temperatures.spread_c
+        current_overtemperature_c = (
+            effective_flow_temperature_c
+            - self._design_temperatures.spread_c / 2
+            - room_temperature_c
         )
-        return_temperature_c = effective_flow_temperature_c - effective_spread_c
-        current_mean_temperature_c = (
-            effective_flow_temperature_c + return_temperature_c
-        ) / 2
-        current_overtemperature_c = current_mean_temperature_c - room_temperature_c
 
         if current_overtemperature_c <= 0:
             return 0.0
@@ -315,7 +318,14 @@ class HeatEmitterModel:
         self, flow_temperature_c: float | None, room_temperature_c: float
     ) -> list[float | None]:
         """Per radiator, its output with the valve fully open, as a share of
-        its design output, at this flow and room temperature."""
+        its design output, at this flow and room temperature.
+
+        From the radiator's own balance, not the design spread: the radiator
+        check asks whether the water reaching the TRV is warm enough to show,
+        a physical question. Its 30 % gate was set on this figure; the design
+        spread gives about 21 % instead of 32 % at a 35 °C flow and would
+        switch the check off at the flows the house runs on.
+        """
         if flow_temperature_c is None:
             return [None] * len(self._emitters)
         return [
@@ -543,29 +553,22 @@ class HeatEmitterModel:
             * FLOW_SEARCH_ROUND_STEP_C
         )
 
-    def part_load_spread_c(self, heating_power_w: float) -> float:
-        if self._room_heat_load_w <= 0:
-            return self._design_temperatures.spread_c
-        return (
-            self._design_temperatures.spread_c
-            * heating_power_w
-            / self._room_heat_load_w
-        )
-
     def calculate_recommended_flow_temperature_c(
         self, required_heating_power_w: float, target_room_temperature_c: float
     ) -> float | None:
+        """Lowest flow at which the open valves give off the required power.
+
+        Same design spread as the valve power: with a part-load spread the
+        hold flow came out about 4 K below the flow the room was seen to need
+        (Esszimmer, 01.11.2026: 31.5 instead of about 35.5 °C).
+        """
         if required_heating_power_w <= 0:
             return 0.0
-
-        spread_c = self.part_load_spread_c(required_heating_power_w)
 
         low, high = self._flow_search_min_c, self._flow_search_max_c
 
         if (
-            self.calculate_available_heating_power_w(
-                target_room_temperature_c, high, spread_c
-            )
+            self.calculate_available_heating_power_w(target_room_temperature_c, high)
             < required_heating_power_w
         ):
             return high
@@ -574,7 +577,7 @@ class HeatEmitterModel:
         while high - low > FLOW_SEARCH_PRECISION_C:
             mid = (low + high) / 2
             available_power_w = self.calculate_available_heating_power_w(
-                target_room_temperature_c, mid, spread_c
+                target_room_temperature_c, mid
             )
             if available_power_w >= required_heating_power_w:
                 optimal_flow = mid

@@ -221,6 +221,9 @@
       },
       "radiator_not_heating": {
         "name": "Radiator not heating"
+      },
+      "outdoor_temperature_missing": {
+        "name": "Outdoor temperature missing"
       }
     },
     "button": {
@@ -296,7 +299,8 @@
           "window_open": "Window open",
           "valve_position_missing": "Valve position missing",
           "trv_adapting": "TRV calibrating",
-          "radiator_not_heating": "Radiator not heating"
+          "radiator_not_heating": "Radiator not heating",
+          "outdoor_temperature_missing": "Outdoor temperature missing"
         }
       },
       "capacity_learning_status": {
@@ -315,7 +319,8 @@
           "disabled": "Disabled",
           "valve_position_missing": "Valve position missing",
           "trv_adapting": "TRV calibrating",
-          "radiator_not_heating": "Radiator not heating"
+          "radiator_not_heating": "Radiator not heating",
+          "outdoor_temperature_missing": "Outdoor temperature missing"
         }
       }
     }
