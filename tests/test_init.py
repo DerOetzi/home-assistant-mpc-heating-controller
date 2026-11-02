@@ -1,7 +1,6 @@
 import pytest
 import voluptuous as vol
 from heating_controller.const import (
-    CONF_ROOM_HEAT_LOAD,
     DEFAULT_FLOW_THRESHOLD_C,
     DEFAULT_TARGET_BAND_C,
     DOMAIN,
@@ -11,6 +10,8 @@ from heating_controller.controller.mpc.types import LearningFactors
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, HomeAssistant, ServiceCall
 from homeassistant.exceptions import Unauthorized
+from homeassistant.helpers.storage import Store
+from homeassistant.util import slugify
 from pytest_homeassistant_custom_component.common import MockConfigEntry, MockUser
 from test_coordinator import (
     ENTRY_DATA,
@@ -198,47 +199,48 @@ async def test_recalibrate_keeps_a_factor_that_is_left_out(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_recalibrate_sets_the_disturbance_and_persists_it(
+async def test_recalibrate_rejects_disturbance(
     hass: HomeAssistant, hass_admin_user: MockUser
 ) -> None:
     entry = await _setup_room(hass)
-    coordinator = hass.data[DOMAIN][entry.entry_id]
-    coordinator.mpc.recalibrate_learning_factors(
-        LearningFactors(ua_factor=0.9, capacity_factor=1.3)
-    )
 
-    await hass.services.async_call(
-        DOMAIN,
-        "recalibrate",
-        {"entity_id": "button.wohnzimmer_unblock", "disturbance_w": -150},
-        blocking=True,
-        context=Context(user_id=hass_admin_user.id),
-    )
-
-    assert coordinator.mpc.disturbance_w == -150.0
-    assert await coordinator.observer_store.async_load() == -150.0
-    assert coordinator.mpc.learned_ua_factor == 0.9
-    assert coordinator.mpc.learned_capacity_factor == 1.3
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            "recalibrate",
+            {
+                "entity_id": "button.wohnzimmer_unblock",
+                "ua_factor": 1.0,
+                "disturbance_w": 0,
+            },
+            blocking=True,
+            context=Context(user_id=hass_admin_user.id),
+        )
 
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_recalibrate_limits_the_disturbance_to_the_heat_load(
-    hass: HomeAssistant, hass_admin_user: MockUser
-) -> None:
-    entry = await _setup_room(hass)
-    coordinator = hass.data[DOMAIN][entry.entry_id]
-    heat_load_w = coordinator.data[CONF_ROOM_HEAT_LOAD]
-
-    await hass.services.async_call(
-        DOMAIN,
-        "recalibrate",
-        {"entity_id": "button.wohnzimmer_unblock", "disturbance_w": 9000},
-        blocking=True,
-        context=Context(user_id=hass_admin_user.id),
+async def test_setup_drops_the_old_observer_store(hass: HomeAssistant) -> None:
+    entry_id = "old_observer"
+    old_store = Store(
+        hass, 1, f"{DOMAIN}_{slugify(ENTRY_DATA['room_name'])}_{entry_id}_observer"
     )
+    await old_store.async_save({"room_name": "x", "disturbance_w": -40.0})
 
-    assert coordinator.mpc.disturbance_w == heat_load_w
+    _seed_entities(hass)
+
+    async def handler(call: ServiceCall) -> None:
+        pass
+
+    hass.services.async_register("climate", "set_temperature", handler)
+    hass.services.async_register("switch", "turn_on", handler)
+    hass.services.async_register("switch", "turn_off", handler)
+    entry = MockConfigEntry(domain=DOMAIN, data=_room_data(hass), entry_id=entry_id)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert await old_store.async_load() is None
 
     assert await hass.config_entries.async_unload(entry.entry_id)
 

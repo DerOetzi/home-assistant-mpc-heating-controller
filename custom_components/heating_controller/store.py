@@ -81,28 +81,16 @@ class FlowGateStateStore:
         await self._store.async_remove()
 
 
-class ObserverStateStore:
-    """The observer's disturbance estimate, so a restart keeps last night's."""
+async def async_remove_observer_store(
+    hass: HomeAssistant, room_name: str, entry_id: str
+) -> None:
+    """Delete the file of the removed disturbance observer, if one is left.
 
-    def __init__(self, hass: HomeAssistant, room_name: str, entry_id: str) -> None:
-        self._room_name = room_name
-        self._store: Store[dict] = Store(
-            hass, STORAGE_VERSION, _observer_storage_key(room_name, entry_id)
-        )
-
-    async def async_load(self) -> float | None:
-        data = await self._store.async_load()
-        if data is None:
-            return None
-        return float(data["disturbance_w"])
-
-    async def async_save(self, disturbance_w: float) -> None:
-        await self._store.async_save(
-            {"room_name": self._room_name, "disturbance_w": disturbance_w}
-        )
-
-    async def async_remove(self) -> None:
-        await self._store.async_remove()
+    Drop after season 2026/27.
+    """
+    await Store(
+        hass, STORAGE_VERSION, _observer_storage_key(room_name, entry_id)
+    ).async_remove()
 
 
 def _valve_curve_storage_key(room_name: str, entry_id: str) -> str:

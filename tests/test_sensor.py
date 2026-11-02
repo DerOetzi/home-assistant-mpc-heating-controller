@@ -196,3 +196,10 @@ async def test_valve_curve_sensor_is_set_up(hass: HomeAssistant) -> None:
     # The room's TRV reports no valve opening, so it learns nothing.
     assert curve.state == "0"
     assert "climate.heizung_wohnzimmer" not in curve.attributes
+
+
+async def test_no_disturbance_sensor_is_set_up(hass: HomeAssistant) -> None:
+    await _setup_coasting_room(hass, _room_data(hass))
+
+    assert hass.states.get("sensor.wohnzimmer_valve_curve") is not None
+    assert hass.states.get("sensor.wohnzimmer_disturbance_power") is None

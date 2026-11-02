@@ -108,7 +108,7 @@ for, whatever the model believes the losses are.
 - **Heat-loss factor (`ua_factor`): heat balance over a usable stretch.** Over the
   stretch the heat the radiators gave off (the requested power, lagged as described in
   [Radiator lag and the room observer](#radiator-lag-and-the-room-observer)) has to equal
-  what the room lost plus what it stored. The observer's disturbance is left out. The factor that balances this is the target, and each balance moves the learned
+  what the room lost plus what it stored. The factor that balances this is the target, and each balance moves the learned
   factor 30 % of the way there. A stretch starts once the room is near its setpoint — no more than 0.1 K above it or
   below the target band; a room still coasting down on the evening's heat with the valve
   shut would end far below where it started, one recovering from below far above (status
@@ -136,13 +136,13 @@ for, whatever the model believes the losses are.
   than on the losses and is discarded, and so is a target above 2. A target below 0.15
   means the radiators supplied almost nothing — the room lives off its neighbours, for
   whom the model has no coupling: the factor then moves only down to 0.15 (status
-  `learned_at_limit`, the measured target stays in `last_target_factor` of the UA learning status), and
-  the observer's disturbance carries the rest. A stretch rejected for drift reports the
+  `learned_at_limit`, the measured target stays in `last_target_factor` of the UA learning status).
+  A stretch rejected for drift reports the
   drift in `last_drift_c`.
 - **Capacity factor (`capacity_factor`): replay of 30-minute windows.** If the room moved
   further than the **stationary range** (default 0.2 K between the highest and lowest
-  reading of the window), the window is replayed with the power the radiators gave off,
-  the observer's disturbance and the current heat-loss factor. A room that rose more than the replay, or
+  reading of the window), the window is replayed with the power the radiators gave off
+  and the current heat-loss factor. A room that rose more than the replay, or
   fell more, is lighter than modelled; one that rose or fell less is heavier. Windows the
   room barely moved in, or that the replay hardly moves in (below 0.1 K), are skipped.
 - **Sun.** Neither factor learns while the sun is up or within two hours after sunset,
@@ -185,13 +185,6 @@ data:
 A factor that is left out stays as it is, so a reset needs an explicit `1.0`; at least one
 value is required. The call discards the measurement window in progress, because its
 prediction was made with the old factors.
-
-The optional `disturbance_w` sets the observer's disturbance (see
-[Radiator lag and the room observer](#radiator-lag-and-the-room-observer)), limited to the
-room's heat load in either direction; `0` resets it. The disturbance makes up for whatever
-the model gets wrong, so after resetting the factors or replacing the room sensor it no
-longer fits — reset it with them, or it only catches up over the next heating night. A
-call with only `disturbance_w` leaves the factors and the running windows alone.
 
 ## Sizing a room correctly
 
@@ -254,7 +247,7 @@ adaptation status entity) nothing is written to it, neither target nor heat-avai
 switch: a Danfoss Ally aborts the run on any write. The hold ends with the run, after three
 hours at the latest (a run took about 1 h 50 min), and forced frost protection still goes
 through. As the TRV moves its valve by itself meanwhile, the room learns nothing then (status
-`trv_adapting`) and the disturbance is held.
+`trv_adapting`).
 
 ## Radiator check
 
@@ -274,8 +267,7 @@ a sound radiator stays barely warm, so the hour starts over. A hot-water charge 
 [Hot-water charges](#hot-water-charges)) starts the hour over. The verdict holds while the
 valve is shut and clears as soon as an open valve warms the TRV again.
 
-Meanwhile the room learns nothing (status `radiator_not_heating`) and the disturbance is
-held. The running heat-balance stretch ends where the valve opened for the hour that led to
+Meanwhile the room learns nothing (status `radiator_not_heating`). The running heat-balance stretch ends where the valve opened for the hour that led to
 the verdict: that hour's heat is in doubt as well. `binary_sensor.<room>_radiator_not_heating` (problem) is on, its attribute
 `trv_entities` names the TRVs: an automation can send a notification to check — bleed —
 the radiator.
@@ -292,7 +284,7 @@ The opening is taken as proportional to the flow. With less water the radiator c
 further and its output stays high: at a 40 °C flow a 10 % opening still gives about 44 % of
 full output, 50 % about 87 %. A TRV without such an entity counts with the demand. If the entity goes stale or
 unavailable, the room's learning stops (status
-`valve_position_missing`) and the disturbance is held until it reports again.
+`valve_position_missing`) until it reports again.
 
 ## Valve curve
 
@@ -351,31 +343,13 @@ Each room runs its model alongside the room as a state observer (sensor
   towards the measured temperature (time constant 5 minutes). A difference above 1 K is
   taken as a jump — a sensor source switching over — and the estimate restarts from the
   measurement.
-- What remains feeds a **disturbance** (sensor `disturbance_power`): lasting heat the
-  model does not explain, from neighbouring rooms, appliances, or a heat load or radiator
-  sized off. It needs at least twelve hours from zero to its limit (the room's heat load in
-  either direction) and only moves under the conditions the factors learn under — heating
-  available, no sun, window closed and settled, room sensor reporting, learning not paused.
-  During the day it keeps last night's value; otherwise the sun would be taken up and
-  missing for hours after sunset. Without heating it keeps the value of the last heating
-  night: the radiator model's error, part of what it takes up, is missing then. During a
-  hot-water charge the radiators get no water and cool down with their lag; the disturbance
-  keeps its value. It
-  does not move further in a direction the valve can no longer follow: no rise while the
-  valve is shut (below 5 %) — a room coasting above its setpoint on stored heat is no
-  lasting gain — and no fall while it is fully open (95 % and up). The other direction
-  only moves where the controller needs out of the limit: with the valve shut a fall only
-  while the room is below the target band, fully open a rise only while it is above the
-  setpoint. Otherwise sensor steps would ratchet it one way. The heat balance leaves the
-  disturbance out, so a learned heat-loss factor takes up the neighbours' heat as well:
-  when a balance moves the factor, the disturbance hands over what the change now
-  explains (factor change × base heat loss × the stretch's mean room-outdoor difference),
-  so the same heat is not counted twice and the model's net loss for that night stays
-  as it was. It survives restarts and can be set with `recalibrate`.
-- The valve demand is planned from the estimate, the radiators' current output and the
-  disturbance, so a room whose radiators are still hot closes earlier. The hold and
-  recovery flow temperatures use the lag but leave the disturbance out: the flow
-  requirement stays weather-driven.
+- A lasting difference between model and room is learned into the heat-loss factor; a
+  separate offset term could not be told apart from it at a near-constant room-outdoor
+  difference.
+- The valve demand is planned from the estimate and the radiators' current output, so a
+  room whose radiators are still hot closes earlier. The demand that holds the setpoint is
+  the loss at the setpoint over the available radiator power. The hold and recovery flow
+  temperatures use the lag as well; the flow requirement stays weather-driven.
 
 ## Target band
 
@@ -435,8 +409,8 @@ compressor start, defrost, or a hot-water charge showing up on a shared leaving-
 Without an outdoor temperature the model cannot plan. The room then hands control to its
 TRVs: each gets the target of the active mode (comfort, eco, boost, frost protection, plus a
 PV boost if on) as an absolute setpoint, rounded to its step, and regulates on its own
-reading. Learning pauses for both factors (status `outdoor_temperature_missing`), the
-disturbance is held, and the planned values (demand, powers, flow requirements) read
+reading. Learning pauses for both factors (status `outdoor_temperature_missing`) and the
+planned values (demand, powers, flow requirements) read
 unknown. `binary_sensor.<room>_outdoor_temperature_missing` (problem) is on meanwhile, with
 the attributes `since` and `fallback_target_temperature_c`. Once the outdoor temperature is
 back, the MPC takes over on the next calculation; the heat balance starts a new stretch from
@@ -460,7 +434,7 @@ A heat pump charging its hot-water tank sends hot water to the tank, not the rad
 while a shared leaving-water sensor reads its flow spiking. A flow more than 5 K above the
 lowest one of the last hour counts as such a charge. Meanwhile the valve demand is planned
 with the heating flow from before the charge, so the valves do not close on the hot reading;
-the observer lets the radiators cool down, the disturbance holds, the heat balance counts
+the observer lets the radiators cool down, the heat balance counts
 no heating and the radiator check starts its hour over. A flow raised for more than an hour
 is the new heating flow. While heating is unavailable the reference starts over; a heat
 pump ramping up after such a pause may read as a charge for a while.

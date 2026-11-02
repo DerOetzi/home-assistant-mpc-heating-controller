@@ -25,7 +25,6 @@ from homeassistant.helpers.service import async_register_admin_service
 from . import frontend
 from .const import (
     ATTR_CAPACITY_FACTOR,
-    ATTR_DISTURBANCE_W,
     ATTR_UA_FACTOR,
     CONF_FLOW_THRESHOLD,
     CONF_ROOM_NAME,
@@ -57,15 +56,12 @@ from .profiles import (
 from .store import (
     FlowGateStateStore,
     LearningFactorsStore,
-    ObserverStateStore,
     ValveCurveStore,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 __all__ = ["DOMAIN"]
-
-MAX_RECALIBRATE_DISTURBANCE_W = 10000.0
 
 RECALIBRATE_SCHEMA = vol.All(
     vol.Schema(
@@ -81,17 +77,9 @@ RECALIBRATE_SCHEMA = vol.All(
                     min=MIN_LEARNED_CAPACITY_FACTOR, max=MAX_LEARNED_CAPACITY_FACTOR
                 ),
             ),
-            # Each room limits it to its own heat load in either direction.
-            vol.Optional(ATTR_DISTURBANCE_W): vol.All(
-                vol.Coerce(float),
-                vol.Range(
-                    min=-MAX_RECALIBRATE_DISTURBANCE_W,
-                    max=MAX_RECALIBRATE_DISTURBANCE_W,
-                ),
-            ),
         }
     ),
-    cv.has_at_least_one_key(ATTR_UA_FACTOR, ATTR_CAPACITY_FACTOR, ATTR_DISTURBANCE_W),
+    cv.has_at_least_one_key(ATTR_UA_FACTOR, ATTR_CAPACITY_FACTOR),
 )
 
 PLATFORMS = [
@@ -214,7 +202,6 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     room_name = entry.data[CONF_ROOM_NAME]
     await LearningFactorsStore(hass, room_name, entry.entry_id).async_remove()
     await FlowGateStateStore(hass, room_name, entry.entry_id).async_remove()
-    await ObserverStateStore(hass, room_name, entry.entry_id).async_remove()
     await ValveCurveStore(hass, room_name, entry.entry_id).async_remove()
 
 
@@ -251,7 +238,6 @@ def _async_register_services(hass: HomeAssistant) -> None:
             await coordinator.async_recalibrate(
                 call.data.get(ATTR_UA_FACTOR),
                 call.data.get(ATTR_CAPACITY_FACTOR),
-                call.data.get(ATTR_DISTURBANCE_W),
             )
 
     hass.services.async_register(DOMAIN, SERVICE_UNBLOCK, async_handle_unblock)

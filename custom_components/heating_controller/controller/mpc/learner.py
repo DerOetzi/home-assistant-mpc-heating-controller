@@ -35,7 +35,7 @@ CAPACITY_LEARNING_RATE = 0.005
 # closes, learning is paused, a window contact opens, the configured room
 # sensor drops out, heating stays off for longer than a short interruption, or
 # the sun condition ends, and is balanced
-# once at that end. A night shortened by a disturbance still counts as long as
+# once at that end. A night shortened by an interruption still counts as long as
 # the remaining stretch is long enough; a stretch that reaches the maximum is
 # balanced right away so a learning window that never closes still learns.
 UA_BALANCE_MIN_WINDOW_S = 4 * 3600
@@ -72,9 +72,8 @@ UA_BALANCE_MIN_MEAN_DELTA_C = 8.0
 UA_BALANCE_MAX_STORAGE_SHARE = 0.5
 # A target this low means the radiators supplied almost nothing: the room
 # lives off its neighbours, whose heat the model has no coupling for. The
-# factor still moves, but only down to this limit; the rest stays with the
-# observer's disturbance. Rooms that never learned otherwise kept the design
-# heat load and with it an inflated hold flow.
+# factor still moves, but only down to this limit. Rooms that never learned
+# otherwise kept the design heat load and with it an inflated hold flow.
 UA_BALANCE_MIN_TARGET_FACTOR = 0.15
 # Above this the stretch is a measurement artefact and is discarded.
 UA_BALANCE_MAX_TARGET_FACTOR = 2.0
@@ -97,7 +96,6 @@ class LearnerHistoryEntry:
     # What the observer estimates the radiators gave off at this time: the
     # requested power, lagged by the radiator mass.
     radiator_power_w: float
-    disturbance_w: float = 0.0
     target_temperature_c: float | None = None
     flow_temperature_c: float | None = None
     room_sensor_fallback: bool = False
@@ -179,7 +177,6 @@ class RoomMpcModelLearner:
         self._outdoor_temperature_missing = False
         self._sun_condition: callable[[float], bool] = lambda _ts: True
         self._pending_persisted_factors: LearningFactors | None = None
-        self._pending_disturbance_transfer_w = 0.0
 
         self._learning_state = self._create_learning_state(LearningStatus.DISABLED)
 
@@ -296,39 +293,11 @@ class RoomMpcModelLearner:
     def set_sun_condition(self, sun_condition: callable[[float], bool]) -> None:
         self._sun_condition = sun_condition
 
-    def disturbance_update_allowed(
-        self, now_ts: float, room_sensor_fallback: bool
-    ) -> bool:
-        """Whether the observer may move its disturbance estimate now.
-
-        Under the same conditions the factors learn from, minus the learning
-        window: heating available, inputs trusted, window closed and settled,
-        room sensor reporting, no sun. During the day the disturbance from the
-        night is kept; sun would otherwise be taken up and then be missing for
-        hours after sunset. Without heating the radiator model's error drops
-        out of the residual, so what is left would not fit once heating
-        resumes; the disturbance of the last heating night is kept instead.
-        """
-        return (
-            self._enabled
-            and not self._learning_paused
-            and not self._window_open
-            and not room_sensor_fallback
-            and not self._room_sensor_fallback
-            and not self._valve_position_missing
-            and not self._trv_adapting
-            and not self._radiator_not_heating
-            and not self._outdoor_temperature_missing
-            and now_ts >= self._ua_blocked_until_ts
-            and self._sun_condition(now_ts)
-        )
-
     def append_history(
         self,
         mpc_input: RoomMpcInput,
         applied_heating_power_w: float,
         radiator_power_w: float,
-        disturbance_w: float = 0.0,
     ) -> None:
         self._track_degraded_inputs(mpc_input)
         self._history.append(
@@ -339,7 +308,6 @@ class RoomMpcModelLearner:
                 flow_temperature_c=mpc_input.flow_temp_c,
                 applied_heating_power_w=applied_heating_power_w,
                 radiator_power_w=radiator_power_w,
-                disturbance_w=disturbance_w,
                 target_temperature_c=mpc_input.target_temp_c,
                 room_sensor_fallback=mpc_input.room_sensor_fallback,
                 valve_position_missing=mpc_input.valve_position_missing,
@@ -513,7 +481,6 @@ class RoomMpcModelLearner:
         for previous, current in pairwise(history):
             net_heating_power_w = (
                 _interval_radiator_power_w(previous, current)
-                + previous.disturbance_w
                 - self._loss_model.calculate_heat_loss_w(
                     room_temperature_c, previous.outdoor_temperature_c
                 )
@@ -752,16 +719,6 @@ class RoomMpcModelLearner:
         self._loss_model.learned_ua_factor = current_factor + UA_BALANCE_WEIGHT * (
             learned_target_factor - current_factor
         )
-        # The balance leaves the disturbance out, so the target takes up the
-        # heat from neighbours; the observer's disturbance held the same heat
-        # against the old factor. Handing over what the factor change now
-        # explains keeps the model's net loss of this stretch unchanged.
-        self._pending_disturbance_transfer_w += (
-            (current_factor - self._loss_model.learned_ua_factor)
-            * self._loss_model.base_ua_w_per_k
-            * temperature_difference_ks
-            / window_duration_s
-        )
         self._ua_balance_from_ts = max(self._ua_balance_from_ts, end_ts)
         info.last_learned_ts = end_ts
         info.last_target_factor = target_factor
@@ -969,7 +926,6 @@ class RoomMpcModelLearner:
 
     def recalibrate(self, factors: LearningFactors) -> None:
         self._pending_persisted_factors = None
-        self._pending_disturbance_transfer_w = 0.0
         self._active_prediction = None
         self._last_prediction = None
         self._ua_balance_closed = None
@@ -978,12 +934,6 @@ class RoomMpcModelLearner:
         self._loss_model.learned_ua_factor = factors.ua_factor
         self._capacity_model.learned_capacity_factor = factors.capacity_factor
         self._learning_state = self._create_learning_state(self._learning_state.status)
-
-    def consume_disturbance_transfer_w(self) -> float:
-        """Disturbance the learned factor took over since the last call."""
-        transfer_w = self._pending_disturbance_transfer_w
-        self._pending_disturbance_transfer_w = 0.0
-        return transfer_w
 
     def consume_persisted_learning_factors(self) -> LearningFactors | None:
         factors = self._pending_persisted_factors

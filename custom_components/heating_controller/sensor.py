@@ -39,7 +39,6 @@ async def async_setup_entry(
             AvailableHeatingPowerSensor(coordinator),
             RadiatorHeatingPowerSensor(coordinator),
             MeasuredHeatingPowerSensor(coordinator),
-            DisturbancePowerSensor(coordinator),
             RoomTemperatureSensor(coordinator),
             BaseTemperatureSensor(coordinator),
             UaLearningStatusSensor(coordinator),
@@ -269,27 +268,6 @@ class MeasuredHeatingPowerSensor(_DiagnosticSensor):
         if result is None or result.measured_heating_power_w is None:
             return None
         return round(result.measured_heating_power_w, 1)
-
-
-class DisturbancePowerSensor(_DiagnosticSensor):
-    """Lasting heat the model does not explain, as the observer estimates it.
-
-    Positive: the room gets more than the model accounts for (neighbours,
-    appliances, losses overestimated). Only moves without sun, held during
-    the day.
-    """
-
-    _attr_translation_key = "disturbance_power"
-    _attr_device_class = SensorDeviceClass.POWER
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfPower.WATT
-
-    def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
-        super().__init__(coordinator, "disturbance_power")
-
-    @property
-    def native_value(self) -> float:
-        return round(self._coordinator.mpc.disturbance_w, 1)
 
 
 class RoomTemperatureSensor(_DiagnosticSensor):

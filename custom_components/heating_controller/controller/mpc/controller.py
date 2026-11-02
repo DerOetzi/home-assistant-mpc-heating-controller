@@ -175,14 +175,8 @@ class RoomMpcController:
         self._learner = RoomMpcModelLearner(
             self._loss_model, self._capacity_model, target_band_c=self._target_band_c
         )
-        # A disturbance beyond the design heat load is a model error, not heat
-        # from neighbours or appliances.
         self._observer = RoomStateObserver(
-            self._emitter_model,
-            self._loss_model,
-            self._capacity_model,
-            disturbance_limit_w=thermal_config.room_heat_load_w,
-            target_band_c=self._target_band_c,
+            self._emitter_model, self._loss_model, self._capacity_model
         )
         self._heat_available = True
         self._hot_water = HotWaterChargeDetector()
@@ -230,13 +224,6 @@ class RoomMpcController:
     def restore_flow_gate_state(self, state: FlowGateState) -> None:
         self._live_flow_gate.restore(state.live_closed)
         self._preview_flow_gate.restore(state.preview_closed)
-
-    @property
-    def disturbance_w(self) -> float:
-        return self._observer.disturbance_w
-
-    def restore_disturbance(self, disturbance_w: float) -> None:
-        self._observer.restore_disturbance(disturbance_w)
 
     @property
     def outdoor_temperature_missing(self) -> bool:
@@ -408,21 +395,7 @@ class RoomMpcController:
             ),
             default=None,
         )
-        estimate = self._observer.estimate(
-            mpc_input,
-            # Without a reported valve opening the radiator heat is a guess,
-            # an adapting TRV ignores the demand, a radiator full of air
-            # gives off less than its opening says and during a hot-water
-            # charge the radiators cool down; the disturbance would take up
-            # the difference.
-            disturbance_update_allowed=not mpc_input.valve_position_missing
-            and not mpc_input.trv_adapting
-            and not mpc_input.radiator_not_heating
-            and not mpc_input.hot_water_charge
-            and self._learner.disturbance_update_allowed(
-                mpc_input.now_ts, mpc_input.room_sensor_fallback
-            ),
-        )
+        estimate = self._observer.estimate(mpc_input)
 
         available_heating_power_w = max(
             0.0,
@@ -514,7 +487,6 @@ class RoomMpcController:
             flow_gate_closed=flow_gate_closed,
             estimated_room_temperature_c=estimate.room_temperature_c,
             radiator_power_w=estimate.radiator_power_w,
-            disturbance_w=estimate.disturbance_w,
             measured_heating_power_w=measured_heating_power_w,
         )
         return RoomMpcComputeResult(valid=True, result=result)
@@ -575,8 +547,7 @@ class RoomMpcController:
 
         Simulated with the valves fully open and independent of the measured flow
         temperature, so a stale reading or a DHW charge on a shared leaving-water
-        sensor cannot drive the requirement. Like the hold flow it leaves the
-        disturbance out: the flow requirement stays weather-driven.
+        sensor cannot drive the requirement.
         """
         deficit_c = mpc_input.target_temp_c - estimate.room_temperature_c
         hold_power_w = self._loss_model.calculate_heat_loss_w(
@@ -631,7 +602,7 @@ class RoomMpcController:
         """
         best: _DemandPrediction | None = None
         best_key: tuple[float, float] | None = None
-        hold_demand_pct = self._hold_demand_pct(mpc_input, estimate)
+        hold_demand_pct = self._hold_demand_pct(mpc_input)
 
         for demand_pct in range(0, 101, MPC_DEMAND_SEARCH_STEP_PCT):
             predicted_temperature_c = self._predict_room_temperature_c(
@@ -668,16 +639,13 @@ class RoomMpcController:
             return lower_c - predicted_temperature_c
         return 0.0
 
-    def _hold_demand_pct(
-        self, mpc_input: RoomMpcInput, estimate: ObserverEstimate
-    ) -> float:
+    def _hold_demand_pct(self, mpc_input: RoomMpcInput) -> float:
         """Demand that holds the setpoint in steady state."""
         hold_power_w = max(
             0.0,
             self._loss_model.calculate_heat_loss_w(
                 mpc_input.target_temp_c, mpc_input.outdoor_temp_c
             )
-            - estimate.disturbance_w,
         )
         available_heating_power_w = (
             self._emitter_model.calculate_available_heating_power_w(
@@ -701,7 +669,6 @@ class RoomMpcController:
             demand_pct=demand_pct,
             flow_temperature_c=mpc_input.flow_temp_c,
             duration_s=duration_s,
-            disturbance_w=estimate.disturbance_w,
         )
 
     def _simulate_room_temperature_c(
@@ -711,7 +678,6 @@ class RoomMpcController:
         demand_pct: float,
         flow_temperature_c: float | None,
         duration_s: float,
-        disturbance_w: float = 0.0,
     ) -> float:
         """Room temperature after holding a demand, from the observed state.
 
@@ -744,7 +710,7 @@ class RoomMpcController:
             heat_loss_w = self._loss_model.calculate_heat_loss_w(
                 simulated_room_temperature_c, mpc_input.outdoor_temp_c
             )
-            net_heating_power_w = heating_power_w + disturbance_w - heat_loss_w
+            net_heating_power_w = heating_power_w - heat_loss_w
 
             predicted_delta_c = self._capacity_model.predict_temperature_change_c(
                 net_heating_power_w, MPC_SIMULATION_STEP_S
@@ -825,7 +791,6 @@ class RoomMpcController:
             mpc_input,
             requested_heating_power_w,
             radiator_power_w=estimate.radiator_power_w,
-            disturbance_w=estimate.disturbance_w,
         )
         self._learner.set_prediction(
             LearnerPrediction(
@@ -837,11 +802,6 @@ class RoomMpcController:
 
     def run_learning_cycle(self) -> None:
         self._learner.run_learning_cycle()
-        transfer_w = self._learner.consume_disturbance_transfer_w()
-        if transfer_w:
-            self._observer.restore_disturbance(
-                self._observer.disturbance_w - transfer_w
-            )
 
     def consume_persisted_learning_factors(self) -> LearningFactors | None:
         return self._learner.consume_persisted_learning_factors()

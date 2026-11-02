@@ -1,9 +1,12 @@
+from dataclasses import replace
+
 import pytest
 from heating_controller.const import (
     CapacityOutcome,
     Construction,
     DesignTemperatureSystem,
     PanelRadiatorType,
+    RoomTemperatureStrategy,
     UaBalanceOutcome,
 )
 from heating_controller.controller.mpc.controller import (
@@ -11,13 +14,15 @@ from heating_controller.controller.mpc.controller import (
     MpcRateLimitConfig,
     RoomMpcController,
 )
-from heating_controller.controller.mpc.results import RoomMpcErrorCode
+from heating_controller.controller.mpc.observer import ObserverEstimate
+from heating_controller.controller.mpc.results import RoomMpcErrorCode, RoomMpcInput
 from heating_controller.controller.mpc.types import (
     FlowGateState,
     LearningFactors,
     RoomThermalConfig,
     TrvConfig,
 )
+from learner_helpers import feed_night
 from test_valve_curve import DANFOSS_SEED
 
 
@@ -625,43 +630,6 @@ def test_heat_still_in_the_radiator_lowers_the_demand(monkeypatch):
     assert after_heating.result.demand_pct < cold_radiator.result.demand_pct
 
 
-def test_positive_disturbance_lowers_the_demand(monkeypatch):
-    _Clock(monkeypatch)
-    plain = _unsmoothed_controller()
-    _feed(plain, 20.8)
-    plain_result = plain.compute(target_temperature_c=21.0)
-
-    helped = _unsmoothed_controller()
-    helped.restore_disturbance(150.0)
-    _feed(helped, 20.8)
-    helped_result = helped.compute(target_temperature_c=21.0)
-
-    assert helped_result.result.disturbance_w == 150.0
-    assert 0 < helped_result.result.demand_pct
-    assert helped_result.result.demand_pct < plain_result.result.demand_pct
-
-
-def test_disturbance_leaves_the_flow_requirement_alone(monkeypatch):
-    _Clock(monkeypatch)
-    plain = _unsmoothed_controller()
-    _feed(plain, 20.0)
-    plain_result = plain.compute(target_temperature_c=21.0)
-
-    helped = _unsmoothed_controller()
-    helped.restore_disturbance(600.0)
-    _feed(helped, 20.0)
-    helped_result = helped.compute(target_temperature_c=21.0)
-
-    assert (
-        helped_result.result.hold_flow_temperature_c
-        == plain_result.result.hold_flow_temperature_c
-    )
-    assert (
-        helped_result.result.recovery_flow_temperature_c
-        == plain_result.result.recovery_flow_temperature_c
-    )
-
-
 def test_radiators_stay_cold_while_heat_is_unavailable(monkeypatch):
     clock = _Clock(monkeypatch)
     controller = _unsmoothed_controller()
@@ -775,31 +743,72 @@ def test_the_observer_follows_the_reported_valve_not_the_demand(monkeypatch):
     assert later.result.radiator_power_w > 0.5 * first.result.measured_heating_power_w
 
 
-def test_a_missing_valve_position_freezes_the_disturbance(monkeypatch):
-    clock = _Clock(monkeypatch)
-    controller = _valve_controller()
-    controller.enable_learning()
-    controller.restore_disturbance(100.0)
-    _feed(controller, 21.0)
-    first = controller.compute(target_temperature_c=21.0)
-    for _ in range(12):
-        clock.advance(300)
-        _feed(controller, 21.0)
-        result = controller.compute(target_temperature_c=21.0)
+def test_hold_demand_is_the_loss_at_the_setpoint():
+    controller = _unsmoothed_controller()
+    controller.recalibrate_learning_factors(
+        LearningFactors(ua_factor=0.7, capacity_factor=1.0)
+    )
+    mpc_input = RoomMpcInput(
+        now_ts=1_000_000.0,
+        target_temp_c=21.0,
+        room_temp_c=20.5,
+        outdoor_temp_c=5.0,
+        flow_temp_c=40.0,
+        used_room_sensor_strategy=RoomTemperatureStrategy.ROOM_SENSOR,
+        trv_temperatures=[20.5],
+    )
+    loss_w = controller._loss_model.calculate_heat_loss_w(21.0, 5.0)
+    available_w = controller._emitter_model.calculate_available_heating_power_w(
+        21.0, 40.0
+    )
+    assert 0 < loss_w < available_w
+    assert controller._hold_demand_pct(mpc_input) == pytest.approx(
+        100 * loss_w / available_w
+    )
 
-    assert first.result.input.valve_position_missing is True
-    assert result.result.disturbance_w == 100.0
 
-
-def test_the_learning_cycle_hands_the_disturbance_to_the_learned_factor():
+def test_balance_does_not_move_anything_but_the_factor():
     controller = make_controller()
-    controller.restore_disturbance(150.0)
-    controller._learner.consume_disturbance_transfer_w = lambda: 40.0
-    controller._learner.run_learning_cycle = lambda: None
+    controller.enable_learning()
+    # Outdoor at room temperature and the radiators cold: the room stays put
+    # and loses nothing whatever the factor, so only a hand-over of heat
+    # could move the observer's estimate.
+    state_input = RoomMpcInput(
+        now_ts=5_000_000.0,
+        target_temp_c=20.0,
+        room_temp_c=20.0,
+        outdoor_temp_c=20.0,
+        flow_temp_c=40.0,
+        used_room_sensor_strategy=RoomTemperatureStrategy.ROOM_SENSOR,
+        trv_temperatures=[20.0],
+    )
+    controller._observer.commit(
+        ObserverEstimate(
+            timestamp=state_input.now_ts,
+            room_temperature_c=20.0,
+            radiator_power_w=0.0,
+        ),
+        state_input,
+        target_power_w=0.0,
+        demand_pct=0.0,
+    )
+    probe = replace(state_input, now_ts=state_input.now_ts + 600)
+    before = controller._observer.estimate(probe)
+    capacity_factor = controller.learned_capacity_factor
 
+    feed_night(controller._learner)
     controller.run_learning_cycle()
 
-    assert controller.disturbance_w == 110.0
+    assert controller.get_ua_balance_info().outcome in (
+        UaBalanceOutcome.LEARNED,
+        UaBalanceOutcome.LEARNED_AT_LIMIT,
+    )
+    assert controller.learned_ua_factor != 1.0
+    assert controller.learned_capacity_factor == capacity_factor
+    after = controller._observer.estimate(probe)
+    assert after.room_temperature_c == before.room_temperature_c
+    assert after.radiator_power_w == before.radiator_power_w
+
 
 
 def _charge(controller, clock, flows_c, room_temp_c=20.5):
@@ -841,20 +850,6 @@ def test_radiators_get_no_heat_during_a_hot_water_charge(monkeypatch):
     assert before.result.radiator_power_w > 0
     assert during.result.radiator_power_w < before.result.radiator_power_w
     assert during.result.radiator_power_w < 0.75 * steady.result.radiator_power_w
-
-
-def test_a_hot_water_charge_freezes_the_disturbance(monkeypatch):
-    # Katharina, 31 October: disturbance 13.6 -> -6.2 W over the charge.
-    clock = _Clock(monkeypatch)
-    controller = _unsmoothed_controller()
-    controller.enable_learning()
-    controller.restore_disturbance(100.0)
-    _charge(controller, clock, [35.0])
-    disturbance_w = controller.disturbance_w
-    result = _charge(controller, clock, [56.0] * 6, room_temp_c=19.5)
-
-    assert result.result.input.hot_water_charge is True
-    assert result.result.disturbance_w == disturbance_w
 
 
 def test_missing_outdoor_temperature_pauses_learning():

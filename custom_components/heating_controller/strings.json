@@ -264,9 +264,6 @@
       "measured_heating_power": {
         "name": "Heating power from valve position"
       },
-      "disturbance_power": {
-        "name": "Disturbance power"
-      },
       "room_temperature": {
         "name": "Room temperature"
       },
@@ -335,7 +332,7 @@
     },
     "recalibrate": {
       "name": "Recalibrate",
-      "description": "Set the learned UA and capacity factors and the observer's disturbance of one or more rooms. A value left out stays unchanged; pass 1.0 to reset a factor, 0 to reset the disturbance. Admin only.",
+      "description": "Set the learned UA and capacity factors of one or more rooms. A factor left out stays unchanged; pass 1.0 to reset it. Admin only.",
       "fields": {
         "ua_factor": {
           "name": "UA factor",
@@ -344,10 +341,6 @@
         "capacity_factor": {
           "name": "Capacity factor",
           "description": "Learned thermal-capacity factor. 1.0 resets it to the design value."
-        },
-        "disturbance_w": {
-          "name": "Disturbance",
-          "description": "Lasting heat the model does not explain, in watts. 0 resets it; the room limits it to its heat load in either direction."
         }
       }
     }

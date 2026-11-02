@@ -84,4 +84,3 @@ class RoomMpcResult:
     # Observer state the demand was planned from.
     estimated_room_temperature_c: float | None = None
     radiator_power_w: float | None = None
-    disturbance_w: float | None = None

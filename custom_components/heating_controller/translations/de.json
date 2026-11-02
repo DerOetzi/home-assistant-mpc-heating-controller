@@ -264,9 +264,6 @@
       "measured_heating_power": {
         "name": "Heizleistung aus Ventilstellung"
       },
-      "disturbance_power": {
-        "name": "Fremdwärme"
-      },
       "room_temperature": {
         "name": "Raumtemperatur"
       },
@@ -335,7 +332,7 @@
     },
     "recalibrate": {
       "name": "Neu kalibrieren",
-      "description": "Setzt die gelernten UA- und Kapazitätsfaktoren und die Fremdwärme des Beobachters eines oder mehrerer Räume. Ein weggelassener Wert bleibt unverändert; 1.0 setzt einen Faktor zurück, 0 die Fremdwärme. Nur für Admins.",
+      "description": "Setzt die gelernten UA- und Kapazitätsfaktoren eines oder mehrerer Räume. Ein weggelassener Faktor bleibt unverändert; 1.0 setzt ihn zurück. Nur für Admins.",
       "fields": {
         "ua_factor": {
           "name": "UA-Faktor",
@@ -344,10 +341,6 @@
         "capacity_factor": {
           "name": "Kapazitätsfaktor",
           "description": "Gelernter Faktor der Wärmekapazität. 1.0 setzt ihn auf den Auslegungswert zurück."
-        },
-        "disturbance_w": {
-          "name": "Fremdwärme",
-          "description": "Dauerhafte Wärme, die das Modell nicht erklärt, in Watt. 0 setzt sie zurück; der Raum begrenzt sie auf seine Heizlast in beide Richtungen."
         }
       }
     }

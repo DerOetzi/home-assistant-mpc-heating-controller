@@ -107,8 +107,8 @@ from .profiles import TrvBinding
 from .store import (
     FlowGateStateStore,
     LearningFactorsStore,
-    ObserverStateStore,
     ValveCurveStore,
+    async_remove_observer_store,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -133,8 +133,6 @@ ADAPTATION_MAX_HOLD_S = 3 * 3600
 
 WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S = 30 * 60
 WINDOW_CLOSED_SUPPRESS_CAPACITY_LEARNING_S = 10 * 60
-# The disturbance moves slowly; saving every small step only wears the disk.
-OBSERVER_PERSIST_MIN_CHANGE_W = 1.0
 # Valve curve samples finish every few minutes per TRV; one delayed write
 # bundles what finished within this time and spares the disk. HA flushes a
 # pending write on shutdown.
@@ -298,8 +296,6 @@ class HeatingRoomCoordinator:
         self.store = LearningFactorsStore(hass, self.room_name, entry.entry_id)
         self.flow_gate_store = FlowGateStateStore(hass, self.room_name, entry.entry_id)
         self._persisted_flow_gate_state: FlowGateState | None = None
-        self.observer_store = ObserverStateStore(hass, self.room_name, entry.entry_id)
-        self._persisted_disturbance_w: float | None = None
         self.valve_curve_store = ValveCurveStore(hass, self.room_name, entry.entry_id)
         # When the pending delayed write is due. HA's delayed save moves a
         # pending write out on every call, so samples finishing more often
@@ -349,10 +345,11 @@ class HeatingRoomCoordinator:
             self.mpc.restore_flow_gate_state(flow_gate_state)
             self._persisted_flow_gate_state = flow_gate_state
 
-        disturbance_w = await self.observer_store.async_load()
-        if disturbance_w is not None:
-            self.mpc.restore_disturbance(disturbance_w)
-            self._persisted_disturbance_w = disturbance_w
+        # The disturbance observer is gone; its file would stay behind in
+        # .storage -- drop after season 2026/27.
+        await async_remove_observer_store(
+            self.hass, self.room_name, self.entry.entry_id
+        )
 
         valve_curves = await self.valve_curve_store.async_load()
         if valve_curves is not None:
@@ -692,19 +689,7 @@ class HeatingRoomCoordinator:
     async def _async_handle_learning_cycle(self, _now: Any) -> None:
         self.mpc.run_learning_cycle()
         await self._async_persist_learning_factors()
-        await self._async_persist_disturbance()
         self._notify_listeners()
-
-    async def _async_persist_disturbance(self) -> None:
-        disturbance_w = self.mpc.disturbance_w
-        if (
-            self._persisted_disturbance_w is not None
-            and abs(disturbance_w - self._persisted_disturbance_w)
-            < OBSERVER_PERSIST_MIN_CHANGE_W
-        ):
-            return
-        await self.observer_store.async_save(disturbance_w)
-        self._persisted_disturbance_w = disturbance_w
 
     async def _async_persist_learning_factors(self) -> None:
         persisted_factors = self.mpc.consume_persisted_learning_factors()
@@ -712,29 +697,9 @@ class HeatingRoomCoordinator:
             await self.store.async_save(persisted_factors)
 
     async def async_recalibrate(
-        self,
-        ua_factor: float | None,
-        capacity_factor: float | None,
-        disturbance_w: float | None = None,
-    ) -> None:
-        if disturbance_w is not None:
-            self.mpc.restore_disturbance(disturbance_w)
-            await self.observer_store.async_save(self.mpc.disturbance_w)
-            self._persisted_disturbance_w = self.mpc.disturbance_w
-            _LOGGER.info(
-                "Recalibrated disturbance for room %s: %s W",
-                self.room_name,
-                self.mpc.disturbance_w,
-            )
-        # Setting the factors discards the running learning windows; a
-        # disturbance-only call leaves them be.
-        if ua_factor is not None or capacity_factor is not None:
-            await self._async_recalibrate_factors(ua_factor, capacity_factor)
-        self._notify_listeners()
-
-    async def _async_recalibrate_factors(
         self, ua_factor: float | None, capacity_factor: float | None
     ) -> None:
+        """Set the factors; one left out keeps its learned value."""
         factors = LearningFactors(
             ua_factor=self.mpc.learned_ua_factor if ua_factor is None else ua_factor,
             capacity_factor=(
@@ -751,6 +716,7 @@ class HeatingRoomCoordinator:
             factors.ua_factor,
             factors.capacity_factor,
         )
+        self._notify_listeners()
 
     def is_sun_condition_met(self, timestamp: float) -> bool:
         moment = dt_util.utc_from_timestamp(timestamp)
