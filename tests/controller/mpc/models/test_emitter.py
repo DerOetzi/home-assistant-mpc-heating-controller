@@ -1,8 +1,7 @@
 import pytest
-
 from heating_controller.const import (
-    DesignTemperatureSystem,
     Construction,
+    DesignTemperatureSystem,
     HeatEmitterType,
     PanelRadiatorType,
 )

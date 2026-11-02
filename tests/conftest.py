@@ -15,7 +15,7 @@ sys.path.insert(0, str(REPO_ROOT / "custom_components"))
 
 pytest_plugins = "pytest_homeassistant_custom_component"
 
-import custom_components  # noqa: E402
+import custom_components
 
 if str(REPO_ROOT / "custom_components") not in custom_components.__path__:
     custom_components.__path__.append(str(REPO_ROOT / "custom_components"))

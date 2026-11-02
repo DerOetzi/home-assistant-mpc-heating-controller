@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import slugify
@@ -97,6 +99,41 @@ class ObserverStateStore:
     async def async_save(self, disturbance_w: float) -> None:
         await self._store.async_save(
             {"room_name": self._room_name, "disturbance_w": disturbance_w}
+        )
+
+    async def async_remove(self) -> None:
+        await self._store.async_remove()
+
+
+def _valve_curve_storage_key(room_name: str, entry_id: str) -> str:
+    return f"{DOMAIN}_{slugify(room_name)}_{entry_id}_valve_curve"
+
+
+class ValveCurveStore:
+    """The valve curve samples per TRV, so a restart does not learn anew."""
+
+    def __init__(self, hass: HomeAssistant, room_name: str, entry_id: str) -> None:
+        self._room_name = room_name
+        self._store: Store[dict] = Store(
+            hass, STORAGE_VERSION, _valve_curve_storage_key(room_name, entry_id)
+        )
+
+    async def async_load(self) -> dict[str, dict] | None:
+        data = await self._store.async_load()
+        if data is None:
+            return None
+        return dict(data.get("trvs", {}))
+
+    async def async_save(self, curves: dict[str, dict]) -> None:
+        """Write now; also cancels a pending delayed write."""
+        await self._store.async_save({"room_name": self._room_name, "trvs": curves})
+
+    def async_delay_save(
+        self, curves_func: Callable[[], dict[str, dict]], delay_s: float
+    ) -> None:
+        """Write after delay_s, with the curves as they are then."""
+        self._store.async_delay_save(
+            lambda: {"room_name": self._room_name, "trvs": curves_func()}, delay_s
         )
 
     async def async_remove(self) -> None:

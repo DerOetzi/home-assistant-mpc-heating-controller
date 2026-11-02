@@ -10,7 +10,11 @@ from homeassistant.const import EntityCategory, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DEFAULT_COMFORT_TEMPERATURE_C, DEFAULT_ECO_TEMPERATURE_OFFSET_C, DOMAIN
+from .const import (
+    DEFAULT_COMFORT_TEMPERATURE_C,
+    DEFAULT_ECO_TEMPERATURE_OFFSET_C,
+    DOMAIN,
+)
 from .coordinator import HeatingRoomCoordinator
 from .entity import HeatingControllerEntity
 

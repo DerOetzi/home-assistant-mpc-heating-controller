@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from math import ceil
 
 from ...const import CapacityOutcome, TrvSetpointMode
+from .hot_water import HotWaterChargeDetector
 from .learner import LearnerPrediction, RoomMpcModelLearner
 from .math_helper import clamp, round_to_step
 from .models.capacity import ThermalCapacityModel
 from .models.emitter import HeatEmitterModel
 from .models.loss import RoomLossModel
+from .models.valve import ValveCharacteristic
 from .observer import ObserverEstimate, RoomStateObserver, step_radiator_power_w
-from .hot_water import HotWaterChargeDetector
 from .radiator_monitor import RadiatorDeliveryMonitor
 from .results import (
     RoomMpcError,
@@ -28,6 +30,7 @@ from .types import (
     TrvConfig,
     UaBalanceInfo,
 )
+from .valve_curve import ValveCurveBin, ValveCurveLearner, ValveCurveStatus
 
 MPC_PREDICTION_HORIZON_S = 1800
 # How quickly the minimum flow temperature asks to bring a room back to its
@@ -184,6 +187,21 @@ class RoomMpcController:
         self._heat_available = True
         self._hot_water = HotWaterChargeDetector()
         self._radiator_monitors = [RadiatorDeliveryMonitor() for _ in trvs]
+        self._trv_names = [trv.name for trv in trvs]
+        # By TRV name; only a TRV that reports its valve opening can learn
+        # its curve.
+        self._valve_curve_learners: dict[str, ValveCurveLearner] = {
+            trv.name: ValveCurveLearner(
+                trv.valve_characteristic_seed,
+                min_target_c=trv.min_target_temperature_c,
+            )
+            for trv in trvs
+            if trv.valve_position_configured
+        }
+        # The setpoints the TRVs report, as reported. Unlike in
+        # _current_trv_targets a just-written target does not stand in for
+        # the echo: the curve needs what the TRV really regulates to.
+        self._reported_trv_targets: list[float | None] = [None] * len(trvs)
 
         self._target_demand_pct = 0.0
         self._last_output_demand_pct = 0.0
@@ -263,6 +281,55 @@ class RoomMpcController:
     def set_valve_position(self, index: int, value: float | None) -> None:
         self._sensors.set_valve_position(index, value)
 
+    def set_trv_target(self, index: int, value: float | None) -> None:
+        """The setpoint a TRV reports, for its valve curve."""
+        if index < len(self._reported_trv_targets):
+            self._reported_trv_targets[index] = value
+
+    @property
+    def valve_curve_learners(self) -> dict[str, ValveCurveLearner]:
+        """By TRV name, only TRVs with a valve entity."""
+        return self._valve_curve_learners
+
+    def valve_characteristics(self) -> list[ValveCharacteristic | None]:
+        """Per TRV, in order: its curve; None without valve entity or curve."""
+        return [
+            learner.characteristic()
+            if (learner := self._valve_curve_learners.get(name)) is not None
+            else None
+            for name in self._trv_names
+        ]
+
+    def valve_curve_report(
+        self,
+    ) -> dict[str, tuple[ValveCurveStatus, list[ValveCurveBin]]]:
+        """Status and bins per TRV with a valve entity, for diagnosis."""
+        return {
+            name: (learner.status, learner.bins())
+            for name, learner in self._valve_curve_learners.items()
+        }
+
+    def consume_valve_curves_changed(self) -> bool:
+        """Whether any TRV finished a sample since the last call."""
+        # Collected first: any() would stop early and leave flags unconsumed.
+        changed = [
+            learner.consume_changed()
+            for learner in self._valve_curve_learners.values()
+        ]
+        return any(changed)
+
+    def export_valve_curves(self) -> dict[str, dict]:
+        """Finished samples per TRV name, to persist."""
+        return {
+            name: learner.export()
+            for name, learner in self._valve_curve_learners.items()
+        }
+
+    def restore_valve_curves(self, data: Mapping[str, dict]) -> None:
+        for name, learner in self._valve_curve_learners.items():
+            if isinstance(data.get(name), dict):
+                learner.restore(data[name])
+
     def set_trv_adapting(self, adapting: bool) -> None:
         self._sensors.set_trv_adapting(adapting)
 
@@ -331,6 +398,7 @@ class RoomMpcController:
                     output_fraction,
                     hot_water_charge=mpc_input.hot_water_charge,
                 )
+            self._observe_valve_curves(mpc_input, skip_demand_smoothing)
         mpc_input.radiator_not_heating = any(self.radiators_not_heating)
         mpc_input.radiator_not_heating_since_ts = min(
             (
@@ -450,6 +518,43 @@ class RoomMpcController:
             measured_heating_power_w=measured_heating_power_w,
         )
         return RoomMpcComputeResult(valid=True, result=result)
+
+    def _observe_valve_curves(
+        self, mpc_input: RoomMpcInput, frost_protection_forced: bool
+    ) -> None:
+        """Feed each TRV's valve curve with what it reports now.
+
+        A sample only counts while the valve answers the setpoint alone: an
+        adapting TRV moves it by itself, without water (hot-water charge) or
+        with an open window the PI winds up differently, a radiator that
+        does not heat leaves the TRV reading behind, and forced frost
+        protection shuts the valves whatever the curve says.
+        """
+        room_allowed = not (
+            mpc_input.trv_adapting
+            or mpc_input.hot_water_charge
+            or self._learner.window_open
+            or frost_protection_forced
+        )
+        for name, monitor, target_c, reading_c, opening_pct in zip(
+            self._trv_names,
+            self._radiator_monitors,
+            self._reported_trv_targets,
+            mpc_input.trv_temperatures,
+            mpc_input.valve_positions_pct or [None] * len(self._trv_names),
+        ):
+            learner = self._valve_curve_learners.get(name)
+            if learner is None:
+                continue
+            learner.observe(
+                mpc_input.now_ts,
+                target_c,
+                reading_c,
+                opening_pct,
+                sample_allowed=room_allowed
+                and not monitor.not_heating
+                and opening_pct is not None,
+            )
 
     def _calculate_hold_flow_temperature_c(self, mpc_input: RoomMpcInput) -> float | None:
         """Flow needed to hold the setpoint -- ungated, weather-driven only."""

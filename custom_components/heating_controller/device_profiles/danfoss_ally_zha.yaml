@@ -29,3 +29,11 @@ entities:
     busy:
       attributes:
         In_progress: true
+# Diagnose 10/2026 (scale factor 1), nur Startwert, je TRV wird gelernt.
+# [setpoint minus TRV reading in °C, valve opening in %]
+valve_characteristic_seed:
+  - [0.1, 5]
+  - [0.6, 45]
+  - [1.5, 55]
+  - [2.5, 90]
+  - [3.0, 100]

@@ -294,6 +294,44 @@ full output, 50 % about 87 %. A TRV without such an entity counts with the deman
 unavailable, the room's learning stops (status
 `valve_position_missing`) and the disturbance is held until it reports again.
 
+## Valve curve
+
+Each TRV that reports its valve opening learns how far the valve opens for a setpoint
+offset (setpoint minus the TRV's own reading). The Danfoss PI behind it differs from valve
+to valve — pre-setting, insert, how the TRV sits — so one curve per TRV. For now the curve is
+only learned and shown; the control does not use it yet.
+
+A sample starts whenever the TRV reports a new setpoint: the offset is that setpoint minus
+the TRV's reading at that moment. Only a heating offset of the relative mode starts one —
+0.1 to 4.0 K (the largest relative offset of 3 K plus a rounding step, with margin) and a
+setpoint above the TRV's minimum target. An off write (the minimum target, some 15 K below
+the reading), an absolute or eco jump starts none and ends any open sample. It ends at the first controller cycle 10 to 15 minutes
+later with the opening reported then. A sample is dropped if another setpoint comes first,
+if no cycle falls into that window, if the opening is missing, or if at any cycle meanwhile
+the TRV adapted its valve, a hot-water charge ran, a window was open, the radiator check
+flagged this radiator, frost protection was forced, or the valve entity reported nothing.
+Preview calculations feed nothing.
+
+Samples go into bins 0.5 K wide; each keeps its last 20. A bin counts from 3 samples, its
+point is the median offset and the median opening. The curve is the learned points; points
+of the profile's starting value (`valve_characteristic_seed`, see the README) fill in only
+more than 0.25 K below or above the learned ones, and the openings are made monotone.
+Without a starting value and no learned point from 2.5 K on, 3.0 K counts as fully open.
+
+| Status | Meaning |
+|---|---|
+| `seed` | No bin has 3 samples yet: the starting value (if any) is the curve. |
+| `learning` | 1–2 bins count. |
+| `learned` | At least 3 bins count, one of them at 2.0 K or more. |
+| `scattered` | A bin with at least 5 samples spreads more than 30 percentage points (p90−p10): the TRV's PI integrates too much for a fixed curve, so it has none. |
+
+The diagnostic sensor `sensor.<room>_valve_curve` (the entity id follows the HA language:
+on a German install `sensor.<raum>_ventilkennlinie`) counts the TRVs with status `learned`. Its
+attributes name each TRV with a valve entity, with `status` and `bins`
+(`[offset °C, opening %, samples, spread %]`). One delayed write per room bundles the samples
+that finish within 10 minutes; a pending one is written at once when the room unloads
+(reload, removal) and when Home Assistant shuts down, so finished samples survive a restart. A sample still open at the restart is lost.
+
 ## Radiator lag and the room observer
 
 A radiator does not stop heating when its valve closes: the water and steel in it keep

@@ -1,5 +1,4 @@
 import pytest
-
 from heating_controller.const import Construction
 from heating_controller.controller.mpc.models.capacity import (
     MAX_LEARNED_CAPACITY_FACTOR,

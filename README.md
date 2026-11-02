@@ -135,11 +135,29 @@ What the controller does with each entity:
 - **climate** — reads the TRV's own temperature and writes the target temperature.
 - **Valve opening** — the heat the radiator really gives off, see
   [docs/mpc-guide.md](docs/mpc-guide.md#valve-position-the-heat-the-radiators-really-get).
+  Each TRV with it also learns its own valve curve (setpoint offset → opening), see
+  [docs/mpc-guide.md](docs/mpc-guide.md#valve-curve).
 - **Heat available** — switched on while the heat source delivers heat, so the TRV knows
   whether opening its valve can help.
 - **Adaptation status** — while the TRV calibrates its valve, nothing is written to it
   (any write aborts the run), for at most three hours and except for forced frost
   protection; the room does not learn meanwhile.
+
+A profile may give a starting point for that valve curve, optional, at least two points,
+offsets strictly rising and openings never falling:
+
+```yaml
+# [setpoint minus TRV reading in °C, valve opening in %]
+valve_characteristic_seed:
+  - [0.1, 5]
+  - [0.6, 45]
+  - [1.5, 55]
+  - [2.5, 90]
+  - [3.0, 100]
+```
+
+Without it a TRV learns its curve from scratch. The Danfoss Ally profiles carry the values
+above, read off one TRV in October 2026; each TRV replaces them with what it learns.
 
 Upgrading from a version that configured TRVs by entity migrates every TRV to its device.
 A room with a TRV no profile covers stops with a migration error in the log.

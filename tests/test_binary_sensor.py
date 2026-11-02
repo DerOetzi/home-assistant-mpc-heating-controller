@@ -1,11 +1,9 @@
 """The heating_automation attributes are public API consumed by the Lovelace card."""
 
+from heating_controller.const import DOMAIN
 from homeassistant.core import HomeAssistant, ServiceCall
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-
-from heating_controller.const import DOMAIN
-
-from test_coordinator import ENTRY_DATA, _room_data, _seed_entities
+from test_coordinator import _room_data, _seed_entities
 
 
 def _register_stub_services(hass: HomeAssistant) -> None:

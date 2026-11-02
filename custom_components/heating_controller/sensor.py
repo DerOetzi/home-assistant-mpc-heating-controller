@@ -2,15 +2,25 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, PERCENTAGE, UnitOfPower, UnitOfTemperature
+from homeassistant.const import (
+    PERCENTAGE,
+    EntityCategory,
+    UnitOfPower,
+    UnitOfTemperature,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, CapacityOutcome, UaBalanceOutcome
 from .controller.mpc.learner import UA_BALANCE_MIN_WINDOW_S
+from .controller.mpc.valve_curve import ValveCurveStatus
 from .coordinator import HeatingRoomCoordinator
 from .entity import HeatingControllerEntity
 
@@ -36,6 +46,7 @@ async def async_setup_entry(
             CapacityLearningStatusSensor(coordinator),
             UaFactorSensor(coordinator),
             CapacityFactorSensor(coordinator),
+            ValveCurveSensor(coordinator),
         ]
     )
 
@@ -339,7 +350,7 @@ class UaLearningStatusSensor(_DiagnosticSensor):
 
     _attr_translation_key = "ua_learning_status"
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = [outcome.value for outcome in UaBalanceOutcome]
+    _attr_options = [outcome.value for outcome in UaBalanceOutcome]  # noqa: RUF012
 
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
         super().__init__(coordinator, "ua_learning_status")
@@ -378,7 +389,7 @@ class CapacityLearningStatusSensor(_DiagnosticSensor):
 
     _attr_translation_key = "capacity_learning_status"
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = [outcome.value for outcome in CapacityOutcome]
+    _attr_options = [outcome.value for outcome in CapacityOutcome]  # noqa: RUF012
 
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
         super().__init__(coordinator, "capacity_learning_status")
@@ -428,3 +439,45 @@ class CapacityFactorSensor(_DiagnosticSensor):
     @property
     def native_value(self) -> float:
         return self._coordinator.mpc.learned_capacity_factor
+
+
+class ValveCurveSensor(_DiagnosticSensor):
+    """How far each TRV has learned its valve curve.
+
+    The state counts the TRVs whose curve is learned; per TRV the attributes
+    show its status and the bins (offset °C, opening %, samples, p90-p10
+    spread in percentage points), keyed by the TRV's climate entity. TRVs
+    without a valve entity learn nothing and are left out.
+    """
+
+    _attr_translation_key = "valve_curve"
+
+    def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
+        super().__init__(coordinator, "valve_curve")
+
+    @property
+    def native_value(self) -> int:
+        return sum(
+            status is ValveCurveStatus.LEARNED
+            for status, _ in self._coordinator.mpc.valve_curve_report().values()
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            name: {
+                "status": status.value,
+                "bins": [
+                    [
+                        round(bin_.offset_c, 2),
+                        round(bin_.opening_pct, 1),
+                        bin_.samples,
+                        round(bin_.spread_pct, 1),
+                    ]
+                    for bin_ in bins
+                ],
+            }
+            for name, (status, bins) in (
+                self._coordinator.mpc.valve_curve_report().items()
+            )
+        }

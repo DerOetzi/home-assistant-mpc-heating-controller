@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from datetime import timedelta
-from typing import Any, Callable
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -14,19 +15,27 @@ from homeassistant.const import (
     SUN_EVENT_SUNRISE,
     SUN_EVENT_SUNSET,
 )
-from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
+from homeassistant.core import (
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    State,
+    callback,
+)
 from homeassistant.exceptions import ConfigEntryError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_entity_registry_updated_event,
     async_track_state_change_event,
     async_track_time_interval,
 )
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.sun import get_astral_event_date
-from homeassistant.util import dt as dt_util, slugify
+from homeassistant.util import dt as dt_util
+from homeassistant.util import slugify
 
 from .const import (
+    CONF_BOOST_TEMPERATURE_OFFSET,
     CONF_COMFORT_CONDITION_ENTITIES,
     CONF_CONSTRUCTION,
     CONF_DESIGN_INDOOR_TEMPERATURE,
@@ -37,6 +46,7 @@ from .const import (
     CONF_FLOW_GATE_OPEN_SURPLUS,
     CONF_FLOW_TEMPERATURE_ENTITY,
     CONF_FLOW_THRESHOLD_ENTITY,
+    CONF_FROST_PROTECTION_TEMPERATURE,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
     CONF_LEARNING_ENABLED_ENTITY,
     CONF_LEARNING_WINDOW_ENTITY,
@@ -56,28 +66,26 @@ from .const import (
     CONF_ROOM_SENSOR_ENTITY,
     CONF_STATIONARY_RANGE,
     CONF_TARGET_BAND,
-    CONF_TRV_SETPOINT_MODE,
     CONF_TRV_EMITTER_TYPE,
     CONF_TRV_HEIGHT_MM,
     CONF_TRV_NOMINAL_POWER_W,
     CONF_TRV_RADIATOR_TYPE,
+    CONF_TRV_SETPOINT_MODE,
     CONF_TRV_WIDTH_MM,
     CONF_WINDOW_CONTACT_ENTITIES,
-    CONF_BOOST_TEMPERATURE_OFFSET,
-    CONF_FROST_PROTECTION_TEMPERATURE,
     DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C,
     DEFAULT_FLOW_GATE_HOLD_TIME_S,
     DEFAULT_FLOW_GATE_OPEN_SURPLUS_C,
     DEFAULT_FLOW_THRESHOLD_C,
     DEFAULT_STATIONARY_RANGE_C,
     HEAT_SOURCE_ACTIVE_STATE,
+    LEARNING_CYCLE_INTERVAL_MINUTES,
+    SENSOR_POLL_INTERVAL_MINUTES,
     Construction,
     DesignTemperatureSystem,
     FlowSupplyStatus,
     HeatEmitterType,
     HeatMode,
-    LEARNING_CYCLE_INTERVAL_MINUTES,
-    SENSOR_POLL_INTERVAL_MINUTES,
     PanelRadiatorType,
     TrvSetpointMode,
 )
@@ -96,7 +104,12 @@ from .controller.mpc.types import (
 )
 from .controller.state import HeatingStateConfig, HeatingStateController
 from .profiles import TrvBinding
-from .store import FlowGateStateStore, LearningFactorsStore, ObserverStateStore
+from .store import (
+    FlowGateStateStore,
+    LearningFactorsStore,
+    ObserverStateStore,
+    ValveCurveStore,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -122,6 +135,10 @@ WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S = 30 * 60
 WINDOW_CLOSED_SUPPRESS_CAPACITY_LEARNING_S = 10 * 60
 # The disturbance moves slowly; saving every small step only wears the disk.
 OBSERVER_PERSIST_MIN_CHANGE_W = 1.0
+# Valve curve samples finish every few minutes per TRV; one delayed write
+# bundles what finished within this time and spares the disk. HA flushes a
+# pending write on shutdown.
+VALVE_CURVE_SAVE_DELAY_S = 10 * 60
 
 SUNSET_LEARNING_DELAY = timedelta(hours=2)
 
@@ -165,6 +182,7 @@ def _build_trv_configs(trvs: list[TrvBinding]) -> list[TrvConfig]:
             height_mm=trv.emitter.get(CONF_TRV_HEIGHT_MM),
             nominal_power_w=trv.emitter.get(CONF_TRV_NOMINAL_POWER_W),
             valve_position_configured=trv.valve_position_entity is not None,
+            valve_characteristic_seed=trv.valve_characteristic_seed,
         )
         for trv in trvs
     ]
@@ -282,6 +300,11 @@ class HeatingRoomCoordinator:
         self._persisted_flow_gate_state: FlowGateState | None = None
         self.observer_store = ObserverStateStore(hass, self.room_name, entry.entry_id)
         self._persisted_disturbance_w: float | None = None
+        self.valve_curve_store = ValveCurveStore(hass, self.room_name, entry.entry_id)
+        # When the pending delayed write is due. HA's delayed save moves a
+        # pending write out on every call, so samples finishing more often
+        # than the delay would postpone it until shutdown.
+        self._valve_curve_save_due_ts: float | None = None
         self._awaiting_room_sensor = bool(self.data.get(CONF_ROOM_SENSOR_ENTITY))
 
         self.blocked = False
@@ -330,6 +353,10 @@ class HeatingRoomCoordinator:
         if disturbance_w is not None:
             self.mpc.restore_disturbance(disturbance_w)
             self._persisted_disturbance_w = disturbance_w
+
+        valve_curves = await self.valve_curve_store.async_load()
+        if valve_curves is not None:
+            self.mpc.restore_valve_curves(valve_curves)
 
         for entity_id in self._comfort_condition_entities:
             self.state.set_comfort_condition(entity_id, self._is_on(entity_id))
@@ -443,10 +470,11 @@ class HeatingRoomCoordinator:
 
     def _refresh_temperature_inputs(self) -> None:
         for index, entity_id in enumerate(self._trv_entity_ids):
+            state = self.hass.states.get(entity_id)
             self.mpc.set_trv_temperature(
-                index,
-                self._climate_temperature_from_state(self.hass.states.get(entity_id)),
+                index, self._climate_temperature_from_state(state)
             )
+            self.mpc.set_trv_target(index, self._climate_target_from_state(state))
         for index, entity_id in enumerate(self._valve_position_entities):
             if entity_id:
                 self.mpc.set_valve_position(index, self._float_state(entity_id))
@@ -609,6 +637,7 @@ class HeatingRoomCoordinator:
             self.mpc.set_trv_temperature(
                 index, self._climate_temperature_from_state(new_state)
             )
+            self.mpc.set_trv_target(index, self._climate_target_from_state(new_state))
 
         elif entity_id in self._valve_position_entities:
             self.mpc.set_valve_position(
@@ -833,6 +862,7 @@ class HeatingRoomCoordinator:
             await self._async_apply_trv_active_switches(self.trv_active)
         await self._async_persist_learning_factors()
         await self._async_persist_flow_gate_state()
+        self._schedule_valve_curve_save()
         self._notify_listeners()
 
     async def _async_persist_flow_gate_state(self) -> None:
@@ -841,6 +871,33 @@ class HeatingRoomCoordinator:
             return
         await self.flow_gate_store.async_save(flow_gate_state)
         self._persisted_flow_gate_state = flow_gate_state
+
+    async def async_flush_valve_curves(self) -> None:
+        """Write a pending delayed valve-curve save now.
+
+        On unload: an awaited save replaces the pending delayed write, so it
+        cannot fire after the entry is removed and recreate the file, and a
+        reload keeps the samples.
+        """
+        if self._valve_curve_save_due_ts is None:
+            return
+        self._valve_curve_save_due_ts = None
+        await self.valve_curve_store.async_save(self.mpc.export_valve_curves())
+
+    def _schedule_valve_curve_save(self) -> None:
+        if not self.mpc.consume_valve_curves_changed():
+            return
+        now_ts = time.time()
+        if (
+            self._valve_curve_save_due_ts is not None
+            and now_ts < self._valve_curve_save_due_ts
+        ):
+            # The pending write reads the samples when it runs.
+            return
+        self.valve_curve_store.async_delay_save(
+            self.mpc.export_valve_curves, VALVE_CURVE_SAVE_DELAY_S
+        )
+        self._valve_curve_save_due_ts = now_ts + VALVE_CURVE_SAVE_DELAY_S
 
     async def _async_apply_outdoor_fallback(
         self, target_temperature_c: float, forced: bool

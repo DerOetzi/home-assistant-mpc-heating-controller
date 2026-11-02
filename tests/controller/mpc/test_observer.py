@@ -1,5 +1,4 @@
 import pytest
-
 from heating_controller.const import Construction, RoomTemperatureStrategy
 from heating_controller.controller.mpc.models.capacity import ThermalCapacityModel
 from heating_controller.controller.mpc.models.emitter import HeatEmitterModel

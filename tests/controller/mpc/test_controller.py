@@ -1,3 +1,4 @@
+import pytest
 from heating_controller.const import (
     CapacityOutcome,
     Construction,
@@ -17,6 +18,7 @@ from heating_controller.controller.mpc.types import (
     RoomThermalConfig,
     TrvConfig,
 )
+from test_valve_curve import DANFOSS_SEED
 
 
 def make_controller(flow_gate_config=None, **rate_limit_overrides):
@@ -948,3 +950,212 @@ def test_a_full_interval_allows_the_full_step(monkeypatch):
     second = controller.compute(target_temperature_c=25.0)
 
     assert second.result.demand_pct - first.result.demand_pct == 20
+
+
+def _valve_room(trvs=None):
+    """A room whose TRVs report their valve opening (two by default)."""
+    return RoomMpcController(
+        thermal_config=RoomThermalConfig(
+            room_heat_load_w=600, room_area_m2=15, construction=Construction.MEDIUM
+        ),
+        trvs=trvs
+        or [
+            TrvConfig(name="trv_a", valve_position_configured=True),
+            TrvConfig(name="trv_b", valve_position_configured=True),
+        ],
+        rate_limit_config=MpcRateLimitConfig(),
+        max_sensor_age_s=1800,
+        room_sensor_configured=False,
+        target_band_c=0.0,
+    )
+
+
+def _feed_trvs(controller, targets_c, openings_pct, report_targets=True):
+    _feed(controller, 20.0)
+    for index, (target_c, opening_pct) in enumerate(
+        zip(targets_c, openings_pct, strict=True)
+    ):
+        controller.set_trv_temperature(index, 20.0)
+        controller.set_valve_position(index, opening_pct)
+        if report_targets:
+            controller.set_trv_target(index, target_c)
+
+
+def _valve_curve_cycles(
+    controller, clock, offsets_c, openings_pct, times=3, report_targets=True, **compute
+):
+    """Per cycle: another setpoint, then offsets_c, read 700 s later.
+
+    Returns every compute result, so two runs can be compared step by step.
+    """
+    results = []
+    count = len(offsets_c)
+    for _ in range(times):
+        for targets_c, reported_pct, wait_s in (
+            ([5.0] * count, [0.0] * count, 300),
+            ([20.0 + offset for offset in offsets_c], [0.0] * count, 700),
+            ([20.0 + offset for offset in offsets_c], openings_pct, 300),
+        ):
+            _feed_trvs(controller, targets_c, reported_pct, report_targets)
+            results.append(controller.compute(target_temperature_c=21.0, **compute))
+            clock.advance(wait_s)
+    return results
+
+
+def _all_bins(controller):
+    return {
+        name: learner.bins()
+        for name, learner in controller.valve_curve_learners.items()
+    }
+
+
+def test_trv_without_valve_entity_has_no_learner():
+    controller = make_controller()
+
+    assert controller.valve_curve_learners == {}
+    assert controller.valve_characteristics() == [None]
+
+
+def test_two_trvs_learn_separately(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _valve_room()
+
+    _valve_curve_cycles(controller, clock, [0.7, 1.2], [30.0, 60.0])
+
+    bins = _all_bins(controller)
+    [first] = bins["trv_a"]
+    [second] = bins["trv_b"]
+    assert (first.offset_c, first.opening_pct, first.samples) == (
+        pytest.approx(0.7),
+        30.0,
+        3,
+    )
+    assert (second.offset_c, second.opening_pct, second.samples) == (
+        pytest.approx(1.2),
+        60.0,
+        3,
+    )
+    assert controller.consume_valve_curves_changed() is True
+    assert controller.consume_valve_curves_changed() is False
+
+
+def test_preview_compute_does_not_feed_the_learner(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _valve_room()
+
+    _valve_curve_cycles(
+        controller, clock, [0.7, 1.2], [30.0, 60.0], apply_side_effects=False
+    )
+
+    assert _all_bins(controller) == {"trv_a": [], "trv_b": []}
+
+
+@pytest.mark.parametrize(
+    ("block", "compute"),
+    [
+        pytest.param(
+            lambda controller, now_ts: controller.set_window_open(True, now_ts),
+            {},
+            id="window",
+        ),
+        pytest.param(
+            lambda controller, now_ts: controller.set_trv_adapting(True),
+            {},
+            id="adapting",
+        ),
+        pytest.param(
+            lambda controller, now_ts: None,
+            {"skip_demand_smoothing": True},
+            id="frost",
+        ),
+    ],
+)
+def test_a_blocked_moment_feeds_no_sample(monkeypatch, block, compute):
+    clock = _Clock(monkeypatch)
+    controller = _valve_room()
+    block(controller, clock.now_ts)
+
+    _valve_curve_cycles(controller, clock, [0.7, 1.2], [30.0, 60.0], **compute)
+
+    assert _all_bins(controller) == {"trv_a": [], "trv_b": []}
+
+
+def test_a_missing_valve_position_feeds_no_sample_for_that_trv(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _valve_room()
+
+    _valve_curve_cycles(controller, clock, [0.7, 1.2], [None, 60.0])
+
+    bins = _all_bins(controller)
+    assert bins["trv_a"] == []
+    assert bins["trv_b"] != []
+
+
+def test_learning_does_not_change_the_demand(monkeypatch):
+    clock = _Clock(monkeypatch)
+    learning = _valve_room()
+    blind = _valve_room()
+
+    start_ts = clock.now_ts
+    learned = _valve_curve_cycles(learning, clock, [0.7, 2.2], [30.0, 85.0])
+    clock.now_ts = start_ts
+    unlearned = _valve_curve_cycles(
+        blind, clock, [0.7, 2.2], [30.0, 85.0], report_targets=False
+    )
+
+    assert learning.valve_characteristics()[1] is not None
+    assert blind.valve_characteristics() == [None, None]
+    assert [r.result.demand_pct for r in learned] == [
+        r.result.demand_pct for r in unlearned
+    ]
+    assert [r.result.trv_targets for r in learned] == [
+        r.result.trv_targets for r in unlearned
+    ]
+
+
+def test_valve_curves_survive_export_and_restore(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _valve_room()
+    _valve_curve_cycles(controller, clock, [0.7, 1.2], [30.0, 60.0])
+
+    restored = _valve_room()
+    restored.restore_valve_curves(controller.export_valve_curves())
+
+    assert _all_bins(restored) == _all_bins(controller)
+
+
+def test_a_seed_reaches_the_learner():
+    controller = _valve_room(
+        [
+            TrvConfig(
+                name="trv1",
+                valve_position_configured=True,
+                valve_characteristic_seed=DANFOSS_SEED,
+            )
+        ]
+    )
+
+    assert controller.valve_characteristics() == [DANFOSS_SEED]
+
+
+def test_a_mixed_room_learns_only_where_the_valve_reports(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _valve_room(
+        [
+            TrvConfig(
+                name="climate.with_valve",
+                valve_position_configured=True,
+                valve_characteristic_seed=DANFOSS_SEED,
+            ),
+            TrvConfig(
+                name="climate.without_valve", valve_characteristic_seed=DANFOSS_SEED
+            ),
+        ]
+    )
+    _valve_curve_cycles(controller, clock, [0.7, 0.7], [30.0, None])
+
+    assert list(controller.valve_curve_learners) == ["climate.with_valve"]
+    first, second = controller.valve_characteristics()
+    assert first is not None and second is None
+    assert list(controller.export_valve_curves()) == ["climate.with_valve"]
+    assert list(controller.valve_curve_report()) == ["climate.with_valve"]

@@ -4,7 +4,7 @@
 
 **Goal:** Der MPC plant mit der Leistung, die eine Ventilöffnung wirklich bringt (wie Beobachter und Lerner schon rechnen), die Bedarfsglättung wirkt pro Zeit statt pro Aufruf, der Fremdwärme-Schätzer entfällt (UA-Bilanz ist einziger Dauerzustands-Lerner), und die UA-Bilanz legt die Größen offen, mit denen sich ihre Wetterabhängigkeit prüfen lässt.
 
-**Architecture:** `demand_pct` bedeutet künftig *Ziel-Ventilöffnung* (Mittel über die TRVs). Der Planer rechnet Öffnung → Leistung mit derselben Funktion wie die gemessene Ventilleistung (`calculate_measured_heating_power_w`), der Haltebedarf ist deren Umkehrung. Öffnung → TRV-Sollwertabstand kommt aus einer Kennlinie im Geräteprofil (YAML); ohne Kennlinie bleibt die heutige Abbildung. Glättung skaliert den Max-Schritt mit der seit dem letzten Aufruf vergangenen Zeit.
+**Architecture:** `demand_pct` bedeutet künftig *Ziel-Ventilöffnung* (Mittel über die TRVs). Der Planer rechnet Öffnung → Leistung mit derselben Funktion wie die gemessene Ventilleistung (`calculate_measured_heating_power_w`), der Haltebedarf ist deren Umkehrung. Öffnung → TRV-Sollwertabstand kommt aus einer **je TRV im Betrieb gelernten Kennlinie** (Abstand beim Sollwertwechsel → gemeldete Öffnung 10–15 min später, Median je 0,5-K-Klasse, persistent). Das Geräteprofil (YAML) liefert nur einen optionalen Startwert; ohne verlässliche Kennlinie bleibt die heutige Abbildung. Grund: die Kennlinie hängt an Danfoss-Einstellungen (`algorithm_scale_factor`, Lastausgleich), Ventilunterteil, Voreinstellung und Firmware — eine im Haus gemessene feste Kurve wäre für andere Nutzer unbemerkt falsch. Glättung skaliert den Max-Schritt mit der seit dem letzten Aufruf vergangenen Zeit.
 
 **Tech Stack:** Python 3.13, Home Assistant Custom Component, voluptuous, pytest.
 
@@ -20,22 +20,24 @@
 - **Kein `git add`/`git commit`.** Jede Task endet mit Change-Set-Auflistung (Dateien + Änderung + Teststatus); Nutzer stagt selbst. Commit nur auf Zuruf.
 - HA-Daten nur per MCP (`ha_get_history`, `ha_get_state`, `ha_eval_template`); Attribut-Verläufe mit `significant_changes_only=false`. Nie sqlite.
 - Alle 10 Räume gleichzeitig; kein Pilotraum, kein Einzelraum-Schalter.
-- Keine Rückwärtskompatibilität der Konfig nötig, aber Hardware offen: Kennlinie im Profil **optional**, ohne sie gilt die heutige Abbildung.
+- Keine Rückwärtskompatibilität der Konfig nötig, aber Hardware offen: Kennlinien-Startwert im Profil **optional**; gelernt wird nur bei TRVs mit Ventil-Entity; ohne verlässliche Kennlinie gilt die heutige Abbildung.
 - Nicht anfassen: Halte-/Mindestvorlauf-Formel (Auslegungsspreizung entschieden), Nachbarraum-Kopplung (Phase 4), Offset/Heizkurve. G im Haltevorlauf (ersetzt Phase-4-Punkt „Haltevorlauf mit Fremdwärme") nur nach Nutzerentscheidung in Task 7.
-- **Deploy:** Task 4 und Task 5 gemeinsam in einem Neustart, alle Räume. Task 1 darf vorher allein deployt werden.
+- **Deploy:** Neustart A = Task 2 (nur Beobachten/Lernen, ändert keine Regelung) so früh wie möglich, damit die Kennlinien bis Neustart B konvergiert sind. Neustart B = Task 4 + Task 5 gemeinsam, alle Räume, erst wenn Task 6 Step 0 die Kennlinien freigibt.
 - Nach Code-Änderung: `docs/mpc-guide.md`, `README.md`, `strings.json`, `translations/en.json`, `translations/de.json` mitziehen.
 - `.py`/YAML-Änderungen brauchen HA-Neustart; vor Neustart Nutzer fragen.
 - Code-Stil wie Umgebung: englische Kommentare, die das *Warum* mit Hausbeleg nennen, Konstanten mit Kommentar oben im Modul.
 
 ## Review Focus
 
-1. **TRV ohne `valve_position`-Entity** (Profil ohne Eintrag, z. B. künftiges Fremdmodell): Planer muss linear rechnen (wie Beobachter-Rückfall), kein Absturz, keine Division durch 0. → Test in Task 2.
-2. **Raum mit zwei TRVs, einer mit, einer ohne Kennlinie/Ventil-Entity**: jeder TRV bekommt seinen eigenen Abstand, Leistung mischt korrekt. → Test in Task 2.
-3. **Vorlauf unter Raumtemperatur / verfügbare Leistung 0**: Haltebedarf-Umkehrung liefert 100 % (heutiges Verhalten), Suche bleibt bei niedrigstem Bedarf. → Test in Task 2.
+1. **TRV ohne `valve_position`-Entity** (Profil ohne Eintrag, z. B. künftiges Fremdmodell): kein Lernen, Planer rechnet linear (wie Beobachter-Rückfall), kein Absturz, keine Division durch 0. → Tests in Task 2 und Task 5.
+2. **Raum mit zwei TRVs, einer mit, einer ohne verlässliche Kennlinie/Ventil-Entity**: jeder TRV lernt und bekommt seinen eigenen Abstand, Leistung mischt korrekt. → Tests in Task 2 und Task 5.
+3. **Vorlauf unter Raumtemperatur / verfügbare Leistung 0**: Haltebedarf-Umkehrung liefert 100 % (heutiges Verhalten), Suche bleibt bei niedrigstem Bedarf. → Test in Task 5.
 4. **Frostschutz erzwungen (`skip_demand_smoothing`)** nach Task 3: Bedarf springt sofort, zeitbasierte Glättung darf das nicht bremsen. → bestehender Test `test_skipped_smoothing_applies_the_demand_at_once` muss grün bleiben.
 5. **Erster Aufruf nach Start** (kein vorheriger Zeitstempel): Glättung erlaubt vollen Schritt, nicht 0. → Test in Task 3.
 6. **Kapazitäts-Replay ohne Fremdwärme** (Task 4): dauerhafte Gewinne landen nicht im Kapazitätsfaktor; das Replay vergleicht Temperatur*änderung*, ein konstanter Leistungsfehler bei UA-Faktor aus derselben Nacht ist klein. → Test in Task 4.
 7. **Alte Store-Datei / alter Service-Aufruf mit `disturbance_w`** nach Update: Start ohne Fehler, Service lehnt Schlüssel ab (voluptuous), keine Exception im Log. → Test in Task 4.
+8. **Kennlinie aus verfälschten Proben** (Adaption, WW-Ladung, Fenster offen, Heizkörper heizt nicht, Frostschutz erzwungen, Öffnung fehlt, Sollwert vor Ablauf der Wartezeit erneut geändert): Probe verworfen, Kennlinie unverändert. → Tests in Task 2.
+9. **Neustart mitten im Lernen**: gespeicherte Proben kommen zurück, eine vor dem Neustart offene Probe wird verworfen (kein Mischen von Abstand vor und Öffnung nach Neustart). → Test in Task 2.
 
 ---
 
@@ -65,38 +67,72 @@ Zuerst, damit bis zur Auswertung (Task 6) Nächte zusammenkommen.
 
 ---
 
-### Task 2: Kennlinie Abstand → Öffnung im Geräteprofil
+### Task 2: Ventilkennlinie je TRV im Betrieb lernen
+
+Ändert keine Regelung: lernt und zeigt nur. Wird früh deployt (Neustart A), damit die Kennlinien konvergiert sind, wenn Task 5 sie nutzt.
 
 **Files:**
-- Create: `custom_components/heating_controller/controller/mpc/models/valve.py`
-- Modify: `custom_components/heating_controller/profiles.py` (`PROFILE_SCHEMA`, `DeviceProfile`, `TrvBinding`, `_profile_from_config`, `resolve_trv`)
-- Modify: `custom_components/heating_controller/controller/mpc/types.py` (`TrvConfig`)
-- Modify: `custom_components/heating_controller/coordinator.py` (`_build_trv_configs`)
-- Modify: `custom_components/heating_controller/device_profiles/danfoss_ally_zigbee2mqtt.yaml`, `danfoss_ally_zha.yaml`
-- Test: `tests/controller/mpc/models/test_valve.py` (neu), `tests/test_profiles.py`
+- Create: `custom_components/heating_controller/controller/mpc/models/valve.py` (`ValveCharacteristic`)
+- Create: `custom_components/heating_controller/controller/mpc/valve_curve.py` (`ValveCurveLearner`, `ValveCurveStatus`)
+- Modify: `custom_components/heating_controller/controller/mpc/controller.py` (je TRV ein Lerner, `set_trv_target`, Beobachtung in `compute` nur bei `apply_side_effects`, `valve_characteristics()`, Export/Restore der Proben)
+- Modify: `custom_components/heating_controller/profiles.py` (`PROFILE_SCHEMA`, `DeviceProfile`, `TrvBinding`, `_profile_from_config`, `resolve_trv`), `controller/mpc/types.py` (`TrvConfig`), `coordinator.py` (`_build_trv_configs`, gemeldeten TRV-Sollwert `temperature` an Controller geben wie heute `current_temperature`, Store laden/speichern)
+- Modify: `store.py` (`ValveCurveStore` je Raum, Muster wie `LearningFactorsStore`)
+- Modify: `sensor.py` (Diagnose-Sensor `valve_curve` je Raum), `strings.json`, `translations/{en,de}.json`, `docs/mpc-guide.md` (neuer Abschnitt „Valve curve"), `README.md` (Geräteprofil: optionaler Startwert)
+- Modify: `device_profiles/danfoss_ally_zigbee2mqtt.yaml`, `danfoss_ally_zha.yaml` (Startwert)
+- Test: `tests/controller/mpc/models/test_valve.py`, `tests/controller/mpc/test_valve_curve.py` (neu), `tests/controller/mpc/test_controller.py`, `tests/test_profiles.py`, `tests/test_sensor.py`, `tests/test_coordinator.py`
 
 **Interfaces:**
 - Produces:
-  - `class ValveCharacteristic` (frozen dataclass) in `models/valve.py`, Feld `points: tuple[tuple[float, float], ...]` (Abstand °C, Öffnung %), aufsteigend in beiden Spalten.
-  - `ValveCharacteristic.opening_pct(offset_c: float) -> float` — stückweise linear, unter erstem Punkt 0, über letztem Punkt letzte Öffnung.
-  - `ValveCharacteristic.offset_c(opening_pct: float) -> float` — Umkehrung der stückweise linearen Kurve; Ziel ≤ erste Öffnung → erster Abstand, Ziel ≥ letzte Öffnung → letzter Abstand, flache Abschnitte → deren Anfang.
-  - `TrvConfig.valve_characteristic: ValveCharacteristic | None = None`
-  - `DeviceProfile.valve_characteristic` / `TrvBinding.valve_characteristic` gleichen Typs.
-  - YAML-Schlüssel auf Profilebene: `valve_characteristic: [[offset_c, opening_pct], ...]`, optional, ≥ 2 Punkte, Schema prüft Monotonie.
+  - `ValveCharacteristic` (frozen dataclass, `models/valve.py`): Feld `points: tuple[tuple[float, float], ...]` (Abstand °C, Öffnung %), aufsteigend in beiden Spalten. `opening_pct(offset_c) -> float` stückweise linear, unter erstem Punkt 0, über letztem Punkt letzte Öffnung. `offset_c(opening_pct) -> float` Umkehrung: Ziel ≤ erste Öffnung → erster Abstand, ≥ letzte Öffnung → letzter Abstand, flache Abschnitte → deren Anfang.
+  - `ValveCurveLearner(seed: ValveCharacteristic | None)` in `valve_curve.py`:
+    - `observe(now_ts: float, trv_target_c: float | None, trv_reading_c: float | None, opening_pct: float | None, sample_allowed: bool) -> None`
+    - `characteristic() -> ValveCharacteristic | None` — gelernt+Startwert gemischt; `None` bei Status `SCATTERED` oder ohne Startwert und ohne gelernte Klassen.
+    - `status -> ValveCurveStatus` (`SEED`, `LEARNING`, `LEARNED`, `SCATTERED`) und `export() -> dict` / `restore(data: dict) -> None` (nur fertige Proben, keine offene).
+    - `bins() -> list[tuple[float, float, int, float]]` (Median-Abstand, Median-Öffnung, Probenzahl, Spreizung p90−p10) für die Diagnose.
+  - `TrvConfig.valve_characteristic_seed: ValveCharacteristic | None = None`; `DeviceProfile`/`TrvBinding` gleichen Feldnamens; YAML-Schlüssel `valve_characteristic_seed: [[offset_c, opening_pct], ...]`, optional, ≥ 2 Punkte, Schema prüft Monotonie.
+  - `RoomMpcController.set_trv_target(index: int, value: float | None)`, `valve_characteristics() -> list[ValveCharacteristic | None]` (je TRV; TRV ohne Ventil-Entity → `None`, kein Lerner), `valve_curve_learners` (für Sensor/Store).
+  - Sensor `sensor.<raum>_valve_curve` (Diagnose): Zustand = Zahl TRVs mit Status `LEARNED`; Attribute je TRV-Name: `status`, `bins` (Liste `[offset_c, opening_pct, samples, spread_pct]`, gerundet 2/1/0/1).
 
-- [ ] **Step 1: Kennlinie messen (Daten, kein Code).** Nur Daten **ab 02.11.2026 ~12:30** verwenden: seitdem `algorithm_scale_factor` 3 und Lastausgleich aus auf allen TRVs, ältere Daten haben anderes TRV-Verhalten. Mindestens 2 Heiznächte abwarten. Per MCP für alle 13 Danfoss-TRVs: Verlauf `climate.heizung_*` (Attribute `temperature`, `current_temperature`, `significant_changes_only=false`) und `sensor.heizung_*_pi_heating_demand`. Je Sollwert-Schreibvorgang: Abstand = Soll − `current_temperature` zum Schreibzeitpunkt; Öffnung = `pi_heating_demand` 10–15 min später, nur wenn bis dahin kein neuer Sollwert. Abstände auf 0,5 K klassieren, Median je Klasse. Nächte mit Adaption/Neustart auslassen. Ergebnis als Tabelle dem Nutzer zeigen. Startwerte aus Diagnose-Notizen zum Gegenprüfen: 0,6 K → 40–55 %, 1,1–1,5 K → ~55 %, ≥ 2,4 K → ~90 %. **Stopp, wenn die Streuung je Klasse > 30 Prozentpunkte** (Danfoss-PI integriert, dann taugt eine statische Kennlinie nicht) — Befund dem Nutzer melden, Task 2/5 neu planen (Alternative: innerer Regelkreis auf gemessene Öffnung).
-- [ ] **Step 2: Failing tests** `test_valve.py`:
+**Lernregeln (Konstanten oben in `valve_curve.py` mit Kommentar):**
+- Probe beginnt, wenn sich der gemeldete TRV-Sollwert ändert: Abstand = neuer Sollwert − TRV-Ablesung in diesem Moment.
+- Probe endet beim ersten `observe` mit Alter 600–900 s (`VALVE_CURVE_SETTLE_S = 600`, `VALVE_CURVE_SAMPLE_LATEST_S = 900`): Öffnung = gemeldete Öffnung jetzt. Kommt bis 900 s kein Aufruf, neuer Sollwert vorher, oder `sample_allowed` war seit Beginn einmal `False`, oder Öffnung `None` → Probe verworfen. `compute()` läuft mindestens alle 5 min, also liegt immer ein Aufruf im Fenster.
+- `sample_allowed` (vom Controller) = nicht TRV-Adaption, keine WW-Ladung, Fenster zu, Heizkörper-Check meldet nichts, kein erzwungener Frostschutz, Ventil-Entity gemeldet.
+- Klassen 0,5 K breit (`floor(offset / 0.5)`), je Klasse Ringpuffer der letzten 20 Proben (`VALVE_CURVE_BIN_SAMPLES = 20`). Klasse gilt ab 3 Proben (`VALVE_CURVE_MIN_SAMPLES = 3`), Punkt = (Median Abstand, Median Öffnung).
+- Kennlinie = gültige gelernte Punkte; Startwert-Punkte nur außerhalb der gelernten Spanne (Abstand mehr als 0,25 K unter dem kleinsten bzw. über dem größten gelernten Punkt); dann Öffnung als laufendes Maximum (monoton). Ohne Startwert und größter gelernter Abstand < 2,5 K → Ankerpunkt (3,0 K, 100 %) anhängen (größter relativer Abstand = voll auf).
+- Status: `SEED` ohne gültige Klasse; `LEARNING` 1–2 gültige Klassen; `LEARNED` ≥ 3 gültige Klassen darunter eine ≥ 2,0 K; `SCATTERED` sobald eine Klasse mit ≥ 5 Proben p90−p10 > 30 Prozentpunkte hat (`VALVE_CURVE_MAX_SPREAD_PCT = 30`; Danfoss-PI integriert dann zu stark für eine statische Kennlinie) → `characteristic()` gibt `None`, Task 5 rechnet für diesen TRV mit heutiger Abbildung.
+- Danfoss-Startwert in beiden YAMLs: `[[0.1, 5], [0.6, 45], [1.5, 55], [2.5, 90], [3.0, 100]]`, Kommentar „Diagnose 10/2026 (scale factor 1), nur Startwert, je TRV wird gelernt".
+- Store: Speichern nach jeder fertigen Probe höchstens alle 10 min gebündelt (Plattenschonung wie `OBSERVER_PERSIST_MIN_CHANGE_W`).
+
+- [ ] **Step 1: Failing tests** `test_valve.py`:
   - `test_opening_interpolates_between_points`: Punkte `((0.1, 0), (0.6, 45), (1.5, 60), (2.5, 90), (3.0, 100))` → `opening_pct(1.05) == pytest.approx(52.5)`.
   - `test_opening_below_first_point_is_zero`, `test_opening_above_last_point_is_last_opening`.
   - `test_offset_is_the_smallest_reaching_the_opening`: `offset_c(52.5) == pytest.approx(1.05)`; `offset_c(0) == 0.1`; `offset_c(120) == 3.0`.
-  - `test_offset_round_trips_the_opening` (parametrisiert über 0…100 in 10er-Schritten: `opening_pct(offset_c(o)) >= o - 1e-9` bis Maximum).
-  `test_profiles.py`:
-  - `test_profile_reads_the_valve_characteristic` (beide mitgelieferten Danfoss-Profile haben Kennlinie, Punkte als Tupel).
-  - `test_profile_without_characteristic_is_valid` (`valve_characteristic is None`).
-  - `test_profile_rejects_a_falling_characteristic` (`vol.Invalid`).
-- [ ] **Step 3:** FAIL prüfen.
-- [ ] **Step 4: Implementieren.** `ValveCharacteristic` mit `__post_init__`-freier Validierung im Schema (`vol.All([[vol.Coerce(float)]], vol.Length(min=2), _ascending)`). Durchreichen Profil → `TrvBinding` → `TrvConfig` in `_build_trv_configs`. Gemessene Punkte aus Step 1 in beide Danfoss-YAMLs mit Kommentar (Datum, Datengrundlage).
-- [ ] **Step 5:** Ganze Suite PASS. Change-Set zeigen.
+  - `test_offset_round_trips_the_opening` (parametrisiert 0…100 in 10er-Schritten: `opening_pct(offset_c(o)) >= o - 1e-9` bis Maximum).
+  `test_valve_curve.py` (Helfer: Probe = Sollwertwechsel bei t, `observe` bei t+700 mit Öffnung):
+  - `test_sample_is_taken_after_the_settle_time`: Abstand 0,7, Öffnung 50 bei t+700 → nach 3 solchen Proben Klasse `[0.5, 1.0)` = (0,7, 50, 3).
+  - `test_sample_before_settle_time_is_not_taken`: `observe` nur bei t+300 → keine Probe.
+  - `test_sample_after_the_latest_time_is_dropped`: erster `observe` bei t+1000 → keine Probe.
+  - `test_new_target_before_settle_drops_the_sample`.
+  - `test_disallowed_moment_drops_the_sample` (Review Focus 8): `sample_allowed=False` bei t+300, sonst gültig → keine Probe.
+  - `test_missing_opening_drops_the_sample`.
+  - `test_learned_points_replace_the_seed_in_their_span`: Startwert Danfoss, gelernt 3 Klassen bei 0,7/1,2/2,2 K mit 30/50/85 % → `characteristic().points` enthält (0,1, 5) und (3,0, 100) aus Startwert, dazwischen nur gelernte Punkte; Status `LEARNED`.
+  - `test_curve_is_monotone`: gelernte Mediane 0,7 → 50, 1,2 → 45 → Öffnung bei 1,2 = 50.
+  - `test_without_seed_the_full_open_anchor_is_added`.
+  - `test_scattered_bin_disables_the_curve`: 5 Proben in einer Klasse mit 10/20/50/60/80 % → Status `SCATTERED`, `characteristic() is None`.
+  - `test_export_restore_keeps_finished_samples_only` (Review Focus 9): offene Probe vor Export → nach `restore` nicht vorhanden, fertige Proben gleich.
+  - `test_ring_buffer_keeps_the_last_samples`: 25 Proben in einer Klasse → 20, älteste raus.
+  `test_controller.py`:
+  - `test_trv_without_valve_entity_has_no_learner` (Review Focus 1): `valve_characteristics() == [None]`.
+  - `test_two_trvs_learn_separately` (Review Focus 2).
+  - `test_preview_compute_does_not_feed_the_learner`: `apply_side_effects=False` → keine Probe.
+  - `test_learning_does_not_change_the_demand`: gleicher Input mit gelernter und ohne Kennlinie → identisches `demand_pct` und identische TRV-Ziele (Task 2 ändert keine Regelung).
+  `test_profiles.py`: `test_profile_reads_the_valve_characteristic_seed` (beide Danfoss-Profile, Punkte als Tupel), `test_profile_without_seed_is_valid`, `test_profile_rejects_a_falling_seed` (`vol.Invalid`).
+  `test_sensor.py`: `valve_curve`-Sensor zeigt Status und gerundete Klassen je TRV.
+  `test_coordinator.py`: Proben überleben Neustart (Store-Roundtrip), gemeldeter TRV-Sollwert erreicht `set_trv_target`.
+- [ ] **Step 2:** FAIL prüfen.
+- [ ] **Step 3: Implementieren** nach den Lernregeln oben. `ValveCharacteristic` ohne eigene Validierung; Schema prüft (`vol.All([[vol.Coerce(float)]], vol.Length(min=2), _ascending)`). TRV-Sollwert in `coordinator` aus Attribut `temperature` des Climate-Entities, bei Zustandswechsel und Poll, wie `current_temperature` heute.
+- [ ] **Step 4:** Ganze Suite PASS.
+- [ ] **Step 5:** Doku (`mpc-guide.md` „Valve curve": Zweck, Regeln, Status, Sensor; README Profilfeld), Übersetzungen (Sensorname „Ventilkennlinie", Status-Werte). `.claude/skills/heating-controller/references/diagnose.md`: Sensor `valve_curve` und Status-Bedeutung. Change-Set zeigen. Neustart A nach Nutzer-Okay.
 
 ---
 
@@ -168,11 +204,11 @@ Beobachter behält Temperatur-Zustand, Heizkörper-Verzögerung (radiator lag) u
 - Test: `tests/controller/mpc/models/test_emitter.py`, `tests/controller/mpc/test_controller.py`
 
 **Interfaces:**
-- Consumes: `TrvConfig.valve_characteristic`, `ValveCharacteristic.offset_c` (Task 2); zeitbasierte Glättung (Task 3); Controller ohne Fremdwärme (Task 4).
+- Consumes: `RoomMpcController.valve_characteristics()`, `ValveCharacteristic.offset_c` (Task 2) — zur Laufzeit veränderlich, bei jedem `compute` neu holen; zeitbasierte Glättung (Task 3); Controller ohne Fremdwärme (Task 4).
 - Produces:
   - `HeatEmitterModel.planned_heating_power_w(room_temperature_c: float, flow_temperature_c: float | None, opening_pct: float) -> float` — ruft `calculate_measured_heating_power_w(room, flow, [opening_pct if trv.valve_position_configured else None for trv], opening_pct)` auf. Damit rechnen Planer, Beobachter und Lerner dieselbe Kurve; TRV ohne Ventil-Entity linear.
   - `HeatEmitterModel.opening_for_power_pct(room_temperature_c: float, flow_temperature_c: float | None, power_w: float) -> float` — Bisektion 0…100 % auf `planned_heating_power_w`, Genauigkeit 0,5 %; `power_w <= 0` → 0; voll offen reicht nicht oder verfügbare Leistung 0 → 100.
-  - `calculate_target_temperatures(...)` Signatur unverändert; im Modus RELATIVE mit Kennlinie: jeder TRV bekommt dieselbe Ziel-Öffnung (keine `distribution_weight`), Abstand = `valve_characteristic.offset_c(demand_pct)`.
+  - `calculate_target_temperatures(..., characteristics: list[ValveCharacteristic | None])` — neuer Parameter, je TRV. Modus RELATIVE: TRV mit Kennlinie bekommt die Ziel-Öffnung direkt (keine `distribution_weight`), Abstand = `characteristic.offset_c(demand_pct)`; TRV mit `None` (keine Ventil-Entity, `SCATTERED`, ohne Startwert und ungelernt) bekommt die heutige Abbildung.
 
 - [ ] **Step 1: Failing tests Emitter:**
   - `test_planned_power_follows_the_valve_curve`: ein Panel-TRV mit `valve_position_configured=True`, Vorlauf 40, Raum 21 → `planned_heating_power_w(..., 10) == pytest.approx(0.44 * available, rel=0.05)` (Zahl aus Docstring `power_fraction_at_opening`), `…(50) ≈ 0.87 * available`.
@@ -180,9 +216,11 @@ Beobachter behält Temperatur-Zustand, Heizkörper-Verzögerung (radiator lag) u
   - `test_planned_power_mixes_trvs_with_and_without_valve_entity` (Review Focus 2).
   - `test_opening_for_power_inverts_the_planned_power`: für Öffnungen 10/30/70 → `opening_for_power_pct(planned(o)) == pytest.approx(o, abs=0.5)`.
   - `test_opening_for_power_is_full_when_the_flow_is_too_cold` (Review Focus 3): Vorlauf 20, Raum 21 → 100.
-  - `test_relative_target_uses_the_valve_characteristic`: Kennlinie wie Task 2, Ablesung 20,3, Step 0,5, Bedarf 52,5 % → Abstand 1,05 → 21,35 → Ziel `21.5` (Rundungsregel unten); Bedarf 10 % → Abstand 0,1 + 0,5·(10/45)… laut Kennlinie ≈ 0,21 → 20,51 → Rasterpunkt 20,5, aber Mindestregel `ceil(20,4/0,5)·0,5 = 20,5` → Ziel `20.5`.
+  - `test_relative_target_uses_the_valve_characteristic`: Kennlinie `((0.1, 0), (0.6, 45), (1.5, 60), (2.5, 90), (3.0, 100))`, Ablesung 20,3, Step 0,5, Bedarf 52,5 % → Abstand 1,05 → 21,35 → Ziel `21.5` (Rundungsregel unten); Bedarf 10 % → Abstand 0,1 + 0,5·(10/45)… laut Kennlinie ≈ 0,21 → 20,51 → Rasterpunkt 20,5, aber Mindestregel `ceil(20,4/0,5)·0,5 = 20,5` → Ziel `20.5`.
   - `test_two_trvs_get_the_same_opening_with_a_characteristic`: zwei TRVs, Bedarf 100 → beide Abstand 3,0 (statt heute ~1,8).
-  - `test_relative_target_without_characteristic_is_unchanged`: bestehende Abbildung, bestehende Tests bleiben grün.
+  - `test_relative_target_without_characteristic_is_unchanged`: `characteristics=[None]` → bestehende Abbildung, bestehende Tests bleiben grün.
+  - `test_mixed_trvs_use_their_own_mapping` (Review Focus 2): TRV 1 mit Kennlinie, TRV 2 `None` → TRV 1 Abstand aus Kennlinie, TRV 2 heutige Abbildung mit seinem Gewicht.
+  - Controller: `test_scattered_trv_falls_back_to_the_linear_mapping`: Lerner im Status `SCATTERED` → Ziel wie heute.
 - [ ] **Step 2:** FAIL prüfen.
 - [ ] **Step 3: Implementieren Emitter.** Rundung mit Kennlinie: Ziel = größerer Wert aus `ceil((local + RELATIVE_MIN_OFFSET_C) / step) * step` und `round((local + offset) / step) * step` — nächster Rasterpunkt statt immer aufrunden (Aufrunden verschob kleine Abstände um bis zu 0,5 K, ein Danfoss öffnet dabei schon ~45 %). Regel „aktuellen Sollwert behalten, solange über Ablesung und ≤ 1 Schritt entfernt" bleibt. Ein/Aus-Schwellen `OPEN_ACTIVE_DEMAND`/`MIN_ACTIVE_DEMAND` bleiben, gelten jetzt in Öffnung.
 - [ ] **Step 4: Failing tests Controller:**
@@ -192,7 +230,7 @@ Beobachter behält Temperatur-Zustand, Heizkörper-Verzögerung (radiator lag) u
 - [ ] **Step 5:** FAIL prüfen.
 - [ ] **Step 6: Implementieren Controller.** In `_simulate_room_temperature_c` `target_power_w = planned_heating_power_w(simulated_room, flow, demand_pct)`. `_hold_demand_pct` = `opening_for_power_pct(target, flow, max(0, Verlust))`. `requested_heating_power_w` = `planned_heating_power_w(room, flow, stabilized_demand_pct)`. Erholungsvorlauf (Bedarf 100) bleibt rechnerisch gleich. Beobachter und Lerner nicht ändern.
 - [ ] **Step 7:** Ganze Suite. Bestehende Tests mit festen Bedarfszahlen prüfen: anpassen nur, wo die Zahl aus der linearen Annahme folgte; im Testkommentar sagen warum.
-- [ ] **Step 8:** Doku + Übersetzungen (Bedarf = Ziel-Ventilöffnung, Kennlinie im Profil, README-Abschnitt Geräteprofil: neues optionales Feld). Change-Set zeigen. Neustart (gemeinsam mit Task 4) erst nach Nutzer-Okay.
+- [ ] **Step 8:** Doku + Übersetzungen (Bedarf = Ziel-Ventilöffnung, Abstand aus gelernter Kennlinie je TRV, Rückfall). Change-Set zeigen. Neustart B (gemeinsam mit Task 4) erst nach Task 6 Step 0 und Nutzer-Okay.
 
 ---
 
@@ -200,6 +238,7 @@ Beobachter behält Temperatur-Zustand, Heizkörper-Verzögerung (radiator lag) u
 
 Keine Code-Änderung. Ergebnis an Nutzer, Entscheidungen bei ihm.
 
+- [ ] **Step 0: Kennlinien vor Neustart B prüfen** (frühestens nach 2 Heiznächten seit Neustart A): je TRV `sensor.<raum>_valve_curve` lesen. Freigabe, wenn ≥ 10 von 13 Danfoss-TRVs `LEARNED` und kein `SCATTERED`; Tabelle (TRV, Status, Klassen) an Nutzer. `SCATTERED` bei mehreren TRVs → Nutzer melden, Alternative innerer Regelkreis auf gemessene Öffnung erwägen, Neustart B zurückstellen. Nicht freigegebene TRVs laufen nach Neustart B mit Rückfall (heutige Abbildung) — kein Blocker für einzelne.
 - [ ] **Step 1: Wirkung Befund 1 (erste 2 Nächte nach Neustart),** alle 10 Räume: Stundenmittel `sensor.<raum>_heizleistungsanforderung` und Raumtemperatur; Zahl der Ventil-Zu/Auf-Wechsel pro Nacht je TRV (`pi_heating_demand` < 5 ↔ > 30) vorher (Nächte nach 02.11. mit neuen TRV-Einstellungen, aber altem Planer — Nacht 01./02.11. hatte noch Scale-Factor 1 und Lastausgleich, taugt nur als zweite Referenz) vs. nachher; `trv_setpoint_writes`-Zuwachs pro Nacht. Erwartung: weniger Wechsel, Raum ruhiger im Band, Schreibzahl nicht höher. Nächte mit Neustart, Daikin-Lücke, WW-Ladung, Adaption kennzeichnen.
   **Befund 6 (ohne Fremdwärme):** je Raum Stunden mit Raum dauerhaft unter Band (Soll − 0,1 K) bei Ventil < 95 % zählen — Zeichen für bleibenden Fehler ohne Integrator. Besonders Flur EG (hatte 126 W Fremdwärme), Dani, Katharina. UA-Faktoren der ersten 2 Nächte gegen vorher: Flur EG soll steigen bzw. Netto-Verlust aufnehmen. Bleibender Fehler > 0,1 K über ≥ 2 Nächte in einem Raum → Nutzer melden, nicht selbst Integrator nachrüsten.
 - [ ] **Step 2: Befund 2/3 (frühestens nach 7 Lernnächten seit Task 1),** je Raum Verlauf `sensor.<raum>_ua_lernstatus` mit `significant_changes_only=false`: je Nacht `last_target_factor`, `last_mean_outdoor_c`, `last_mean_room_c`, `last_mean_flow_c`, `last_mean_heating_w`, Outcome. Nur `learned`/`learned_at_limit`.
@@ -223,3 +262,5 @@ Startet nur, wenn Task 6 Step 3 „wetterabhängig bestätigt" liefert **und** N
 **Verwendung:** Planer und Haltebedarf mit `UA·ΔT − G`. Halte-/Mindestvorlauf: G nur nach Nutzerentscheidung aus Task 6 Step 4 (ersetzt Phase-4-Punkt).
 
 **Sichtbar:** Attribut `learned_gain_w` + `gain_fit_points` am UA-Lernstatus-Sensor; `recalibrate` bekommt optional `gain_w`.
+
+**Ausblick nach Task 7 (nur Möglichkeit, kein Auftrag; Nutzer 02.11.): Tageslernen.** G deckt nur konstante Gewinne; Sonne und tageszeitabhängige Nutzung (Schlafzimmer nachts belegt, Küche zu Essenszeiten) nicht. Reihenfolge, falls gewünscht: (1) erst prüfen, ob bedeckte Tage (Einstrahlung/PV-Leistung sehr gering) mit Nacht-UA und -G erklärt werden (Residuen); nur dann (2) bedeckte Tagesstrecken zulassen, ggf. mit getrenntem G Tag/Nacht; (3) Sonnenterm `S · Einstrahlung` je Raum (PV als Proxy) eher fürs Frühjahr — ungenau bei Rollläden und Verschattung Westfassade durch Haus 13.

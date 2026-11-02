@@ -3,7 +3,11 @@ from __future__ import annotations
 import logging
 import time
 
-from ...const import MAX_TRV_COUNT, SENSOR_POLL_INTERVAL_MINUTES, RoomTemperatureStrategy
+from ...const import (
+    MAX_TRV_COUNT,
+    SENSOR_POLL_INTERVAL_MINUTES,
+    RoomTemperatureStrategy,
+)
 from .results import (
     RoomMpcError,
     RoomMpcErrorCode,

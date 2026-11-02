@@ -54,7 +54,12 @@ from .profiles import (
     find_profile,
     resolve_trv,
 )
-from .store import FlowGateStateStore, LearningFactorsStore, ObserverStateStore
+from .store import (
+    FlowGateStateStore,
+    LearningFactorsStore,
+    ObserverStateStore,
+    ValveCurveStore,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -201,6 +206,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         coordinator: HeatingRoomCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
         coordinator.async_unload()
+        await coordinator.async_flush_valve_curves()
     return unload_ok
 
 
@@ -209,6 +215,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await LearningFactorsStore(hass, room_name, entry.entry_id).async_remove()
     await FlowGateStateStore(hass, room_name, entry.entry_id).async_remove()
     await ObserverStateStore(hass, room_name, entry.entry_id).async_remove()
+    await ValveCurveStore(hass, room_name, entry.entry_id).async_remove()
 
 
 def _referenced_coordinators(

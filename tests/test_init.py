@@ -1,10 +1,5 @@
 import pytest
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import Context, HomeAssistant, ServiceCall
-from homeassistant.exceptions import Unauthorized
-from pytest_homeassistant_custom_component.common import MockConfigEntry, MockUser
-
 from heating_controller.const import (
     CONF_ROOM_HEAT_LOAD,
     DEFAULT_FLOW_THRESHOLD_C,
@@ -13,7 +8,10 @@ from heating_controller.const import (
     HeatMode,
 )
 from heating_controller.controller.mpc.types import LearningFactors
-
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.core import Context, HomeAssistant, ServiceCall
+from homeassistant.exceptions import Unauthorized
+from pytest_homeassistant_custom_component.common import MockConfigEntry, MockUser
 from test_coordinator import (
     ENTRY_DATA,
     TRV_EMITTER,
@@ -473,3 +471,66 @@ async def test_options_flow_loads_a_room_whose_setup_failed(
     )
 
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_unload_flushes_the_valve_curve_and_removal_leaves_no_file(
+    hass: HomeAssistant, freezer, hass_storage
+) -> None:
+    from test_coordinator import VALVE_ENTITY, _poll
+
+    device_id = register_trv_device(
+        hass,
+        properties=(
+            ("climate", "climate", ""),
+            ("sensor", "pi_heating_demand", "_pi_heating_demand"),
+            ("switch", "switch_heat_available", "_trv_active"),
+        ),
+    )
+    _seed_entities(hass)
+    hass.states.async_set(
+        "climate.heizung_wohnzimmer",
+        "heat",
+        {"current_temperature": 18.0, "temperature": 18.0},
+    )
+    hass.states.async_set(VALVE_ENTITY, "0")
+
+    async def handler(call: ServiceCall) -> None:
+        pass
+
+    hass.services.async_register("climate", "set_temperature", handler)
+    hass.services.async_register("switch", "turn_on", handler)
+    hass.services.async_register("switch", "turn_off", handler)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={**ENTRY_DATA, "trvs": [{"device_id": device_id, **TRV_EMITTER}]},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # One sample finishes; its delayed write is still pending.
+    hass.states.async_set(
+        "climate.heizung_wohnzimmer",
+        "heat",
+        {"current_temperature": 18.0, "temperature": 20.0},
+    )
+    hass.states.async_set(VALVE_ENTITY, "60")
+    await hass.async_block_till_done()
+    await _poll(hass, freezer, 5)
+    await _poll(hass, freezer, 5.5)
+    key = f"{DOMAIN}_wohnzimmer_{entry.entry_id}_valve_curve"
+    assert key not in hass_storage
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass_storage[key]["data"]["trvs"]["climate.heizung_wohnzimmer"][
+        "samples"
+    ] == [[2.0, 60.0]]
+
+    assert await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    assert key not in hass_storage
+
+    # No delayed write is left to bring the file back.
+    await _poll(hass, freezer, 11)
+    assert key not in hass_storage

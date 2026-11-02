@@ -1,7 +1,6 @@
 import time
 
 import pytest
-
 from heating_controller.const import (
     CapacityOutcome,
     Construction,
@@ -12,8 +11,8 @@ from heating_controller.const import (
 from heating_controller.controller.mpc.learner import (
     UA_BALANCE_MAX_DRIFT_C,
     UA_BALANCE_MAX_INTERRUPTION_S,
-    UA_BALANCE_MIN_TARGET_FACTOR,
     UA_BALANCE_MAX_WINDOW_S,
+    UA_BALANCE_MIN_TARGET_FACTOR,
     UA_BALANCE_MIN_WINDOW_S,
     UA_BALANCE_WEIGHT,
     LearnerPrediction,
@@ -822,7 +821,7 @@ def test_ua_suppression_starts_the_next_stretch_after_it():
 
 
 def test_short_heating_interruption_is_bridged_as_no_heating():
-    learner, loss_model, _ = make_learner()
+    learner, _, _ = make_learner()
     learner.enable()
     off_ts = NIGHT_START_TS + 2 * 3600 + 5
     # A missed heat-source poll: off for three controller cycles and a second.
@@ -1544,7 +1543,7 @@ def test_capacity_skips_windows_without_a_valve_position():
 
 
 def test_missing_valve_position_balances_the_stretch_before_it():
-    learner, loss_model, _ = make_learner()
+    learner, _, _ = make_learner()
     learner.enable()
 
     end_ts = _feed_night(learner, hours=5)

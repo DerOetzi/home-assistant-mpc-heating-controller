@@ -322,6 +322,9 @@
           "radiator_not_heating": "Radiator not heating",
           "outdoor_temperature_missing": "Outdoor temperature missing"
         }
+      },
+      "valve_curve": {
+        "name": "Valve curve"
       }
     }
   },

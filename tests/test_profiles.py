@@ -1,9 +1,5 @@
 import pytest
-from homeassistant.core import HomeAssistant, State
-from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import entity_registry as er
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
+import voluptuous as vol
 from heating_controller.profiles import (
     AdaptationBusy,
     TrvResolveError,
@@ -12,7 +8,10 @@ from heating_controller.profiles import (
     load_profiles,
     resolve_trv,
 )
-
+from homeassistant.core import HomeAssistant, State
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 from test_coordinator import TRV_EMITTER, register_trv_device
 
 ALL_Z2M_PROPERTIES = (
@@ -167,3 +166,58 @@ def test_adaptation_busy_by_state_or_attribute() -> None:
     assert not by_attribute.matches(
         State("sensor.a", "something", {"In_progress": False})
     )
+
+
+DANFOSS_SEED_POINTS = ((0.1, 5.0), (0.6, 45.0), (1.5, 55.0), (2.5, 90.0), (3.0, 100.0))
+
+_MINIMAL_PROFILE = """\
+name: Test TRV
+match:
+  integration: mqtt
+  manufacturer: Test
+  models: [T1]
+target_temperature: {min: 5, max: 30, step: 0.5}
+entities:
+  climate: {domain: climate}
+"""
+
+
+@pytest.mark.parametrize("key", ["danfoss_ally_zha", "danfoss_ally_zigbee2mqtt"])
+def test_profile_reads_the_valve_characteristic_seed(key: str) -> None:
+    profiles = {profile.key: profile for profile in load_profiles()}
+
+    assert profiles[key].valve_characteristic_seed.points == DANFOSS_SEED_POINTS
+
+
+def test_profile_without_seed_is_valid(tmp_path) -> None:
+    (tmp_path / "test.yaml").write_text(_MINIMAL_PROFILE)
+
+    [profile] = load_profiles(tmp_path)
+
+    assert profile.valve_characteristic_seed is None
+
+
+@pytest.mark.parametrize(
+    "seed",
+    [
+        "[[0.5, 50], [1.0, 40]]",
+        "[[1.0, 10], [0.5, 50]]",
+        "[[0.5, 10]]",
+        "[[0.5, 10, 3], [1.0, 50]]",
+    ],
+)
+def test_profile_rejects_a_falling_seed(tmp_path, seed: str) -> None:
+    (tmp_path / "test.yaml").write_text(
+        _MINIMAL_PROFILE + f"valve_characteristic_seed: {seed}\n"
+    )
+
+    with pytest.raises(vol.Invalid):
+        load_profiles(tmp_path)
+
+
+async def test_the_seed_reaches_the_trv_binding(hass: HomeAssistant) -> None:
+    device_id = register_trv_device(hass, properties=ALL_Z2M_PROPERTIES)
+
+    trv = resolve_trv(hass, await async_get_profiles(hass), {"device_id": device_id})
+
+    assert trv.valve_characteristic_seed.points == DANFOSS_SEED_POINTS

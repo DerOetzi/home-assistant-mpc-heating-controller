@@ -322,6 +322,9 @@
           "radiator_not_heating": "Heizkörper heizt nicht",
           "outdoor_temperature_missing": "Außentemperatur fehlt"
         }
+      },
+      "valve_curve": {
+        "name": "Ventilkennlinie"
       }
     }
   },

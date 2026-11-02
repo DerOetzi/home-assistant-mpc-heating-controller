@@ -1,10 +1,4 @@
 import pytest
-from homeassistant import config_entries
-from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.data_entry_flow import FlowResultType, InvalidData
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
 from heating_controller.const import (
     CONF_COMFORT_CONDITION_ENTITIES,
     CONF_CONSTRUCTION,
@@ -24,7 +18,11 @@ from heating_controller.const import (
     DEFAULT_STATIONARY_RANGE_C,
     DOMAIN,
 )
-
+from homeassistant import config_entries
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.data_entry_flow import FlowResultType, InvalidData
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 from test_coordinator import (
     ENTRY_DATA,
     TRV_EMITTER,

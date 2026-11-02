@@ -11,6 +11,7 @@ from ...const import (
     PanelRadiatorType,
     UaBalanceOutcome,
 )
+from .models.valve import ValveCharacteristic
 
 
 @dataclass
@@ -29,6 +30,8 @@ class TrvConfig:
     nominal_power_w: float | None = None
     # The TRV reports its valve opening (0-100 %) through an entity.
     valve_position_configured: bool = False
+    # Starting point of the learned valve curve, from the device profile.
+    valve_characteristic_seed: ValveCharacteristic | None = None
 
 
 @dataclass

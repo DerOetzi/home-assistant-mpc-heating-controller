@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from itertools import pairwise
 
 from ...const import (
     DEFAULT_STATIONARY_RANGE_C,
@@ -261,6 +262,10 @@ class RoomMpcModelLearner:
         if paused and self._enabled:
             self._learning_state = self._create_learning_state(LearningStatus.PAUSED)
 
+    @property
+    def window_open(self) -> bool:
+        return self._window_open
+
     def set_window_open(self, window_open: bool, now_ts: float) -> None:
         # Blocks both factors for as long as the window is open, however long
         # that is: the stretch before it is still balanced, the next one starts
@@ -505,7 +510,7 @@ class RoomMpcModelLearner:
     ) -> list[float]:
         room_temperature_c = history[0].room_temperature_c
         simulated = [room_temperature_c]
-        for previous, current in zip(history, history[1:]):
+        for previous, current in pairwise(history):
             net_heating_power_w = (
                 _interval_radiator_power_w(previous, current)
                 + previous.disturbance_w
@@ -676,7 +681,7 @@ class RoomMpcModelLearner:
         room_ks = 0.0
         flow_ks = 0.0
         flow_s = 0.0
-        for previous, current in zip(window, window[1:]):
+        for previous, current in pairwise(window):
             duration_s = current.timestamp - previous.timestamp
             if duration_s > UA_BALANCE_MAX_GAP_S:
                 return UaBalanceOutcome.GAP

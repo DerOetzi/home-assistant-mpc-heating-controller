@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util.yaml import load_yaml
 
 from .const import CONF_TRV_DEVICE_ID, DOMAIN
+from .controller.mpc.models.valve import ValveCharacteristic
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,6 +55,30 @@ _BUSY_SCHEMA = vol.All(
         msg="busy needs states or attributes",
     ),
 )
+
+
+def _ascending(points: list[list[float]]) -> list[list[float]]:
+    """Offsets strictly rising, openings never falling."""
+    for (offset_low, opening_low), (offset_high, opening_high) in pairwise(points):
+        if offset_high <= offset_low or opening_high < opening_low:
+            raise vol.Invalid(
+                "valve_characteristic_seed must rise in offset and opening"
+            )
+    return points
+
+
+def _to_characteristic(points: list[list[float]]) -> ValveCharacteristic:
+    return ValveCharacteristic(
+        points=tuple((offset_c, opening_pct) for offset_c, opening_pct in points)
+    )
+
+
+_VALVE_CHARACTERISTIC_SCHEMA = vol.All(
+    [vol.All([vol.Coerce(float)], vol.Length(min=2, max=2))],
+    vol.Length(min=2),
+    _ascending,
+    _to_characteristic,
+)
 PROFILE_SCHEMA = vol.Schema(
     {
         vol.Required("name"): str,
@@ -84,6 +110,9 @@ PROFILE_SCHEMA = vol.Schema(
                 {vol.Required("busy"): _BUSY_SCHEMA}
             ),
         },
+        # [[offset °C, opening %], ...]: where the valve curve each TRV learns
+        # starts from. Optional; without it a TRV learns from scratch.
+        vol.Optional("valve_characteristic_seed"): _VALVE_CHARACTERISTIC_SCHEMA,
     }
 )
 
@@ -139,6 +168,7 @@ class DeviceProfile:
     target_temperature_step_c: float
     entities: Mapping[str, EntityMatch]
     adaptation_busy: AdaptationBusy | None = None
+    valve_characteristic_seed: ValveCharacteristic | None = None
 
     def matches_device(self, device: dr.DeviceEntry, integrations: set[str]) -> bool:
         return (
@@ -162,6 +192,7 @@ class TrvBinding:
     heat_available_entity: str | None = None
     adaptation_status_entity: str | None = None
     adaptation_busy: AdaptationBusy | None = None
+    valve_characteristic_seed: ValveCharacteristic | None = None
 
     @property
     def entity_ids(self) -> list[str]:
@@ -205,6 +236,7 @@ def _profile_from_config(key: str, config: dict[str, Any]) -> DeviceProfile:
             if adaptation
             else None
         ),
+        valve_characteristic_seed=config.get("valve_characteristic_seed"),
     )
 
 
@@ -324,5 +356,6 @@ def resolve_trv(
             if ROLE_ADAPTATION_STATUS in entity_ids
             else None
         ),
+        valve_characteristic_seed=profile.valve_characteristic_seed,
     )
 

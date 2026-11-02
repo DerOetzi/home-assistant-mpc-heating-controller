@@ -3,17 +3,6 @@ import time
 from datetime import date, datetime, timedelta
 
 import pytest
-from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET
-from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryError
-from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.sun import get_astral_event_date
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    async_fire_time_changed,
-)
-
 from heating_controller.const import (
     DEFAULT_FLOW_THRESHOLD_C,
     DEFAULT_STATIONARY_RANGE_C,
@@ -28,6 +17,20 @@ from heating_controller.coordinator import (
     HeatingRoomCoordinator,
 )
 from heating_controller.profiles import AdaptationBusy, TrvBinding
+from homeassistant.const import (
+    EVENT_HOMEASSISTANT_FINAL_WRITE,
+    SUN_EVENT_SUNRISE,
+    SUN_EVENT_SUNSET,
+)
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ConfigEntryError
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.sun import get_astral_event_date
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 TRV_EMITTER = {
     "emitter_type": "panel",
@@ -1345,7 +1348,7 @@ async def test_a_setpoint_echo_does_not_trigger_a_second_write(
     hass: HomeAssistant,
 ) -> None:
     _seed_entities(hass)
-    calls = _register_fake_climate_set_temperature(hass)
+    _register_fake_climate_set_temperature(hass)
     coordinator = await _setup_coordinator(hass)
     await hass.async_block_till_done()
     written = coordinator.last_result.trv_targets[0]
@@ -1798,4 +1801,117 @@ async def test_a_mode_the_user_picked_goes_through_during_the_grace(
     assert climate_calls and climate_calls[-1].data["temperature"] == 5.0
     assert switch_calls == []
 
+    coordinator.async_unload()
+
+
+async def test_the_reported_trv_target_reaches_the_controller(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set(
+        "climate.heizung_wohnzimmer",
+        "heat",
+        {"current_temperature": 18.0, "temperature": 19.0},
+    )
+    hass.states.async_set(VALVE_ENTITY, "40")
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+    _register_fake_climate_set_temperature(hass)
+    coordinator = HeatingRoomCoordinator(hass, entry, [_trv_with_valve()])
+    reported: list[tuple[int, float | None]] = []
+    set_trv_target = coordinator.mpc.set_trv_target
+
+    def spy(index: int, value: float | None) -> None:
+        reported.append((index, value))
+        set_trv_target(index, value)
+
+    coordinator.mpc.set_trv_target = spy
+    await coordinator.async_setup()
+    assert (0, 19.0) in reported
+
+    hass.states.async_set(
+        "climate.heizung_wohnzimmer",
+        "heat",
+        {"current_temperature": 18.0, "temperature": 21.5},
+    )
+    await hass.async_block_till_done()
+
+    assert reported[-1] == (0, 21.5)
+    coordinator.async_unload()
+
+
+async def _learn_one_valve_sample(
+    hass: HomeAssistant, freezer
+) -> tuple[HeatingRoomCoordinator, MockConfigEntry]:
+    """Set up a room with a valve TRV and let it finish one curve sample."""
+    _seed_entities(hass)
+    hass.states.async_set(
+        "climate.heizung_wohnzimmer",
+        "heat",
+        {"current_temperature": 18.0, "temperature": 18.0},
+    )
+    hass.states.async_set(VALVE_ENTITY, "0")
+    _register_fake_climate_set_temperature(hass)
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+    coordinator = HeatingRoomCoordinator(hass, entry, [_trv_with_valve()])
+    await coordinator.async_setup()
+
+    # The TRV takes a setpoint 2 K above its reading and opens to 60 %.
+    hass.states.async_set(
+        "climate.heizung_wohnzimmer",
+        "heat",
+        {"current_temperature": 18.0, "temperature": 20.0},
+    )
+    hass.states.async_set(VALVE_ENTITY, "60")
+    await hass.async_block_till_done()
+    await _poll(hass, freezer, 5)
+    await _poll(hass, freezer, 5.5)
+    return coordinator, entry
+
+
+def _valve_curve_storage_key(entry: MockConfigEntry) -> str:
+    return f"{DOMAIN}_wohnzimmer_{entry.entry_id}_valve_curve"
+
+
+async def test_valve_curve_samples_survive_a_restart(
+    hass: HomeAssistant, freezer, hass_storage
+) -> None:
+    before_restart, entry = await _learn_one_valve_sample(hass, freezer)
+
+    bins = before_restart.mpc.valve_curve_learners["climate.heizung_wohnzimmer"].bins()
+    assert [(round(b.offset_c, 2), b.opening_pct, b.samples) for b in bins] == [
+        (2.0, 60.0, 1)
+    ]
+    # One delayed write bundles the samples of the next 10 minutes.
+    assert _valve_curve_storage_key(entry) not in hass_storage
+    await _poll(hass, freezer, 11)
+    assert _valve_curve_storage_key(entry) in hass_storage
+    before_restart.async_unload()
+
+    restarted_entry = MockConfigEntry(
+        domain=DOMAIN, data=ENTRY_DATA, entry_id=entry.entry_id
+    )
+    after_restart = HeatingRoomCoordinator(hass, restarted_entry, [_trv_with_valve()])
+    await after_restart.async_setup()
+
+    assert (
+        after_restart.mpc.valve_curve_learners["climate.heizung_wohnzimmer"].bins()
+        == bins
+    )
+    after_restart.async_unload()
+
+
+async def test_a_pending_valve_curve_write_is_flushed_on_shutdown(
+    hass: HomeAssistant, freezer, hass_storage
+) -> None:
+    coordinator, entry = await _learn_one_valve_sample(hass, freezer)
+    assert _valve_curve_storage_key(entry) not in hass_storage
+
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_FINAL_WRITE)
+    await hass.async_block_till_done()
+
+    assert hass_storage[_valve_curve_storage_key(entry)]["data"]["trvs"][
+        "climate.heizung_wohnzimmer"
+    ]["samples"] == [[2.0, 60.0]]
     coordinator.async_unload()

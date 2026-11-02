@@ -89,7 +89,7 @@ def _imports_of(path: Path) -> list[tuple[str, list[str]]]:
 
 def _exports_of(path: Path) -> set[str]:
     source = path.read_text(encoding="utf-8")
-    return set(re.findall(r"^export\s+(?:const|class|function)\s+(\w+)", source, re.M))
+    return set(re.findall(r"^export\s+(?:const|class|function)\s+(\w+)", source, re.MULTILINE))
 
 
 def test_every_import_resolves_to_an_exported_symbol() -> None:
