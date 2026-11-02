@@ -671,8 +671,11 @@ class RoomMpcModelLearner:
         end_ts = window[-1].timestamp
 
         heat_j = 0.0
-        temperature_difference_ks = 0.0
         saturated_s = 0.0
+        outdoor_ks = 0.0
+        room_ks = 0.0
+        flow_ks = 0.0
+        flow_s = 0.0
         for previous, current in zip(window, window[1:]):
             duration_s = current.timestamp - previous.timestamp
             if duration_s > UA_BALANCE_MAX_GAP_S:
@@ -682,11 +685,20 @@ class RoomMpcModelLearner:
             heat_j += (
                 self._balance_heating_power_w(previous, current) * duration_s
             )
-            temperature_difference_ks += (
-                previous.room_temperature_c - previous.outdoor_temperature_c
-            ) * duration_s
+            outdoor_ks += previous.outdoor_temperature_c * duration_s
+            room_ks += previous.room_temperature_c * duration_s
+            if previous.flow_temperature_c is not None:
+                flow_ks += previous.flow_temperature_c * duration_s
+                flow_s += duration_s
+        temperature_difference_ks = room_ks - outdoor_ks
 
         window_duration_s = end_ts - window[0].timestamp
+        # A retry below balances again and overwrites these with its stretch.
+        info.last_mean_outdoor_c = outdoor_ks / window_duration_s
+        info.last_mean_room_c = room_ks / window_duration_s
+        info.last_mean_flow_c = flow_ks / flow_s if flow_s > 0 else None
+        info.last_mean_heating_w = heat_j / window_duration_s
+
         if temperature_difference_ks / window_duration_s < UA_BALANCE_MIN_MEAN_DELTA_C:
             return UaBalanceOutcome.SMALL_TEMPERATURE_DIFFERENCE
 

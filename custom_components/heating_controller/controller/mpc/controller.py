@@ -47,6 +47,11 @@ MPC_DEMAND_SEARCH_STEP_PCT = 5
 MPC_TIE_DECIMALS = 6
 MPC_SIMULATION_CONVERGENCE_DELTA_C = 0.001
 MPC_SIMULATION_CONVERGENCE_POWER_W = 1.0
+# max_demand_step_pct is the step allowed per this interval. compute() also runs
+# on every tracked state change, so a step per call let demand jump 85 -> 5 %
+# within seconds; the allowed step scales with the time since the last call.
+# Fixed, not the poll interval: the option is labelled "per 5 minutes".
+DEMAND_STEP_REFERENCE_S = 5 * 60
 
 
 @dataclass
@@ -183,6 +188,7 @@ class RoomMpcController:
         self._target_demand_pct = 0.0
         self._last_output_demand_pct = 0.0
         self._last_demand_update_ts = 0.0
+        self._last_rate_limit_ts: float | None = None
         self._outdoor_temperature_missing = False
 
     def destroy(self) -> None:
@@ -656,10 +662,23 @@ class RoomMpcController:
     ) -> float:
         config = self._rate_limit_config
 
+        # Stamped on every call, also when the output is held below.
+        if self._last_rate_limit_ts is None:
+            elapsed_fraction = 1.0
+        else:
+            elapsed_fraction = clamp(
+                (mpc_input.now_ts - self._last_rate_limit_ts)
+                / DEMAND_STEP_REFERENCE_S,
+                0.0,
+                1.0,
+            )
+        self._last_rate_limit_ts = mpc_input.now_ts
+        max_step_pct = config.max_demand_step_pct * elapsed_fraction
+
         self._target_demand_pct = clamp(
             demand_pct,
-            self._target_demand_pct - config.max_demand_step_pct,
-            self._target_demand_pct + config.max_demand_step_pct,
+            self._target_demand_pct - max_step_pct,
+            self._target_demand_pct + max_step_pct,
         )
 
         if (
@@ -687,6 +706,7 @@ class RoomMpcController:
         self._target_demand_pct = demand_pct
         self._last_output_demand_pct = demand_pct
         self._last_demand_update_ts = mpc_input.now_ts
+        self._last_rate_limit_ts = mpc_input.now_ts
         return demand_pct
 
     def _record_learning_telemetry(

@@ -114,10 +114,41 @@ async def test_ua_learning_status_sensor_exposes_the_heat_balance(
         "last_target_factor",
         "last_drift_c",
         "last_window_h",
+        "last_mean_outdoor_c",
+        "last_mean_room_c",
+        "last_mean_flow_c",
+        "last_mean_heating_w",
     ):
         assert key in status.attributes
     assert status.attributes["last_learned"] is None
+    assert status.attributes["last_mean_outdoor_c"] is None
+    assert status.attributes["last_mean_heating_w"] is None
     assert hass.states.get("sensor.wohnzimmer_mpc_learning_status") is None
+
+
+def test_ua_learning_status_sensor_rounds_the_means() -> None:
+    from types import SimpleNamespace
+
+    from heating_controller.controller.mpc.types import UaBalanceInfo
+    from heating_controller.sensor import UaLearningStatusSensor
+
+    info = UaBalanceInfo(
+        last_mean_outdoor_c=5.04567,
+        last_mean_room_c=20.98765,
+        last_mean_flow_c=None,
+        last_mean_heating_w=312.5678,
+    )
+    sensor = object.__new__(UaLearningStatusSensor)
+    sensor._coordinator = SimpleNamespace(
+        mpc=SimpleNamespace(get_ua_balance_info=lambda: info)
+    )
+
+    attributes = sensor.extra_state_attributes
+
+    assert attributes["last_mean_outdoor_c"] == 5.05
+    assert attributes["last_mean_room_c"] == 20.99
+    assert attributes["last_mean_flow_c"] is None
+    assert attributes["last_mean_heating_w"] == 312.6
 
 
 async def test_capacity_learning_status_sensor_reports_the_replay(

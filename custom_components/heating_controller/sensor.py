@@ -359,19 +359,17 @@ class UaLearningStatusSensor(_DiagnosticSensor):
                 since_ts + UA_BALANCE_MIN_WINDOW_S if since_ts is not None else None
             ),
             "last_learned": _iso(info.last_learned_ts),
-            "last_target_factor": (
-                round(info.last_target_factor, 4)
-                if info.last_target_factor is not None
-                else None
-            ),
-            "last_drift_c": (
-                round(info.last_drift_c, 2) if info.last_drift_c is not None else None
-            ),
+            "last_target_factor": _rounded(info.last_target_factor, 4),
+            "last_drift_c": _rounded(info.last_drift_c, 2),
             "last_window_h": (
                 round(info.last_window_s / 3600, 2)
                 if info.last_window_s is not None
                 else None
             ),
+            "last_mean_outdoor_c": _rounded(info.last_mean_outdoor_c, 2),
+            "last_mean_room_c": _rounded(info.last_mean_room_c, 2),
+            "last_mean_flow_c": _rounded(info.last_mean_flow_c, 2),
+            "last_mean_heating_w": _rounded(info.last_mean_heating_w, 1),
         }
 
 
@@ -394,6 +392,10 @@ class CapacityLearningStatusSensor(_DiagnosticSensor):
         return {
             "capacity_j_per_k": round(self._coordinator.mpc.effective_capacity_j_per_k)
         }
+
+
+def _rounded(value: float | None, digits: int) -> float | None:
+    return round(value, digits) if value is not None else None
 
 
 def _iso(timestamp: float | None) -> str | None:

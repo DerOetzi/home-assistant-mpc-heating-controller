@@ -83,42 +83,47 @@ def test_compute_returns_higher_demand_for_colder_room():
     assert cold_result.result.demand_pct >= warm_result.result.demand_pct
 
 
-def test_demand_rate_limiting_caps_step_change():
+def test_demand_rate_limiting_caps_step_change(monkeypatch):
+    clock = _Clock(monkeypatch)
     controller = make_controller(max_demand_step_pct=10, demand_hysteresis_pct=0)
     controller.set_room_sensor_temperature(10.0)
     controller.set_outdoor_temperature(-15.0)
     controller.set_flow_temperature(45.0)
 
     first = controller.compute(target_temperature_c=25.0)
+    clock.advance(300)
     second = controller.compute(target_temperature_c=25.0)
 
     assert first.valid and second.valid
     assert abs(second.result.demand_pct - first.result.demand_pct) <= 10
 
 
-def _heating_room_controller():
-    # Default smoothing: 20 % per step, 300 s hold, 40 % hold override.
+def _heating_room_controller(clock):
+    # Default smoothing: 20 % per 5 minutes, 300 s hold, 40 % hold override.
     controller = make_controller()
     controller.set_room_sensor_temperature(18.0)
     controller.set_outdoor_temperature(-5.0)
     controller.set_flow_temperature(45.0)
     for _ in range(5):
         controller.compute(target_temperature_c=22.0)
+        clock.advance(300)
     return controller
 
 
-def test_smoothing_steps_the_demand_down_slowly():
-    controller = _heating_room_controller()
+def test_smoothing_steps_the_demand_down_slowly(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _heating_room_controller(clock)
     heating_pct = controller.compute(target_temperature_c=22.0).result.demand_pct
     assert heating_pct > 50
 
+    clock.advance(300)
     lowered = controller.compute(target_temperature_c=5.0).result
 
     assert lowered.demand_pct > 0
 
 
-def test_skipped_smoothing_applies_the_demand_at_once():
-    controller = _heating_room_controller()
+def test_skipped_smoothing_applies_the_demand_at_once(monkeypatch):
+    controller = _heating_room_controller(_Clock(monkeypatch))
 
     frost = controller.compute(
         target_temperature_c=5.0, skip_demand_smoothing=True
@@ -141,9 +146,11 @@ def test_skipped_smoothing_still_heats_a_room_below_frost_protection():
     assert frost.demand_pct > 20
 
 
-def test_smoothing_resumes_from_the_forced_demand():
-    controller = _heating_room_controller()
+def test_smoothing_resumes_from_the_forced_demand(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _heating_room_controller(clock)
     controller.compute(target_temperature_c=5.0, skip_demand_smoothing=True)
+    clock.advance(300)
 
     resumed = controller.compute(target_temperature_c=22.0).result
 
@@ -893,3 +900,51 @@ def test_a_preview_compute_leaves_the_outdoor_state_alone():
     controller.compute(target_temperature_c=21.0, apply_side_effects=False)
 
     assert controller.outdoor_temperature_missing is False
+
+
+def _cold_room_controller(**rate_limit_overrides):
+    controller = make_controller(
+        demand_hysteresis_pct=0,
+        hold_time_s=0,
+        max_demand_step_pct=20,
+        **rate_limit_overrides,
+    )
+    controller.set_room_sensor_temperature(10.0)
+    controller.set_outdoor_temperature(-15.0)
+    controller.set_flow_temperature(45.0)
+    return controller
+
+
+def test_demand_step_scales_with_the_time_since_the_last_call(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _cold_room_controller()
+
+    first = controller.compute(target_temperature_c=25.0)
+    clock.advance(6)
+    second = controller.compute(target_temperature_c=25.0)
+
+    assert first.result.demand_pct > 0
+    assert (
+        abs(second.result.demand_pct - first.result.demand_pct)
+        <= 20 * 6 / 300 + 1e-9
+    )
+
+
+def test_first_call_allows_the_full_step(monkeypatch):
+    _Clock(monkeypatch)
+    controller = _cold_room_controller()
+
+    first = controller.compute(target_temperature_c=25.0)
+
+    assert first.result.demand_pct == 20
+
+
+def test_a_full_interval_allows_the_full_step(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _cold_room_controller()
+
+    first = controller.compute(target_temperature_c=25.0)
+    clock.advance(300)
+    second = controller.compute(target_temperature_c=25.0)
+
+    assert second.result.demand_pct - first.result.demand_pct == 20

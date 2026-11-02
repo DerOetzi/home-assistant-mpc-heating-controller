@@ -34,7 +34,7 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   `button` (and the `heating_controller.unblock` service, targetable at multiple rooms at
   once) clears the override and resumes automatic mode.
 - **Rate-limited demand control** — hysteresis, a configurable hold time, and a maximum
-  demand step per cycle keep the requested heating power from chattering.
+  demand step per 5 minutes keep the requested heating power from chattering.
 - **Window-contact and room-specific comfort conditions** — open windows suspend demand;
   optional comfort-condition entities (e.g. a desk-plug "home office" signal, a guest
   switch) gate comfort mode per room, in addition to the shared schedule.

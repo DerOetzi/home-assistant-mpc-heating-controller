@@ -80,3 +80,10 @@ class UaBalanceInfo:
     last_target_factor: float | None = None
     last_drift_c: float | None = None
     last_window_s: float | None = None
+    # Time-weighted means of the last stretch that got as far as the balance,
+    # as data basis for judging what the factor can and cannot explain.
+    # Earlier rejections (too short, gap, ...) keep them, like the fields above.
+    last_mean_outdoor_c: float | None = None
+    last_mean_room_c: float | None = None
+    last_mean_flow_c: float | None = None
+    last_mean_heating_w: float | None = None

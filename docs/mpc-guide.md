@@ -65,6 +65,10 @@ stands:
 | `last_target_factor` | The factor the last balance pointed at. Also set for `storage_dominated` and `implausible_target`, which leave the factor alone. |
 | `last_drift_c` | How far the room moved over that balance; also set for `drift`. |
 | `last_window_h` | How many hours that balance covered. |
+| `last_mean_outdoor_c` | Time-weighted mean outdoor temperature of the last stretch that got as far as the balance (from `small_temperature_difference` on; a retried stretch reports the retry). Earlier rejections such as `too_short` or `gap` keep the previous values. |
+| `last_mean_room_c` | Same for the room temperature. |
+| `last_mean_flow_c` | Same for the flow temperature, over the samples that had one; `null` if none did. |
+| `last_mean_heating_w` | Mean radiator heat the balance assumed over that stretch (hot-water charges count as zero). |
 
 **`sensor.<room>_capacity_learning_status`** — what the last 30-minute replay did with the
 capacity factor:
@@ -359,9 +363,11 @@ heating power from chattering cycle to cycle:
 - **Hold time (s)** / **hold override demand (%)** — once demand has changed, further
   changes are held back for this long unless they're large enough (past the override
   threshold) to cut through immediately regardless of the hold.
-- **Max demand step per cycle (%)** — caps how much requested demand can rise or fall in a
-  single cycle, even for a large, genuine change — smooths out the transition instead of
-  jumping straight there.
+- **Max demand step per 5 minutes (%)** — caps how much requested demand can rise or fall
+  per 5 minutes, even for a large, genuine change — smooths out the transition instead of
+  jumping straight there. The cap scales with the time since the previous calculation, so
+  several calculations within seconds (state changes arrive in bursts) allow only a
+  proportionally small step in total; the first calculation after a start allows the full step.
 
 Larger values make a room's demand steadier but slower to react; smaller values make it more
 responsive but more prone to small back-and-forth adjustments.

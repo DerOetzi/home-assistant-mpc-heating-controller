@@ -392,6 +392,7 @@ def _feed_night(
     trv_adapting=False,
     radiator_not_heating=False,
     valve_positions_pct=(),
+    flow_temp_c=40.0,
 ):
     count = int(hours * 3600 / STEP_S) + 1
     for index in range(count):
@@ -402,7 +403,7 @@ def _feed_night(
                 start_ts + index * STEP_S,
                 room_temp_c=room_temps[index] if room_temps else room_temp_c,
                 outdoor_temp_c=outdoor_temp_c,
-                flow_temp_c=40.0,
+                flow_temp_c=flow_temp_c,
                 room_sensor_fallback=room_sensor_fallback,
                 valve_position_missing=valve_position_missing,
                 target_temp_c=target_temp_c,
@@ -900,6 +901,63 @@ def test_balance_info_reports_the_learned_balance():
     assert info.last_drift_c == pytest.approx(0.0)
     assert info.last_window_s == pytest.approx(NIGHT_HOURS * 3600)
     assert info.collecting_since_ts is None
+
+
+def test_balance_reports_the_mean_outdoor_room_flow_and_heat():
+    learner, _, _ = make_learner()
+    learner.enable()
+
+    _feed_night(
+        learner,
+        room_temp_c=21.0,
+        outdoor_temp_c=5.0,
+        target_temp_c=21.0,
+        power_w=300.0,
+        flow_temp_c=35.0,
+    )
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.LEARNED
+    assert info.last_mean_outdoor_c == pytest.approx(5)
+    assert info.last_mean_room_c == pytest.approx(21)
+    assert info.last_mean_flow_c == pytest.approx(35)
+    assert info.last_mean_heating_w == pytest.approx(300)
+
+
+def test_balance_reports_no_mean_flow_without_flow_samples():
+    learner, _, _ = make_learner()
+    learner.enable()
+
+    _feed_night(learner, flow_temp_c=None)
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.last_mean_flow_c is None
+    assert info.last_mean_room_c == pytest.approx(20)
+
+
+def test_rejected_balance_still_reports_the_means():
+    learner, _, _ = make_learner()
+    learner.enable()
+
+    count = NIGHT_COUNT
+    falling = [21.0 - 0.5 * index / (count - 1) for index in range(count)]
+    _feed_night(
+        learner,
+        room_temps=falling,
+        outdoor_temp_c=5.0,
+        flow_temp_c=33.0,
+        target_temp_c=21.0,
+    )
+    learner.run_learning_cycle()
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.DRIFT
+    assert info.last_mean_outdoor_c == pytest.approx(5)
+    assert info.last_mean_room_c == pytest.approx(20.75, abs=0.01)
+    assert info.last_mean_flow_c == pytest.approx(33)
+    assert info.last_mean_heating_w == pytest.approx(312.5)
 
 
 def test_balance_info_reports_collecting_with_its_start():
