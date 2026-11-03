@@ -264,3 +264,11 @@ Startet nur, wenn Task 6 Step 3 „wetterabhängig bestätigt" liefert **und** N
 **Sichtbar:** Attribut `learned_gain_w` + `gain_fit_points` am UA-Lernstatus-Sensor; `recalibrate` bekommt optional `gain_w`.
 
 **Ausblick nach Task 7 (nur Möglichkeit, kein Auftrag; Nutzer 02.11.): Tageslernen.** G deckt nur konstante Gewinne; Sonne und tageszeitabhängige Nutzung (Schlafzimmer nachts belegt, Küche zu Essenszeiten) nicht. Reihenfolge, falls gewünscht: (1) erst prüfen, ob bedeckte Tage (Einstrahlung/PV-Leistung sehr gering) mit Nacht-UA und -G erklärt werden (Residuen); nur dann (2) bedeckte Tagesstrecken zulassen, ggf. mit getrenntem G Tag/Nacht; (3) Sonnenterm `S · Einstrahlung` je Raum (PV als Proxy) eher fürs Frühjahr — ungenau bei Rollläden und Verschattung Westfassade durch Haus 13.
+
+---
+
+### Danach (Nutzer 03.11.)
+
+1. **Hub-Konfiguration** — Design `docs/superpowers/specs/2026-11-03-hub-konfiguration-design.md` freigegeben; eigener Plan folgt. Kommt vor Task 8.
+2. **Task 8 neu: Gewinnprofil je Stunde** statt Tag/Nacht-Faktoren — je Raum gelernte Zusatzwärme je Stunde (ggf. Wochentag) als Rest, den Physik nicht erklärt (Personen, Kochen, Geräte), plus Sonnenterm über PV-Leistung. Eigenes Design vor Umsetzung. Löst Schlafzimmer-Befund 03.11. (UA nachts mit 120–150 W Personenwärme gelernt → Haltevorlauf tagsüber zu niedrig). Task 7 (konstantes G) geht voraussichtlich darin auf; Entscheidung nach Task-8-Design.
+3. **Später:** ML-Vergleich offline nach der Saison (sagt ein ML-Modell die Raumtemperatur besser voraus als das Grey-Box-Modell?).
