@@ -2,8 +2,7 @@
 
 from heating_controller.const import DOMAIN
 from homeassistant.core import HomeAssistant, ServiceCall
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-from test_coordinator import _room_data, _seed_entities
+from test_coordinator import _hub_entry, _room_data, _seed_entities
 
 
 def _register_stub_services(hass: HomeAssistant) -> None:
@@ -18,7 +17,7 @@ def _register_stub_services(hass: HomeAssistant) -> None:
 async def _setup(hass: HomeAssistant, data: dict) -> None:
     _seed_entities(hass)
     _register_stub_services(hass)
-    entry = MockConfigEntry(domain=DOMAIN, data=data)
+    entry = _hub_entry(data)
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -126,7 +125,7 @@ async def test_outdoor_temperature_missing_stays_off_right_after_startup(
     _seed_entities(hass)
     hass.states.async_set("sensor.outdoor_temperature", "unavailable")
     _register_stub_services(hass)
-    entry = MockConfigEntry(domain=DOMAIN, data=_room_data(hass))
+    entry = _hub_entry(_room_data(hass))
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()

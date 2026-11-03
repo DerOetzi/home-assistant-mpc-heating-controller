@@ -8,23 +8,28 @@ from homeassistant.components.number import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import (
     DEFAULT_COMFORT_TEMPERATURE_C,
     DEFAULT_ECO_TEMPERATURE_OFFSET_C,
-    DOMAIN,
 )
 from .coordinator import HeatingRoomCoordinator
-from .entity import HeatingControllerEntity
+from .entity import HeatingControllerEntity, async_add_room_entities
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    coordinator: HeatingRoomCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [ComfortTemperatureNumber(coordinator), EcoOffsetNumber(coordinator)]
+    async_add_room_entities(
+        entry,
+        async_add_entities,
+        lambda coordinator: [
+            ComfortTemperatureNumber(coordinator),
+            EcoOffsetNumber(coordinator),
+        ],
     )
 
 

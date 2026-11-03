@@ -2,67 +2,25 @@
   "title": "Heizungssteuerung",
   "config": {
     "step": {
-      "user": {
-        "title": "Raum",
+      "sources": {
+        "title": "Wärmepumpe und Haussignale",
         "data": {
-          "room_name": "Raumname",
-          "trv_count": "Anzahl Heizkörperthermostate"
-        }
-      },
-      "trv": {
-        "title": "Heizkörperthermostat {index}",
-        "data": {
-          "device_id": "Thermostat-Gerät",
-          "emitter_type": "Heizkörpertyp"
-        },
-        "data_description": {
-          "device_id": "Wählbar sind nur Geräte mit Geräteprofil; weitere Modelle per Issue anfragen, siehe README."
-        }
-      },
-      "trv_details": {
-        "title": "Details Heizkörperthermostat {index}",
-        "data": {
-          "radiator_type": "Heizkörper-Typenbezeichnung",
-          "width_mm": "Heizkörperbreite (mm)",
-          "height_mm": "Heizkörperhöhe (mm)",
-          "nominal_power_w": "Nennleistung (W)"
-        }
-      },
-      "entities": {
-        "title": "Sensoren und Signale",
-        "data": {
-          "room_sensor_entity": "Raumtemperatursensor (optional)",
-          "window_contact_entities": "Fensterkontakte",
-          "comfort_condition_entities": "Komfort-Bedingungs-Entities (global)",
-          "room_comfort_condition_entities": "Raumspezifische Komfort-Bedingungs-Entities",
-          "outdoor_temperature_entity": "Außentemperatursensor",
+          "outdoor_temperature_entity": "Außentemperatursensor (fehlender Wert pausiert das Lernen)",
           "heat_source_climate_entity": "Wärmeerzeuger-Climate-Entity",
-          "flow_temperature_entity": "Vorlauftemperatur-Sensor (gemessen, mit Ersatzwert bei nicht erreichbarem Wärmeerzeuger)",
+          "flow_temperature_entity": "Vorlauftemperatur-Sensor (gemessen; Lücke über 16 min pausiert das Lernen)",
+          "flow_threshold_c": "Feste Vorlaufschwelle (°C, gilt ohne bzw. bei leerer Schwellen-Entität)",
           "flow_threshold_entity": "Entität für Wärmeerzeuger-Vorlaufschwelle (optional)",
+          "flow_curve_entity": "Effektive Heizkurve (optional, für die Vorlauf-Reserve)",
           "pv_boost_entity": "PV-Überschuss-Entity",
-          "learning_window_entity": "Entität für Lernfenster (optional)",
-          "learning_enabled_entity": "Entität für Lernfreigabe (optional, aus pausiert jedes Lernen)"
+          "comfort_condition_entities": "Hausweite Komfort-Bedingungs-Entities",
+          "frost_protection_temperature_c": "Frostschutztemperatur (°C)"
         }
       },
-      "settings": {
-        "title": "Komfort / Eco / Boost / Frostschutz",
+      "control": {
+        "title": "Regelung und Auslegung",
         "data": {
-          "boost_enabled": "Boost-Modus aktivieren",
-          "boost_temperature_offset_c": "Boost-Temperatur-Offset (°C)",
-          "frost_protection_temperature_c": "Frostschutztemperatur (°C)",
-          "pv_boost_enabled": "Automatischen PV-Boost aktivieren",
-          "pv_boost_temperature_offset_c": "PV-Boost-Temperatur-Offset (°C)"
-        }
-      },
-      "mpc": {
-        "title": "Grey-Box-Thermomodell",
-        "data": {
-          "design_indoor_temperature_c": "Auslegungs-Innentemperatur (°C)",
           "design_outdoor_temperature_c": "Auslegungs-Außentemperatur (°C)",
           "design_temperature_system": "Heizkörper-Auslegungstemperatursystem",
-          "room_heat_load_w": "Auslegungsheizlast (W)",
-          "room_area_m2": "Raumfläche (m², Basis der Wärmekapazität)",
-          "construction": "Bauweise (Klasse nach ISO 13790, Wärmekapazität je m²)",
           "mpc_demand_hysteresis_pct": "Anforderungs-Hysterese (%)",
           "mpc_hold_time_s": "Haltezeit (s)",
           "mpc_hold_override_demand_pct": "Haltezeit-Override-Anforderung (%)",
@@ -78,88 +36,84 @@
       }
     },
     "abort": {
-      "already_configured": "Dieser Raum ist bereits konfiguriert."
-    },
-    "error": {
-      "device_missing": "Dieses Gerät gibt es nicht mehr.",
-      "unsupported_device": "Für dieses Gerät gibt es kein Geräteprofil.",
-      "climate_missing": "Das Gerät hat keine eindeutige aktive Climate-Entity."
+      "single_instance_allowed": "Der Heizungsregler ist schon eingerichtet; Räume dort hinzufügen.",
+      "already_configured": "Der Heizungsregler ist schon eingerichtet; Räume dort hinzufügen.",
+      "reconfigure_successful": "Einstellungen gespeichert; alle Räume laden neu."
     }
   },
-  "options": {
-    "step": {
-      "trv": {
-        "title": "Heizkörperthermostat {index}",
-        "data": {
-          "device_id": "Thermostat-Gerät",
-          "emitter_type": "Heizkörpertyp"
+  "config_subentries": {
+    "room": {
+      "initiate_flow": {
+        "user": "Raum hinzufügen"
+      },
+      "entry_type": "Raum",
+      "step": {
+        "user": {
+          "title": "Raum",
+          "data": {
+            "room_name": "Raumname",
+            "trv_count": "Anzahl Heizkörperthermostate"
+          }
         },
-        "data_description": {
-          "device_id": "Wählbar sind nur Geräte mit Geräteprofil; weitere Modelle per Issue anfragen, siehe README."
+        "trv": {
+          "title": "Heizkörperthermostat {index}",
+          "data": {
+            "device_id": "Thermostat-Gerät",
+            "emitter_type": "Heizkörpertyp"
+          },
+          "data_description": {
+            "device_id": "Wählbar sind nur Geräte mit Geräteprofil; weitere Modelle per Issue anfragen, siehe README."
+          }
+        },
+        "trv_details": {
+          "title": "Details Heizkörperthermostat {index}",
+          "data": {
+            "radiator_type": "Heizkörper-Typenbezeichnung",
+            "width_mm": "Heizkörperbreite (mm)",
+            "height_mm": "Heizkörperhöhe (mm)",
+            "nominal_power_w": "Nennleistung (W)"
+          }
+        },
+        "signals": {
+          "title": "Sensoren und Signale",
+          "data": {
+            "room_sensor_entity": "Raumtemperatursensor (optional)",
+            "window_contact_entities": "Fensterkontakte",
+            "use_house_comfort_conditions": "Hausweite Komfortbedingungen anwenden",
+            "room_comfort_condition_entities": "Raumspezifische Komfort-Bedingungs-Entities",
+            "learning_block_entity": "Lernen sperren, solange aktiv (optional, z. B. Zusatzheizung im Raum)"
+          }
+        },
+        "settings": {
+          "title": "Boost, PV-Boost und Leitraum",
+          "data": {
+            "boost_enabled": "Boost-Modus aktivieren",
+            "boost_temperature_offset_c": "Boost-Temperatur-Offset (°C)",
+            "pv_boost_enabled": "Automatischen PV-Boost aktivieren",
+            "pv_boost_temperature_offset_c": "PV-Boost-Temperatur-Offset (°C)",
+            "lead_heating_limit": "Leitraum Heizgrenze",
+            "lead_flow": "Leitraum Vorlauf"
+          }
+        },
+        "design": {
+          "title": "Raumauslegung",
+          "data": {
+            "design_indoor_temperature_c": "Auslegungs-Innentemperatur (°C)",
+            "room_heat_load_w": "Auslegungsheizlast (W)",
+            "room_area_m2": "Raumfläche (m², Basis der Wärmekapazität)",
+            "construction": "Bauweise (Klasse nach ISO 13790, Wärmekapazität je m²)"
+          }
         }
       },
-      "trv_details": {
-        "title": "Details Heizkörperthermostat {index}",
-        "data": {
-          "radiator_type": "Heizkörper-Typenbezeichnung",
-          "width_mm": "Heizkörperbreite (mm)",
-          "height_mm": "Heizkörperhöhe (mm)",
-          "nominal_power_w": "Nennleistung (W)"
-        }
+      "abort": {
+        "reconfigure_successful": "Einstellungen gespeichert; alle Räume laden neu."
       },
-      "entities": {
-        "title": "Sensoren und Signale",
-        "data": {
-          "room_sensor_entity": "Raumtemperatursensor (optional)",
-          "window_contact_entities": "Fensterkontakte",
-          "comfort_condition_entities": "Komfort-Bedingungs-Entities (global)",
-          "room_comfort_condition_entities": "Raumspezifische Komfort-Bedingungs-Entities",
-          "outdoor_temperature_entity": "Außentemperatursensor",
-          "heat_source_climate_entity": "Wärmeerzeuger-Climate-Entity",
-          "flow_temperature_entity": "Vorlauftemperatur-Sensor (gemessen, mit Ersatzwert bei nicht erreichbarem Wärmeerzeuger)",
-          "flow_threshold_entity": "Entität für Wärmeerzeuger-Vorlaufschwelle (optional)",
-          "pv_boost_entity": "PV-Überschuss-Entity",
-          "learning_window_entity": "Entität für Lernfenster (optional)",
-          "learning_enabled_entity": "Entität für Lernfreigabe (optional, aus pausiert jedes Lernen)"
-        }
-      },
-      "settings": {
-        "title": "Komfort / Eco / Boost / Frostschutz",
-        "data": {
-          "boost_enabled": "Boost-Modus aktivieren",
-          "boost_temperature_offset_c": "Boost-Temperatur-Offset (°C)",
-          "frost_protection_temperature_c": "Frostschutztemperatur (°C)",
-          "pv_boost_enabled": "Automatischen PV-Boost aktivieren",
-          "pv_boost_temperature_offset_c": "PV-Boost-Temperatur-Offset (°C)"
-        }
-      },
-      "mpc": {
-        "title": "Grey-Box-Thermomodell",
-        "data": {
-          "design_indoor_temperature_c": "Auslegungs-Innentemperatur (°C)",
-          "design_outdoor_temperature_c": "Auslegungs-Außentemperatur (°C)",
-          "design_temperature_system": "Heizkörper-Auslegungstemperatursystem",
-          "room_heat_load_w": "Auslegungsheizlast (W)",
-          "room_area_m2": "Raumfläche (m², Basis der Wärmekapazität)",
-          "construction": "Bauweise (Klasse nach ISO 13790, Wärmekapazität je m²)",
-          "mpc_demand_hysteresis_pct": "Anforderungs-Hysterese (%)",
-          "mpc_hold_time_s": "Haltezeit (s)",
-          "mpc_hold_override_demand_pct": "Haltezeit-Override-Anforderung (%)",
-          "mpc_max_demand_step_pct": "Max. Anforderungsänderung je 5 Minuten (%)",
-          "flow_gate_close_surplus_c": "Überschuss-Gate: schließen ab Soll + (K)",
-          "flow_gate_open_surplus_c": "Überschuss-Gate: öffnen unter Soll + (K)",
-          "flow_gate_hold_time_s": "Überschuss-Gate: Haltezeit vor dem Schließen (s)",
-          "max_sensor_age_s": "Max. Sensoralter (s)",
-          "stationary_range_c": "Stationäre Spannweite fürs Lernen (K)",
-          "target_band_c": "Zielband unter Sollwert (K)",
-          "trv_setpoint_mode": "TRV-Sollwert-Modus"
-        }
+      "error": {
+        "device_missing": "Dieses Gerät gibt es nicht mehr.",
+        "unsupported_device": "Für dieses Gerät gibt es kein Geräteprofil.",
+        "climate_missing": "Das Gerät hat keine eindeutige aktive Climate-Entity.",
+        "already_configured": "Ein Raum mit diesem Namen existiert bereits."
       }
-    },
-    "error": {
-      "device_missing": "Dieses Gerät gibt es nicht mehr.",
-      "unsupported_device": "Für dieses Gerät gibt es kein Geräteprofil.",
-      "climate_missing": "Das Gerät hat keine eindeutige aktive Climate-Entity."
     }
   },
   "selector": {
@@ -224,6 +178,9 @@
       },
       "outdoor_temperature_missing": {
         "name": "Außentemperatur fehlt"
+      },
+      "lead_heating_demand": {
+        "name": "Heizanforderung Leiträume"
       }
     },
     "button": {
@@ -322,6 +279,18 @@
       },
       "valve_curve": {
         "name": "Ventilkennlinie"
+      },
+      "lead_hold_flow_temperature": {
+        "name": "Haltevorlauf Leiträume"
+      },
+      "lead_min_flow_temperature": {
+        "name": "Mindestvorlauf Leiträume"
+      },
+      "hold_flow_reserve": {
+        "name": "Vorlauf-Reserve Haltevorlauf"
+      },
+      "min_flow_reserve": {
+        "name": "Vorlauf-Reserve Mindestvorlauf"
       }
     }
   },

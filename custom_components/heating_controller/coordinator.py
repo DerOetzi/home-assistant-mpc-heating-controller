@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import timedelta
 from typing import Any
 
@@ -22,7 +22,6 @@ from homeassistant.core import (
     State,
     callback,
 )
-from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
     async_call_later,
@@ -45,11 +44,11 @@ from .const import (
     CONF_FLOW_GATE_HOLD_TIME,
     CONF_FLOW_GATE_OPEN_SURPLUS,
     CONF_FLOW_TEMPERATURE_ENTITY,
+    CONF_FLOW_THRESHOLD,
     CONF_FLOW_THRESHOLD_ENTITY,
     CONF_FROST_PROTECTION_TEMPERATURE,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
-    CONF_LEARNING_ENABLED_ENTITY,
-    CONF_LEARNING_WINDOW_ENTITY,
+    CONF_LEARNING_BLOCK_ENTITY,
     CONF_MAX_SENSOR_AGE,
     CONF_MPC_DEMAND_HYSTERESIS_PCT,
     CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT,
@@ -72,6 +71,7 @@ from .const import (
     CONF_TRV_RADIATOR_TYPE,
     CONF_TRV_SETPOINT_MODE,
     CONF_TRV_WIDTH_MM,
+    CONF_USE_HOUSE_COMFORT_CONDITIONS,
     CONF_WINDOW_CONTACT_ENTITIES,
     DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C,
     DEFAULT_FLOW_GATE_HOLD_TIME_S,
@@ -154,13 +154,10 @@ ROOM_SENSOR_STARTUP_GRACE_S = 5 * 60
 # read once, or has been missing for a full poll cycle.
 STARTUP_GRACE_S = SENSOR_POLL_INTERVAL_MINUTES * 60
 
-# Added after rooms were already set up; an entry without them stops with a
-# hint to fill them in through the options flow instead of guessing.
-_REQUIRED_ENTRY_KEYS = (
-    CONF_ROOM_AREA,
-    CONF_CONSTRUCTION,
-    CONF_FLOW_TEMPERATURE_ENTITY,
-)
+# The heat pump reports its flow temperature about every 10 minutes and drops
+# out for a poll now and then. Learning pauses only once no reading came for
+# longer than this; the control keeps the last reading meanwhile.
+FLOW_TEMPERATURE_MAX_GAP_S = 16 * 60
 
 
 def _build_trv_configs(trvs: list[TrvBinding]) -> list[TrvConfig]:
@@ -188,18 +185,23 @@ def _build_trv_configs(trvs: list[TrvBinding]) -> list[TrvConfig]:
 
 class HeatingRoomCoordinator:
     def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry, trvs: list[TrvBinding]
+        self,
+        hass: HomeAssistant,
+        hub_entry: ConfigEntry,
+        room_id: str,
+        data: Mapping[str, Any],
+        trvs: list[TrvBinding],
     ) -> None:
+        """One room of the hub.
+
+        room_id is the room's subentry id; stores, unique ids and the device
+        hang on it. data holds the hub's settings merged with the room's.
+        """
         self.hass = hass
-        self.entry = entry
-        self.data = entry.data
+        self.hub_entry = hub_entry
+        self.room_id = room_id
+        self.data = data
         self.room_name: str = self.data[CONF_ROOM_NAME]
-        missing = [key for key in _REQUIRED_ENTRY_KEYS if not self.data.get(key)]
-        if missing:
-            raise ConfigEntryError(
-                f"Room {self.room_name} is missing {', '.join(missing)}; "
-                "fill them in through the options flow"
-            )
 
         self._trvs = trvs
         self._trv_entity_ids: list[str] = [trv.climate_entity for trv in trvs]
@@ -212,8 +214,13 @@ class HeatingRoomCoordinator:
         self.room_comfort_condition_entities: list[str] = list(
             self.data.get(CONF_ROOM_COMFORT_CONDITION_ENTITIES, [])
         )
+        house_comfort_condition_entities: list[str] = (
+            list(self.data.get(CONF_COMFORT_CONDITION_ENTITIES, []))
+            if self.data.get(CONF_USE_HOUSE_COMFORT_CONDITIONS, True)
+            else []
+        )
         self._comfort_condition_entities: list[str] = [
-            *self.data.get(CONF_COMFORT_CONDITION_ENTITIES, []),
+            *house_comfort_condition_entities,
             *self.room_comfort_condition_entities,
         ]
 
@@ -230,12 +237,13 @@ class HeatingRoomCoordinator:
         self._flow_threshold_entity: str | None = self.data.get(
             CONF_FLOW_THRESHOLD_ENTITY
         )
-        self._learning_window_entity: str | None = self.data.get(
-            CONF_LEARNING_WINDOW_ENTITY
+        self._learning_block_entity: str | None = self.data.get(
+            CONF_LEARNING_BLOCK_ENTITY
         )
-        self._learning_enabled_entity: str | None = self.data.get(
-            CONF_LEARNING_ENABLED_ENTITY
-        )
+        self._learning_blocked = False
+        # When the flow temperature last had a reading; set on startup.
+        self._flow_temperature_seen_ts = 0.0
+        self._learning_paused = False
 
         self.state = HeatingStateController(
             HeatingStateConfig(
@@ -293,10 +301,10 @@ class HeatingRoomCoordinator:
         )
         self.mpc.set_sun_condition(self.is_sun_condition_met)
 
-        self.store = LearningFactorsStore(hass, self.room_name, entry.entry_id)
-        self.flow_gate_store = FlowGateStateStore(hass, self.room_name, entry.entry_id)
+        self.store = LearningFactorsStore(hass, self.room_name, room_id)
+        self.flow_gate_store = FlowGateStateStore(hass, self.room_name, room_id)
         self._persisted_flow_gate_state: FlowGateState | None = None
-        self.valve_curve_store = ValveCurveStore(hass, self.room_name, entry.entry_id)
+        self.valve_curve_store = ValveCurveStore(hass, self.room_name, room_id)
         # When the pending delayed write is due. HA's delayed save moves a
         # pending write out on every call, so samples finishing more often
         # than the delay would postpone it until shutdown.
@@ -348,7 +356,7 @@ class HeatingRoomCoordinator:
         # The disturbance observer is gone; its file would stay behind in
         # .storage -- drop after season 2026/27.
         await async_remove_observer_store(
-            self.hass, self.room_name, self.entry.entry_id
+            self.hass, self.room_name, self.room_id
         )
 
         valve_curves = await self.valve_curve_store.async_load()
@@ -364,17 +372,13 @@ class HeatingRoomCoordinator:
 
         self.state.set_pv_boost(self._is_on(self.data[CONF_PV_BOOST_ENTITY]))
 
-        if self._learning_window_entity:
-            self.mpc.set_learning_window_active(
-                self._is_on(self._learning_window_entity), time.time()
-            )
+        if self._learning_block_entity:
+            self._learning_blocked = self._is_on(self._learning_block_entity)
 
-        if self._learning_enabled_entity:
-            self.mpc.set_learning_paused(
-                not self._is_on(self._learning_enabled_entity), time.time()
-            )
-
+        # A missing flow reading counts from startup on, like a gap.
+        self._flow_temperature_seen_ts = self._started_ts
         self._refresh_temperature_inputs()
+        self._update_learning_paused(time.time())
 
         room_sensor_entity = self.data.get(CONF_ROOM_SENSOR_ENTITY)
         if self._awaiting_room_sensor:
@@ -400,10 +404,8 @@ class HeatingRoomCoordinator:
             tracked_entities.append(self._heat_source_climate_entity)
         if self._flow_threshold_entity:
             tracked_entities.append(self._flow_threshold_entity)
-        if self._learning_window_entity:
-            tracked_entities.append(self._learning_window_entity)
-        if self._learning_enabled_entity:
-            tracked_entities.append(self._learning_enabled_entity)
+        if self._learning_block_entity:
+            tracked_entities.append(self._learning_block_entity)
         if room_sensor_entity:
             tracked_entities.append(room_sensor_entity)
 
@@ -499,7 +501,7 @@ class HeatingRoomCoordinator:
             "changes", {}
         ):
             return
-        self.hass.config_entries.async_schedule_reload(self.entry.entry_id)
+        self.hass.config_entries.async_schedule_reload(self.hub_entry.entry_id)
 
     async def _async_handle_room_sensor_grace_expired(self, _now: Any) -> None:
         if not self._awaiting_room_sensor:
@@ -521,7 +523,19 @@ class HeatingRoomCoordinator:
         value = self._float_from_state(state)
         if value is not None:
             self._flow_temperature_c = value
+            self._flow_temperature_seen_ts = time.time()
         self.mpc.set_flow_temperature(self._flow_temperature_c)
+
+    @property
+    def flow_temperature_missing(self) -> bool:
+        """No flow reading for longer than the heat pump's usual poll gaps."""
+        return time.time() - self._flow_temperature_seen_ts > FLOW_TEMPERATURE_MAX_GAP_S
+
+    def _update_learning_paused(self, now_ts: float) -> None:
+        paused = self._learning_blocked or self.flow_temperature_missing
+        if paused != self._learning_paused:
+            self._learning_paused = paused
+            self.mpc.set_learning_paused(paused, now_ts)
 
     def _compute_trv_active(self) -> bool:
         if not self._heat_source_climate_entity:
@@ -674,15 +688,8 @@ class HeatingRoomCoordinator:
         elif entity_id == self.data[CONF_PV_BOOST_ENTITY]:
             self.state.set_pv_boost(self._bool_from_state(new_state))
 
-        elif entity_id == self._learning_window_entity:
-            self.mpc.set_learning_window_active(
-                self._bool_from_state(new_state), time.time()
-            )
-
-        elif entity_id == self._learning_enabled_entity:
-            self.mpc.set_learning_paused(
-                not self._bool_from_state(new_state), time.time()
-            )
+        elif entity_id == self._learning_block_entity:
+            self._learning_blocked = self._bool_from_state(new_state)
 
         await self._async_recompute()
 
@@ -740,14 +747,15 @@ class HeatingRoomCoordinator:
 
         Read from the linked entity on every access so the limit can be tried
         out on the heat pump by changing a single helper. Without a linked
-        entity, or while it reports nothing usable, the built-in default keeps
-        the room controllable instead of blocking it.
+        entity, or while it reports nothing usable, the hub's fixed threshold
+        keeps the room controllable instead of blocking it.
         """
+        fixed = self.data.get(CONF_FLOW_THRESHOLD, DEFAULT_FLOW_THRESHOLD_C)
         if not self._flow_threshold_entity:
-            return DEFAULT_FLOW_THRESHOLD_C
+            return fixed
         value = self._float_state(self._flow_threshold_entity)
         if value is None:
-            return DEFAULT_FLOW_THRESHOLD_C
+            return fixed
         return value
 
     async def _async_recompute(self) -> None:
@@ -756,6 +764,7 @@ class HeatingRoomCoordinator:
         self.state.set_active_heat_mode(desired_mode)
 
         now_ts = time.time()
+        self._update_learning_paused(now_ts)
         self.mpc.set_trv_adapting(
             any(self._adaptation_running(trv, now_ts) for trv in self._trvs)
         )

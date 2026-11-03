@@ -1,18 +1,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers import (
     config_validation as cv,
-)
-from homeassistant.helpers import (
-    device_registry as dr,
 )
 from homeassistant.helpers import (
     entity_registry as er,
@@ -21,22 +16,15 @@ from homeassistant.helpers import (
     target,
 )
 from homeassistant.helpers.service import async_register_admin_service
+from homeassistant.helpers.typing import ConfigType
 
 from . import frontend
 from .const import (
     ATTR_CAPACITY_FACTOR,
     ATTR_UA_FACTOR,
-    CONF_FLOW_THRESHOLD,
     CONF_ROOM_NAME,
-    CONF_TARGET_BAND,
-    CONF_TRV_DEVICE_ID,
-    CONF_TRV_SETPOINT_MODE,
     CONF_TRVS,
-    DEFAULT_TARGET_BAND_C,
-    DEFAULT_TRV_SETPOINT_MODE,
     DOMAIN,
-    LEGACY_CONF_TRV_ENTITY_ID,
-    LEGACY_TRV_KEYS,
     SERVICE_RECALIBRATE,
     SERVICE_UNBLOCK,
 )
@@ -46,11 +34,12 @@ from .controller.mpc.models.capacity import (
 )
 from .controller.mpc.models.loss import MAX_LEARNED_UA_FACTOR, MIN_LEARNED_UA_FACTOR
 from .coordinator import HeatingRoomCoordinator
+from .hub import HeatingHub
+from .migration import HUB_VERSION, async_migrate_rooms_to_hub
 from .profiles import (
     DeviceProfile,
     TrvResolveError,
     async_get_profiles,
-    find_profile,
     resolve_trv,
 )
 from .store import (
@@ -62,6 +51,8 @@ from .store import (
 _LOGGER = logging.getLogger(__name__)
 
 __all__ = ["DOMAIN"]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 RECALIBRATE_SCHEMA = vol.All(
     vol.Schema(
@@ -90,119 +81,113 @@ PLATFORMS = [
     Platform.NUMBER,
 ]
 
+type HeatingConfigEntry = ConfigEntry[HeatingHub]
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    # Runs before any entry is set up, so the rooms of config version 7 can
+    # move into the hub before HA lists the entries to set up.
+    await async_migrate_rooms_to_hub(hass)
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: HeatingConfigEntry) -> bool:
     await frontend.async_setup(hass)
 
     profiles = await async_get_profiles(hass)
-    try:
-        trvs = [resolve_trv(hass, profiles, trv) for trv in entry.data[CONF_TRVS]]
-    except TrvResolveError as err:
-        raise ConfigEntryError(
-            f"Room {entry.data[CONF_ROOM_NAME]}: {err}; pick the TRV again "
-            "through the options flow"
-        ) from err
-
-    coordinator = HeatingRoomCoordinator(hass, entry, trvs)
-    await coordinator.async_setup()
-
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = coordinator
+    hub = HeatingHub(hass, entry)
+    rooms: dict[str, HeatingRoomCoordinator] = hass.data.setdefault(DOMAIN, {})
+    for subentry in entry.subentries.values():
+        coordinator = await _async_setup_room(hass, entry, subentry, profiles)
+        if coordinator is not None:
+            rooms[subentry.subentry_id] = coordinator
+            hub.add_room(coordinator)
+    hub.async_setup()
+    entry.runtime_data = hub
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     _async_register_services(hass)
 
     return True
 
 
+async def _async_setup_room(
+    hass: HomeAssistant,
+    entry: HeatingConfigEntry,
+    subentry: ConfigSubentry,
+    profiles: tuple[DeviceProfile, ...],
+) -> HeatingRoomCoordinator | None:
+    """Set up one room; a room that cannot bind its TRVs stays out."""
+    try:
+        trvs = [resolve_trv(hass, profiles, trv) for trv in subentry.data[CONF_TRVS]]
+    except TrvResolveError as err:
+        _LOGGER.error(
+            "Room %s: %s; pick the TRV again through the room's reconfigure flow",
+            subentry.data[CONF_ROOM_NAME],
+            err,
+        )
+        return None
+    coordinator = HeatingRoomCoordinator(
+        hass, entry, subentry.subentry_id, {**entry.data, **subentry.data}, trvs
+    )
+    await coordinator.async_setup()
+    return coordinator
+
+
+async def _async_update_listener(hass: HomeAssistant, entry: HeatingConfigEntry) -> None:
+    """A changed hub or room reloads all rooms; a removed room drops its files."""
+    hub: HeatingHub = entry.runtime_data
+    for room_id, coordinator in hub.rooms.items():
+        if room_id not in entry.subentries:
+            await _async_remove_room_stores(hass, coordinator.room_name, room_id)
+    hass.config_entries.async_schedule_reload(entry.entry_id)
+
+
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    if entry.version == 1:
-        data = dict(entry.data)
-        data.pop(CONF_FLOW_THRESHOLD, None)
-        hass.config_entries.async_update_entry(entry, data=data, version=2)
-        _LOGGER.info(
-            "Room %s migrated to the flow threshold entity; link a helper in the "
-            "entities step to control it, until then the default applies",
-            entry.data.get(CONF_ROOM_NAME),
+    # Rooms of version 7 move into the hub in async_setup; anything older is
+    # not supported any more.
+    if entry.version < HUB_VERSION:
+        _LOGGER.error(
+            "Config entry %s has version %s; only version 7 rooms migrate to the "
+            "hub. Remove it and add the room to the hub again",
+            entry.title,
+            entry.version,
         )
-    if entry.version == 2:
-        # Room area, construction and the flow temperature entity have no
-        # sensible value to derive; setup asks for them until they are set.
-        hass.config_entries.async_update_entry(entry, version=3)
-        _LOGGER.warning(
-            "Room %s needs its room area, construction and flow temperature "
-            "entity; fill them in through the options flow",
-            entry.data.get(CONF_ROOM_NAME),
-        )
-    if entry.version == 3:
-        # Before the band the controller aimed at the exact setpoint; rooms
-        # take the default, which the options flow can change.
-        data = dict(entry.data)
-        data[CONF_TARGET_BAND] = DEFAULT_TARGET_BAND_C
-        hass.config_entries.async_update_entry(entry, data=data, version=4)
-    if entry.version == 4:
-        # Linked a guessed valve position entity; the device profile of
-        # version 7 names it instead.
-        hass.config_entries.async_update_entry(entry, version=5)
-    if entry.version == 5:
-        # Relative targets for every room: the rooms influence each other, so
-        # they switch together; the options flow can set one back.
-        data = dict(entry.data)
-        data[CONF_TRV_SETPOINT_MODE] = DEFAULT_TRV_SETPOINT_MODE.value
-        hass.config_entries.async_update_entry(entry, data=data, version=6)
-    if entry.version == 6:
-        # A TRV is its device now; the profile names its entities and range.
-        profiles = await async_get_profiles(hass)
-        trvs = []
-        for trv in entry.data[CONF_TRVS]:
-            migrated = _trv_by_device(hass, profiles, trv)
-            if migrated is None:
-                _LOGGER.error(
-                    "Room %s: %s is not a supported TRV device; see the README "
-                    "on supported devices and open an issue for this model",
-                    entry.data.get(CONF_ROOM_NAME),
-                    trv.get(LEGACY_CONF_TRV_ENTITY_ID),
-                )
-                return False
-            trvs.append(migrated)
-        data = {**entry.data, CONF_TRVS: trvs}
-        hass.config_entries.async_update_entry(entry, data=data, version=7)
+        return False
     return True
 
 
-def _trv_by_device(
-    hass: HomeAssistant, profiles: tuple[DeviceProfile, ...], trv: dict[str, Any]
-) -> dict[str, Any] | None:
-    """The TRV stored by the device of its climate entity, if a profile covers it."""
-    if CONF_TRV_DEVICE_ID in trv:
-        return trv
-    registry_entry = er.async_get(hass).async_get(trv.get(LEGACY_CONF_TRV_ENTITY_ID, ""))
-    if registry_entry is None or registry_entry.device_id is None:
-        return None
-    device = dr.async_get(hass).async_get(registry_entry.device_id)
-    if device is None or find_profile(hass, profiles, device) is None:
-        return None
-    return {
-        CONF_TRV_DEVICE_ID: device.id,
-        **{key: value for key, value in trv.items() if key not in LEGACY_TRV_KEYS},
-    }
-
-
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: HeatingConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        coordinator: HeatingRoomCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
-        coordinator.async_unload()
-        await coordinator.async_flush_valve_curves()
+        hub: HeatingHub = entry.runtime_data
+        hub.async_unload()
+        for room_id, coordinator in hub.rooms.items():
+            hass.data[DOMAIN].pop(room_id, None)
+            coordinator.async_unload()
+            await coordinator.async_flush_valve_curves()
     return unload_ok
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    room_name = entry.data[CONF_ROOM_NAME]
-    await LearningFactorsStore(hass, room_name, entry.entry_id).async_remove()
-    await FlowGateStateStore(hass, room_name, entry.entry_id).async_remove()
-    await ValveCurveStore(hass, room_name, entry.entry_id).async_remove()
+    # A room entry of version 7 is removed by the move into the hub; its
+    # stores belong to its subentry now and stay.
+    if entry.version < HUB_VERSION:
+        return
+    for subentry in entry.subentries.values():
+        await _async_remove_room_stores(
+            hass, subentry.data[CONF_ROOM_NAME], subentry.subentry_id
+        )
+
+
+async def _async_remove_room_stores(
+    hass: HomeAssistant, room_name: str, room_id: str
+) -> None:
+    await LearningFactorsStore(hass, room_name, room_id).async_remove()
+    await FlowGateStateStore(hass, room_name, room_id).async_remove()
+    await ValveCurveStore(hass, room_name, room_id).async_remove()
 
 
 def _referenced_coordinators(
@@ -213,16 +198,14 @@ def _referenced_coordinators(
         hass, target.TargetSelection(call.data)
     )
 
-    entry_ids: set[str] = set()
+    room_ids: set[str] = set()
     for entity_id in selected.referenced | selected.indirectly_referenced:
         entity_entry = entity_registry.async_get(entity_id)
-        if entity_entry is not None and entity_entry.config_entry_id is not None:
-            entry_ids.add(entity_entry.config_entry_id)
+        if entity_entry is not None and entity_entry.config_subentry_id is not None:
+            room_ids.add(entity_entry.config_subentry_id)
 
     coordinators: dict[str, HeatingRoomCoordinator] = hass.data.get(DOMAIN, {})
-    return [
-        coordinators[entry_id] for entry_id in entry_ids if entry_id in coordinators
-    ]
+    return [coordinators[room_id] for room_id in room_ids if room_id in coordinators]
 
 
 def _async_register_services(hass: HomeAssistant) -> None:

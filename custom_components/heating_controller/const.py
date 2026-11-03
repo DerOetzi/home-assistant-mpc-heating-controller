@@ -37,17 +37,6 @@ CONF_TRV_RADIATOR_TYPE = "radiator_type"
 CONF_TRV_WIDTH_MM = "width_mm"
 CONF_TRV_HEIGHT_MM = "height_mm"
 CONF_TRV_NOMINAL_POWER_W = "nominal_power_w"
-# Up to config version 6 a TRV named its entities and target range itself;
-# since then its device profile does. Only the migration reads these.
-LEGACY_CONF_TRV_ENTITY_ID = "entity_id"
-LEGACY_TRV_KEYS = (
-    LEGACY_CONF_TRV_ENTITY_ID,
-    "trv_active_switch",
-    "valve_position_entity",
-    "min_target_temperature_c",
-    "max_target_temperature_c",
-    "target_temperature_step_c",
-)
 
 CONF_ROOM_SENSOR_ENTITY = "room_sensor_entity"
 CONF_WINDOW_CONTACT_ENTITIES = "window_contact_entities"
@@ -58,9 +47,18 @@ CONF_HEAT_SOURCE_CLIMATE_ENTITY = "heat_source_climate_entity"
 CONF_FLOW_THRESHOLD = "flow_threshold_c"
 CONF_FLOW_THRESHOLD_ENTITY = "flow_threshold_entity"
 CONF_PV_BOOST_ENTITY = "pv_boost_entity"
-CONF_LEARNING_WINDOW_ENTITY = "learning_window_entity"
-CONF_LEARNING_ENABLED_ENTITY = "learning_enabled_entity"
 CONF_FLOW_TEMPERATURE_ENTITY = "flow_temperature_entity"
+# The heat pump's effective heating curve; the hub reports the reserve of the
+# lead rooms against it.
+CONF_FLOW_CURVE_ENTITY = "flow_curve_entity"
+# Learning stops while this room entity is on (e.g. an extra heater runs).
+CONF_LEARNING_BLOCK_ENTITY = "learning_block_entity"
+CONF_USE_HOUSE_COMFORT_CONDITIONS = "use_house_comfort_conditions"
+CONF_LEAD_HEATING_LIMIT = "lead_heating_limit"
+CONF_LEAD_FLOW = "lead_flow"
+
+SUBENTRY_TYPE_ROOM = "room"
+HUB_TITLE = "Heizung"
 
 CONF_BOOST_ENABLED = "boost_enabled"
 CONF_BOOST_TEMPERATURE_OFFSET = "boost_temperature_offset_c"
@@ -85,6 +83,53 @@ CONF_MAX_SENSOR_AGE = "max_sensor_age_s"
 CONF_STATIONARY_RANGE = "stationary_range_c"
 CONF_TARGET_BAND = "target_band_c"
 CONF_TRV_SETPOINT_MODE = "trv_setpoint_mode"
+
+# Settings of the whole house, held once by the hub entry.
+HUB_KEYS = (
+    CONF_OUTDOOR_TEMPERATURE_ENTITY,
+    CONF_HEAT_SOURCE_CLIMATE_ENTITY,
+    CONF_FLOW_TEMPERATURE_ENTITY,
+    CONF_FLOW_THRESHOLD,
+    CONF_FLOW_THRESHOLD_ENTITY,
+    CONF_FLOW_CURVE_ENTITY,
+    CONF_PV_BOOST_ENTITY,
+    CONF_COMFORT_CONDITION_ENTITIES,
+    CONF_FROST_PROTECTION_TEMPERATURE,
+    CONF_DESIGN_OUTDOOR_TEMPERATURE,
+    CONF_DESIGN_TEMPERATURE_SYSTEM,
+    CONF_MPC_DEMAND_HYSTERESIS_PCT,
+    CONF_MPC_HOLD_TIME,
+    CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT,
+    CONF_MPC_MAX_DEMAND_STEP_PCT,
+    CONF_FLOW_GATE_CLOSE_SURPLUS,
+    CONF_FLOW_GATE_OPEN_SURPLUS,
+    CONF_FLOW_GATE_HOLD_TIME,
+    CONF_MAX_SENSOR_AGE,
+    CONF_STATIONARY_RANGE,
+    CONF_TARGET_BAND,
+    CONF_TRV_SETPOINT_MODE,
+)
+
+# Settings of one room, held by its subentry.
+ROOM_KEYS = (
+    CONF_ROOM_NAME,
+    CONF_TRVS,
+    CONF_ROOM_SENSOR_ENTITY,
+    CONF_WINDOW_CONTACT_ENTITIES,
+    CONF_ROOM_COMFORT_CONDITION_ENTITIES,
+    CONF_USE_HOUSE_COMFORT_CONDITIONS,
+    CONF_LEARNING_BLOCK_ENTITY,
+    CONF_BOOST_ENABLED,
+    CONF_BOOST_TEMPERATURE_OFFSET,
+    CONF_PV_BOOST_ENABLED,
+    CONF_PV_BOOST_TEMPERATURE_OFFSET,
+    CONF_DESIGN_INDOOR_TEMPERATURE,
+    CONF_ROOM_HEAT_LOAD,
+    CONF_ROOM_AREA,
+    CONF_CONSTRUCTION,
+    CONF_LEAD_HEATING_LIMIT,
+    CONF_LEAD_FLOW,
+)
 
 SERVICE_UNBLOCK = "unblock"
 SERVICE_RECALIBRATE = "recalibrate"

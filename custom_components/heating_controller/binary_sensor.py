@@ -9,25 +9,57 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_WINDOW_CONTACT_ENTITIES, DOMAIN
+from .const import CONF_WINDOW_CONTACT_ENTITIES
 from .coordinator import HeatingRoomCoordinator
-from .entity import HeatingControllerEntity
+from .entity import HeatingControllerEntity, HeatingHubEntity, async_add_room_entities
+from .hub import HeatingHub
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    coordinator: HeatingRoomCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [
+    async_add_entities([LeadHeatingDemandBinarySensor(entry.runtime_data)])
+    async_add_room_entities(
+        entry,
+        async_add_entities,
+        lambda coordinator: [
             HeatingAutomationBinarySensor(coordinator),
             RadiatorNotHeatingBinarySensor(coordinator),
             OutdoorTemperatureMissingBinarySensor(coordinator),
-        ]
+        ],
     )
+
+
+class LeadHeatingDemandBinarySensor(HeatingHubEntity, BinarySensorEntity):
+    """On while the lead rooms need at least the heat pump's lowest flow."""
+
+    _attr_translation_key = "lead_heating_demand"
+    _attr_device_class = BinarySensorDeviceClass.HEAT
+
+    def __init__(self, hub: HeatingHub) -> None:
+        super().__init__(hub, "lead_heating_demand")
+
+    @property
+    def available(self) -> bool:
+        return self._hub.heating_demand is not None
+
+    @property
+    def is_on(self) -> bool | None:
+        return self._hub.heating_demand
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        lead = self._hub.lead_hold_flow
+        return {
+            "hold_flow_temperature_c": lead.value_c,
+            "flow_threshold_c": self._hub.flow_threshold_c,
+            "rooms": lead.rooms,
+        }
 
 
 class HeatingAutomationBinarySensor(HeatingControllerEntity, BinarySensorEntity):

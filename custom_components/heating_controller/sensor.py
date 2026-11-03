@@ -15,22 +15,34 @@ from homeassistant.const import (
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, CapacityOutcome, UaBalanceOutcome
+from .const import CapacityOutcome, UaBalanceOutcome
 from .controller.mpc.learner import UA_BALANCE_MIN_WINDOW_S
 from .controller.mpc.valve_curve import ValveCurveStatus
 from .coordinator import HeatingRoomCoordinator
-from .entity import HeatingControllerEntity
+from .entity import HeatingControllerEntity, HeatingHubEntity, async_add_room_entities
+from .hub import HeatingHub, LeadValue
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    coordinator: HeatingRoomCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [
+    hub: HeatingHub = entry.runtime_data
+    hub_entities: list[SensorEntity] = [
+        LeadHoldFlowTemperatureSensor(hub),
+        LeadMinFlowTemperatureSensor(hub),
+    ]
+    if hub.flow_curve_entity:
+        hub_entities += [HoldFlowReserveSensor(hub), MinFlowReserveSensor(hub)]
+    async_add_entities(hub_entities)
+    async_add_room_entities(
+        entry,
+        async_add_entities,
+        lambda coordinator: [
             MinFlowTemperatureSensor(coordinator),
             HoldFlowTemperatureSensor(coordinator),
             GatedHoldFlowTemperatureSensor(coordinator),
@@ -46,8 +58,91 @@ async def async_setup_entry(
             UaFactorSensor(coordinator),
             CapacityFactorSensor(coordinator),
             ValveCurveSensor(coordinator),
-        ]
+        ],
     )
+
+
+class _LeadFlowSensor(HeatingHubEntity, SensorEntity):
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_suggested_display_precision = 1
+
+    def _lead(self) -> LeadValue:
+        raise NotImplementedError
+
+    @property
+    def native_value(self) -> float | None:
+        return self._lead().value_c
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        lead = self._lead()
+        return {"room": lead.room, "rooms": lead.rooms}
+
+
+class LeadHoldFlowTemperatureSensor(_LeadFlowSensor):
+    """Highest gated hold flow among the heating-limit lead rooms."""
+
+    _attr_translation_key = "lead_hold_flow_temperature"
+
+    def __init__(self, hub: HeatingHub) -> None:
+        super().__init__(hub, "lead_hold_flow_temperature")
+
+    def _lead(self) -> LeadValue:
+        return self._hub.lead_hold_flow
+
+
+class LeadMinFlowTemperatureSensor(_LeadFlowSensor):
+    """Highest minimum flow among the flow lead rooms."""
+
+    _attr_translation_key = "lead_min_flow_temperature"
+
+    def __init__(self, hub: HeatingHub) -> None:
+        super().__init__(hub, "lead_min_flow_temperature")
+
+    def _lead(self) -> LeadValue:
+        return self._hub.lead_min_flow
+
+
+class _FlowReserveSensor(HeatingHubEntity, SensorEntity):
+    """The heating curve minus a lead flow; a temperature difference in K."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.KELVIN
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:thermometer-chevron-up"
+
+    def _reserve(self) -> float | None:
+        raise NotImplementedError
+
+    @property
+    def available(self) -> bool:
+        return self._reserve() is not None
+
+    @property
+    def native_value(self) -> float | None:
+        return self._reserve()
+
+
+class HoldFlowReserveSensor(_FlowReserveSensor):
+    _attr_translation_key = "hold_flow_reserve"
+
+    def __init__(self, hub: HeatingHub) -> None:
+        super().__init__(hub, "hold_flow_reserve")
+
+    def _reserve(self) -> float | None:
+        return self._hub.hold_flow_reserve
+
+
+class MinFlowReserveSensor(_FlowReserveSensor):
+    _attr_translation_key = "min_flow_reserve"
+
+    def __init__(self, hub: HeatingHub) -> None:
+        super().__init__(hub, "min_flow_reserve")
+
+    def _reserve(self) -> float | None:
+        return self._hub.min_flow_reserve
 
 
 class _DiagnosticSensor(HeatingControllerEntity, SensorEntity):

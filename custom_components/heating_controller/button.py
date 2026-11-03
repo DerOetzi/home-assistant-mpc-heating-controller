@@ -4,18 +4,22 @@ from homeassistant.components.button import ButtonDeviceClass, ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DOMAIN
 from .coordinator import HeatingRoomCoordinator
-from .entity import HeatingControllerEntity
+from .entity import HeatingControllerEntity, async_add_room_entities
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    coordinator: HeatingRoomCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([HeatingUnblockButton(coordinator)])
+    async_add_room_entities(
+        entry,
+        async_add_entities,
+        lambda coordinator: [HeatingUnblockButton(coordinator)],
+    )
 
 
 class HeatingUnblockButton(HeatingControllerEntity, ButtonEntity):

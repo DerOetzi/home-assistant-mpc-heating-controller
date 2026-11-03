@@ -3,7 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    ConfigSubentryFlow,
+    SubentryFlowResult,
+)
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 from homeassistant.util import slugify
@@ -16,15 +22,18 @@ from .const import (
     CONF_DESIGN_INDOOR_TEMPERATURE,
     CONF_DESIGN_OUTDOOR_TEMPERATURE,
     CONF_DESIGN_TEMPERATURE_SYSTEM,
+    CONF_FLOW_CURVE_ENTITY,
     CONF_FLOW_GATE_CLOSE_SURPLUS,
     CONF_FLOW_GATE_HOLD_TIME,
     CONF_FLOW_GATE_OPEN_SURPLUS,
     CONF_FLOW_TEMPERATURE_ENTITY,
+    CONF_FLOW_THRESHOLD,
     CONF_FLOW_THRESHOLD_ENTITY,
     CONF_FROST_PROTECTION_TEMPERATURE,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
-    CONF_LEARNING_ENABLED_ENTITY,
-    CONF_LEARNING_WINDOW_ENTITY,
+    CONF_LEAD_FLOW,
+    CONF_LEAD_HEATING_LIMIT,
+    CONF_LEARNING_BLOCK_ENTITY,
     CONF_MAX_SENSOR_AGE,
     CONF_MPC_DEMAND_HYSTERESIS_PCT,
     CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT,
@@ -50,20 +59,24 @@ from .const import (
     CONF_TRV_SETPOINT_MODE,
     CONF_TRV_WIDTH_MM,
     CONF_TRVS,
+    CONF_USE_HOUSE_COMFORT_CONDITIONS,
     CONF_WINDOW_CONTACT_ENTITIES,
     DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C,
     DEFAULT_FLOW_GATE_HOLD_TIME_S,
     DEFAULT_FLOW_GATE_OPEN_SURPLUS_C,
+    DEFAULT_FLOW_THRESHOLD_C,
     DEFAULT_STATIONARY_RANGE_C,
     DEFAULT_TARGET_BAND_C,
     DEFAULT_TRV_SETPOINT_MODE,
     DOMAIN,
+    HUB_TITLE,
     MAX_STATIONARY_RANGE_C,
     MAX_TARGET_BAND_C,
     MAX_TRV_COUNT,
     MIN_STATIONARY_RANGE_C,
     MIN_TARGET_BAND_C,
     STATIONARY_RANGE_STEP_C,
+    SUBENTRY_TYPE_ROOM,
     TARGET_BAND_STEP_C,
     Construction,
     DesignTemperatureSystem,
@@ -71,6 +84,7 @@ from .const import (
     PanelRadiatorType,
     TrvSetpointMode,
 )
+from .migration import HUB_VERSION
 from .profiles import (
     DeviceProfile,
     TrvResolveError,
@@ -86,117 +100,70 @@ _WINDOW_DEVICE_CLASSES = ["window", "door", "garage_door", "opening"]
 _FLOW_THRESHOLD_DOMAINS = ["input_number", "number", "sensor"]
 
 
-def _trv_step_schema(
-    profiles: tuple[DeviceProfile, ...], defaults: dict[str, Any] | None = None
-) -> vol.Schema:
-    defaults = defaults or {}
-    return vol.Schema(
-        {
-            _marker(vol.Required, CONF_TRV_DEVICE_ID, defaults): (
-                selector.DeviceSelector(
-                    selector.DeviceSelectorConfig(
-                        filter=device_selector_filters(profiles)
-                    )
-                )
-            ),
-            vol.Required(
-                CONF_TRV_EMITTER_TYPE,
-                default=defaults.get(CONF_TRV_EMITTER_TYPE, HeatEmitterType.PANEL),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[e.value for e in HeatEmitterType],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                    translation_key=CONF_TRV_EMITTER_TYPE,
-                )
-            ),
-        }
-    )
-
-
-async def _async_trv_step(
-    flow: ConfigFlow | OptionsFlow,
-    user_input: dict[str, Any] | None,
-    trv_index: int,
-    defaults: dict[str, Any] | None = None,
-) -> Any:
-    """Show the TRV step, or the device's error, or None once it is bound."""
-    profiles = await async_get_profiles(flow.hass)
-    errors: dict[str, str] = {}
-    if user_input is not None:
-        try:
-            resolve_trv(flow.hass, profiles, user_input)
-        except TrvResolveError as err:
-            errors[CONF_TRV_DEVICE_ID] = err.reason
-        else:
-            return None
-        defaults = user_input
-    return flow.async_show_form(
-        step_id="trv",
-        data_schema=_trv_step_schema(profiles, defaults),
-        errors=errors,
-        description_placeholders={"index": str(trv_index + 1)},
-    )
-
-
-def _trv_details_schema(
-    emitter_type: str, defaults: dict[str, Any] | None = None
-) -> vol.Schema:
-    defaults = defaults or {}
-    if emitter_type == HeatEmitterType.TOWEL:
-        return vol.Schema(
-            {
-                vol.Required(
-                    CONF_TRV_NOMINAL_POWER_W,
-                    default=defaults.get(CONF_TRV_NOMINAL_POWER_W, 500.0),
-                ): vol.Coerce(float)
-            }
-        )
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_TRV_RADIATOR_TYPE,
-                default=defaults.get(CONF_TRV_RADIATOR_TYPE, PanelRadiatorType.TYPE_22),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[t.value for t in PanelRadiatorType],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                    translation_key=CONF_TRV_RADIATOR_TYPE,
-                )
-            ),
-            vol.Required(
-                CONF_TRV_WIDTH_MM, default=defaults.get(CONF_TRV_WIDTH_MM, 1000.0)
-            ): vol.Coerce(float),
-            vol.Required(
-                CONF_TRV_HEIGHT_MM, default=defaults.get(CONF_TRV_HEIGHT_MM, 600.0)
-            ): vol.Coerce(float),
-        }
-    )
-
-
 def _marker(key: type[vol.Marker], name: str, defaults: dict[str, Any]) -> vol.Marker:
     if name in defaults and defaults[name] is not None:
         return key(name, default=defaults[name])
     return key(name)
 
 
-def _entities_schema(defaults: dict[str, Any]) -> vol.Schema:
+def _optional(name: str, defaults: dict[str, Any]) -> vol.Optional:
+    """An optional field that can be cleared again: suggested, not defaulted."""
+    if defaults.get(name):
+        return vol.Optional(name, description={"suggested_value": defaults[name]})
+    return vol.Optional(name)
+
+
+def _merge(data: dict[str, Any], schema: vol.Schema, user_input: dict[str, Any]) -> None:
+    """Take a step's input; a cleared optional field drops its old value."""
+    for key in schema.schema:
+        data.pop(str(key), None)
+    data.update(user_input)
+
+
+def _temperature_sensor() -> selector.EntitySelector:
+    return selector.EntitySelector(
+        selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
+    )
+
+
+def _kelvin(minimum: float, maximum: float, step: float) -> selector.NumberSelector:
+    return selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=minimum,
+            max=maximum,
+            step=step,
+            mode=selector.NumberSelectorMode.BOX,
+            unit_of_measurement="K",
+        )
+    )
+
+
+# --- Hub ---------------------------------------------------------------------
+
+
+def _hub_sources_schema(defaults: dict[str, Any]) -> vol.Schema:
     return vol.Schema(
         {
-            _marker(vol.Optional, CONF_ROOM_SENSOR_ENTITY, defaults): (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain="sensor", device_class="temperature"
-                    )
-                )
+            _marker(vol.Required, CONF_OUTDOOR_TEMPERATURE_ENTITY, defaults): (
+                _temperature_sensor()
             ),
-            vol.Optional(
-                CONF_WINDOW_CONTACT_ENTITIES,
-                default=defaults.get(CONF_WINDOW_CONTACT_ENTITIES, []),
-            ): selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="binary_sensor",
-                    device_class=_WINDOW_DEVICE_CLASSES,
-                    multiple=True,
+            _marker(vol.Required, CONF_HEAT_SOURCE_CLIMATE_ENTITY, defaults): (
+                selector.EntitySelector(selector.EntitySelectorConfig(domain="climate"))
+            ),
+            _marker(vol.Required, CONF_FLOW_TEMPERATURE_ENTITY, defaults): (
+                _temperature_sensor()
+            ),
+            vol.Required(
+                CONF_FLOW_THRESHOLD,
+                default=defaults.get(CONF_FLOW_THRESHOLD, DEFAULT_FLOW_THRESHOLD_C),
+            ): vol.Coerce(float),
+            _optional(CONF_FLOW_THRESHOLD_ENTITY, defaults): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=_FLOW_THRESHOLD_DOMAINS)
+            ),
+            _optional(CONF_FLOW_CURVE_ENTITY, defaults): _temperature_sensor(),
+            _marker(vol.Required, CONF_PV_BOOST_ENTITY, defaults): (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain=_BOOLEAN_SIGNAL_DOMAINS)
                 )
             ),
             vol.Optional(
@@ -207,90 +174,17 @@ def _entities_schema(defaults: dict[str, Any]) -> vol.Schema:
                     domain=_BOOLEAN_SIGNAL_DOMAINS + ["schedule"], multiple=True
                 )
             ),
-            vol.Optional(
-                CONF_ROOM_COMFORT_CONDITION_ENTITIES,
-                default=defaults.get(CONF_ROOM_COMFORT_CONDITION_ENTITIES, []),
-            ): selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain=_BOOLEAN_SIGNAL_DOMAINS + ["schedule"], multiple=True
-                )
-            ),
-            _marker(vol.Required, CONF_OUTDOOR_TEMPERATURE_ENTITY, defaults): (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain="sensor", device_class="temperature"
-                    )
-                )
-            ),
-            _marker(vol.Required, CONF_HEAT_SOURCE_CLIMATE_ENTITY, defaults): (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="climate")
-                )
-            ),
-            _marker(vol.Required, CONF_FLOW_TEMPERATURE_ENTITY, defaults): (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain="sensor", device_class="temperature"
-                    )
-                )
-            ),
-            _marker(vol.Optional, CONF_FLOW_THRESHOLD_ENTITY, defaults): (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=_FLOW_THRESHOLD_DOMAINS)
-                )
-            ),
-            _marker(vol.Required, CONF_PV_BOOST_ENTITY, defaults): (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=_BOOLEAN_SIGNAL_DOMAINS)
-                )
-            ),
-            _marker(vol.Optional, CONF_LEARNING_WINDOW_ENTITY, defaults): (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=_BOOLEAN_SIGNAL_DOMAINS)
-                )
-            ),
-            _marker(vol.Optional, CONF_LEARNING_ENABLED_ENTITY, defaults): (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=_BOOLEAN_SIGNAL_DOMAINS)
-                )
-            ),
-        }
-    )
-
-
-def _settings_schema(defaults: dict[str, Any]) -> vol.Schema:
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_BOOST_ENABLED, default=defaults.get(CONF_BOOST_ENABLED, False)
-            ): bool,
-            vol.Required(
-                CONF_BOOST_TEMPERATURE_OFFSET,
-                default=defaults.get(CONF_BOOST_TEMPERATURE_OFFSET, 5.0),
-            ): vol.Coerce(float),
             vol.Required(
                 CONF_FROST_PROTECTION_TEMPERATURE,
                 default=defaults.get(CONF_FROST_PROTECTION_TEMPERATURE, 8.0),
             ): vol.Coerce(float),
-            vol.Required(
-                CONF_PV_BOOST_ENABLED,
-                default=defaults.get(CONF_PV_BOOST_ENABLED, False),
-            ): bool,
-            vol.Required(
-                CONF_PV_BOOST_TEMPERATURE_OFFSET,
-                default=defaults.get(CONF_PV_BOOST_TEMPERATURE_OFFSET, 1.0),
-            ): vol.Coerce(float),
         }
     )
 
 
-def _mpc_schema(defaults: dict[str, Any]) -> vol.Schema:
+def _hub_control_schema(defaults: dict[str, Any]) -> vol.Schema:
     return vol.Schema(
         {
-            vol.Required(
-                CONF_DESIGN_INDOOR_TEMPERATURE,
-                default=defaults.get(CONF_DESIGN_INDOOR_TEMPERATURE, 20.0),
-            ): vol.Coerce(float),
             vol.Required(
                 CONF_DESIGN_OUTDOOR_TEMPERATURE,
                 default=defaults.get(CONF_DESIGN_OUTDOOR_TEMPERATURE, -12.0),
@@ -306,25 +200,6 @@ def _mpc_schema(defaults: dict[str, Any]) -> vol.Schema:
                     options=[s.value for s in DesignTemperatureSystem],
                     mode=selector.SelectSelectorMode.DROPDOWN,
                     translation_key=CONF_DESIGN_TEMPERATURE_SYSTEM,
-                )
-            ),
-            vol.Required(
-                CONF_ROOM_HEAT_LOAD, default=defaults.get(CONF_ROOM_HEAT_LOAD, 1000.0)
-            ): vol.Coerce(float),
-            _marker(vol.Required, CONF_ROOM_AREA, defaults): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=1,
-                    max=200,
-                    step=0.1,
-                    mode=selector.NumberSelectorMode.BOX,
-                    unit_of_measurement="m²",
-                )
-            ),
-            _marker(vol.Required, CONF_CONSTRUCTION, defaults): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[c.value for c in Construction],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                    translation_key=CONF_CONSTRUCTION,
                 )
             ),
             vol.Required(
@@ -366,27 +241,13 @@ def _mpc_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_STATIONARY_RANGE,
                 default=defaults.get(CONF_STATIONARY_RANGE, DEFAULT_STATIONARY_RANGE_C),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=MIN_STATIONARY_RANGE_C,
-                    max=MAX_STATIONARY_RANGE_C,
-                    step=STATIONARY_RANGE_STEP_C,
-                    mode=selector.NumberSelectorMode.BOX,
-                    unit_of_measurement="K",
-                )
+            ): _kelvin(
+                MIN_STATIONARY_RANGE_C, MAX_STATIONARY_RANGE_C, STATIONARY_RANGE_STEP_C
             ),
             vol.Required(
                 CONF_TARGET_BAND,
                 default=defaults.get(CONF_TARGET_BAND, DEFAULT_TARGET_BAND_C),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=MIN_TARGET_BAND_C,
-                    max=MAX_TARGET_BAND_C,
-                    step=TARGET_BAND_STEP_C,
-                    mode=selector.NumberSelectorMode.BOX,
-                    unit_of_measurement="K",
-                )
-            ),
+            ): _kelvin(MIN_TARGET_BAND_C, MAX_TARGET_BAND_C, TARGET_BAND_STEP_C),
             vol.Required(
                 CONF_TRV_SETPOINT_MODE,
                 default=defaults.get(CONF_TRV_SETPOINT_MODE, DEFAULT_TRV_SETPOINT_MODE),
@@ -402,27 +263,248 @@ def _mpc_schema(defaults: dict[str, Any]) -> vol.Schema:
 
 
 class HeatingControllerConfigFlow(ConfigFlow, domain=DOMAIN):
-    VERSION = 7
+    """The hub: the house-wide settings, once per installation."""
+
+    VERSION = HUB_VERSION
 
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}
+        self._reconfiguring = False
+
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: ConfigEntry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        return {SUBENTRY_TYPE_ROOM: RoomSubentryFlow}
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        await self.async_set_unique_id(DOMAIN)
+        self._abort_if_unique_id_configured()
+        return await self.async_step_sources(user_input)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        self._reconfiguring = True
+        self._data = dict(self._get_reconfigure_entry().data)
+        return await self.async_step_sources()
+
+    async def async_step_sources(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        schema = _hub_sources_schema(self._data)
+        if user_input is not None:
+            _merge(self._data, schema, user_input)
+            return await self.async_step_control()
+        return self.async_show_form(step_id="sources", data_schema=schema)
+
+    async def async_step_control(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        schema = _hub_control_schema(self._data)
+        if user_input is not None:
+            _merge(self._data, schema, user_input)
+            if self._reconfiguring:
+                # The update listener reloads the hub and with it every room.
+                return self.async_update_and_abort(
+                    self._get_reconfigure_entry(), data=self._data
+                )
+            return self.async_create_entry(title=HUB_TITLE, data=self._data)
+        return self.async_show_form(step_id="control", data_schema=schema)
+
+
+# --- Room --------------------------------------------------------------------
+
+
+def _trv_step_schema(
+    profiles: tuple[DeviceProfile, ...], defaults: dict[str, Any] | None = None
+) -> vol.Schema:
+    defaults = defaults or {}
+    return vol.Schema(
+        {
+            _marker(vol.Required, CONF_TRV_DEVICE_ID, defaults): (
+                selector.DeviceSelector(
+                    selector.DeviceSelectorConfig(
+                        filter=device_selector_filters(profiles)
+                    )
+                )
+            ),
+            vol.Required(
+                CONF_TRV_EMITTER_TYPE,
+                default=defaults.get(CONF_TRV_EMITTER_TYPE, HeatEmitterType.PANEL),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[e.value for e in HeatEmitterType],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    translation_key=CONF_TRV_EMITTER_TYPE,
+                )
+            ),
+        }
+    )
+
+
+def _trv_details_schema(
+    emitter_type: str, defaults: dict[str, Any] | None = None
+) -> vol.Schema:
+    defaults = defaults or {}
+    if emitter_type == HeatEmitterType.TOWEL:
+        return vol.Schema(
+            {
+                vol.Required(
+                    CONF_TRV_NOMINAL_POWER_W,
+                    default=defaults.get(CONF_TRV_NOMINAL_POWER_W, 500.0),
+                ): vol.Coerce(float)
+            }
+        )
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_TRV_RADIATOR_TYPE,
+                default=defaults.get(CONF_TRV_RADIATOR_TYPE, PanelRadiatorType.TYPE_22),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[t.value for t in PanelRadiatorType],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    translation_key=CONF_TRV_RADIATOR_TYPE,
+                )
+            ),
+            vol.Required(
+                CONF_TRV_WIDTH_MM, default=defaults.get(CONF_TRV_WIDTH_MM, 1000.0)
+            ): vol.Coerce(float),
+            vol.Required(
+                CONF_TRV_HEIGHT_MM, default=defaults.get(CONF_TRV_HEIGHT_MM, 600.0)
+            ): vol.Coerce(float),
+        }
+    )
+
+
+def _room_signals_schema(defaults: dict[str, Any]) -> vol.Schema:
+    return vol.Schema(
+        {
+            _optional(CONF_ROOM_SENSOR_ENTITY, defaults): _temperature_sensor(),
+            vol.Optional(
+                CONF_WINDOW_CONTACT_ENTITIES,
+                default=defaults.get(CONF_WINDOW_CONTACT_ENTITIES, []),
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="binary_sensor",
+                    device_class=_WINDOW_DEVICE_CLASSES,
+                    multiple=True,
+                )
+            ),
+            vol.Required(
+                CONF_USE_HOUSE_COMFORT_CONDITIONS,
+                default=defaults.get(CONF_USE_HOUSE_COMFORT_CONDITIONS, True),
+            ): bool,
+            vol.Optional(
+                CONF_ROOM_COMFORT_CONDITION_ENTITIES,
+                default=defaults.get(CONF_ROOM_COMFORT_CONDITION_ENTITIES, []),
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=_BOOLEAN_SIGNAL_DOMAINS + ["schedule"], multiple=True
+                )
+            ),
+            _optional(CONF_LEARNING_BLOCK_ENTITY, defaults): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=_BOOLEAN_SIGNAL_DOMAINS)
+            ),
+        }
+    )
+
+
+def _room_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_BOOST_ENABLED, default=defaults.get(CONF_BOOST_ENABLED, False)
+            ): bool,
+            vol.Required(
+                CONF_BOOST_TEMPERATURE_OFFSET,
+                default=defaults.get(CONF_BOOST_TEMPERATURE_OFFSET, 5.0),
+            ): vol.Coerce(float),
+            vol.Required(
+                CONF_PV_BOOST_ENABLED,
+                default=defaults.get(CONF_PV_BOOST_ENABLED, False),
+            ): bool,
+            vol.Required(
+                CONF_PV_BOOST_TEMPERATURE_OFFSET,
+                default=defaults.get(CONF_PV_BOOST_TEMPERATURE_OFFSET, 1.0),
+            ): vol.Coerce(float),
+            vol.Required(
+                CONF_LEAD_HEATING_LIMIT,
+                default=defaults.get(CONF_LEAD_HEATING_LIMIT, False),
+            ): bool,
+            vol.Required(
+                CONF_LEAD_FLOW, default=defaults.get(CONF_LEAD_FLOW, False)
+            ): bool,
+        }
+    )
+
+
+def _room_design_schema(defaults: dict[str, Any]) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_DESIGN_INDOOR_TEMPERATURE,
+                default=defaults.get(CONF_DESIGN_INDOOR_TEMPERATURE, 20.0),
+            ): vol.Coerce(float),
+            vol.Required(
+                CONF_ROOM_HEAT_LOAD, default=defaults.get(CONF_ROOM_HEAT_LOAD, 1000.0)
+            ): vol.Coerce(float),
+            _marker(vol.Required, CONF_ROOM_AREA, defaults): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1,
+                    max=200,
+                    step=0.1,
+                    mode=selector.NumberSelectorMode.BOX,
+                    unit_of_measurement="m²",
+                )
+            ),
+            _marker(vol.Required, CONF_CONSTRUCTION, defaults): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[c.value for c in Construction],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    translation_key=CONF_CONSTRUCTION,
+                )
+            ),
+        }
+    )
+
+
+class RoomSubentryFlow(ConfigSubentryFlow):
+    """Add or change one room of the hub."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, Any] = {}
+        self._existing_trvs: list[dict[str, Any]] = []
         self._trvs: list[dict[str, Any]] = []
         self._pending_trv: dict[str, Any] = {}
         self._trv_index = 0
         self._trv_count = 1
+        self._reconfiguring = False
+
+    def _trv_defaults(self) -> dict[str, Any]:
+        if self._trv_index < len(self._existing_trvs):
+            return self._existing_trvs[self._trv_index]
+        return {}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> Any:
+    ) -> SubentryFlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
-            await self.async_set_unique_id(slugify(user_input[CONF_ROOM_NAME]))
-            self._abort_if_unique_id_configured()
-
-            self._data[CONF_ROOM_NAME] = user_input[CONF_ROOM_NAME]
-            self._trv_count = user_input[CONF_TRV_COUNT]
-            self._trvs = []
-            self._trv_index = 0
-            return await self.async_step_trv()
+            unique_id = slugify(user_input[CONF_ROOM_NAME])
+            if any(
+                subentry.unique_id == unique_id
+                for subentry in self._get_entry().subentries.values()
+            ):
+                errors[CONF_ROOM_NAME] = "already_configured"
+            else:
+                self._data[CONF_ROOM_NAME] = user_input[CONF_ROOM_NAME]
+                self._trv_count = user_input[CONF_TRV_COUNT]
+                return await self.async_step_trv()
 
         schema = vol.Schema(
             {
@@ -430,114 +512,43 @@ class HeatingControllerConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_TRV_COUNT, default=1): vol.In(TRV_COUNT_OPTIONS),
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema)
+        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
-    async def async_step_trv(
+    async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
-    ) -> Any:
-        form = await _async_trv_step(self, user_input, self._trv_index)
-        if form is not None:
-            return form
-        self._pending_trv = dict(user_input)
-        return await self.async_step_trv_details()
-
-    async def async_step_trv_details(
-        self, user_input: dict[str, Any] | None = None
-    ) -> Any:
-        emitter_type = self._pending_trv[CONF_TRV_EMITTER_TYPE]
-
-        if user_input is not None:
-            self._pending_trv.update(user_input)
-            self._trvs.append(self._pending_trv)
-            self._pending_trv = {}
-            self._trv_index += 1
-
-            if self._trv_index < self._trv_count:
-                return await self.async_step_trv()
-            return await self.async_step_entities()
-
-        return self.async_show_form(
-            step_id="trv_details",
-            data_schema=_trv_details_schema(emitter_type),
-            description_placeholders={"index": str(self._trv_index + 1)},
-        )
-
-    async def async_step_entities(
-        self, user_input: dict[str, Any] | None = None
-    ) -> Any:
-        if user_input is not None:
-            self._data.update(user_input)
-            return await self.async_step_settings()
-
-        return self.async_show_form(
-            step_id="entities", data_schema=_entities_schema({})
-        )
-
-    async def async_step_settings(
-        self, user_input: dict[str, Any] | None = None
-    ) -> Any:
-        if user_input is not None:
-            self._data.update(user_input)
-            return await self.async_step_mpc()
-
-        return self.async_show_form(
-            step_id="settings", data_schema=_settings_schema({})
-        )
-
-    async def async_step_mpc(self, user_input: dict[str, Any] | None = None) -> Any:
-        if user_input is not None:
-            self._data.update(user_input)
-            self._data[CONF_TRVS] = self._trvs
-            return self.async_create_entry(
-                title=self._data[CONF_ROOM_NAME], data=self._data
-            )
-
-        return self.async_show_form(step_id="mpc", data_schema=_mpc_schema({}))
-
-    @staticmethod
-    @callback
-    def async_get_options_flow(config_entry: ConfigEntry) -> HeatingControllerOptionsFlow:
-        return HeatingControllerOptionsFlow(config_entry)
-
-
-class HeatingControllerOptionsFlow(OptionsFlow):
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        self._config_entry = config_entry
-        self._data = dict(config_entry.data)
-        self._existing_trvs: list[dict[str, Any]] = list(
-            config_entry.data.get(CONF_TRVS, [])
-        )
-        self._trvs: list[dict[str, Any]] = []
-        self._pending_trv: dict[str, Any] = {}
-        self._trv_index = 0
+    ) -> SubentryFlowResult:
+        # The name stays: the room's stores are keyed by it.
+        self._reconfiguring = True
+        self._data = dict(self._get_reconfigure_subentry().data)
+        self._existing_trvs = list(self._data.get(CONF_TRVS, []))
         self._trv_count = len(self._existing_trvs)
-
-    def _trv_defaults(self) -> dict[str, Any]:
-        if self._trv_index < len(self._existing_trvs):
-            return self._existing_trvs[self._trv_index]
-        return {}
-
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> Any:
-        self._trvs = []
-        self._trv_index = 0
         return await self.async_step_trv()
 
     async def async_step_trv(
         self, user_input: dict[str, Any] | None = None
-    ) -> Any:
-        form = await _async_trv_step(
-            self, user_input, self._trv_index, self._trv_defaults()
+    ) -> SubentryFlowResult:
+        profiles = await async_get_profiles(self.hass)
+        errors: dict[str, str] = {}
+        defaults = self._trv_defaults()
+        if user_input is not None:
+            try:
+                resolve_trv(self.hass, profiles, user_input)
+            except TrvResolveError as err:
+                errors[CONF_TRV_DEVICE_ID] = err.reason
+            else:
+                self._pending_trv = dict(user_input)
+                return await self.async_step_trv_details()
+            defaults = user_input
+        return self.async_show_form(
+            step_id="trv",
+            data_schema=_trv_step_schema(profiles, defaults),
+            errors=errors,
+            description_placeholders={"index": str(self._trv_index + 1)},
         )
-        if form is not None:
-            return form
-        self._pending_trv = dict(user_input)
-        return await self.async_step_trv_details()
 
     async def async_step_trv_details(
         self, user_input: dict[str, Any] | None = None
-    ) -> Any:
+    ) -> SubentryFlowResult:
         emitter_type = self._pending_trv[CONF_TRV_EMITTER_TYPE]
 
         if user_input is not None:
@@ -548,7 +559,8 @@ class HeatingControllerOptionsFlow(OptionsFlow):
 
             if self._trv_index < self._trv_count:
                 return await self.async_step_trv()
-            return await self.async_step_entities()
+            self._data[CONF_TRVS] = self._trvs
+            return await self.async_step_signals()
 
         return self.async_show_form(
             step_id="trv_details",
@@ -556,41 +568,39 @@ class HeatingControllerOptionsFlow(OptionsFlow):
             description_placeholders={"index": str(self._trv_index + 1)},
         )
 
-    async def async_step_entities(
+    async def async_step_signals(
         self, user_input: dict[str, Any] | None = None
-    ) -> Any:
+    ) -> SubentryFlowResult:
+        schema = _room_signals_schema(self._data)
         if user_input is not None:
-            self._data.update(user_input)
+            _merge(self._data, schema, user_input)
             return await self.async_step_settings()
-
-        return self.async_show_form(
-            step_id="entities", data_schema=_entities_schema(self._data)
-        )
+        return self.async_show_form(step_id="signals", data_schema=schema)
 
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
-    ) -> Any:
+    ) -> SubentryFlowResult:
+        schema = _room_settings_schema(self._data)
         if user_input is not None:
-            self._data.update(user_input)
-            return await self.async_step_mpc()
+            _merge(self._data, schema, user_input)
+            return await self.async_step_design()
+        return self.async_show_form(step_id="settings", data_schema=schema)
 
-        return self.async_show_form(
-            step_id="settings", data_schema=_settings_schema(self._data)
-        )
-
-    async def async_step_mpc(self, user_input: dict[str, Any] | None = None) -> Any:
+    async def async_step_design(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        schema = _room_design_schema(self._data)
         if user_input is not None:
-            self._data.update(user_input)
-            self._data[CONF_TRVS] = self._trvs
-            self.hass.config_entries.async_update_entry(
-                self._config_entry, data=self._data
+            _merge(self._data, schema, user_input)
+            if self._reconfiguring:
+                return self.async_update_and_abort(
+                    self._get_entry(),
+                    self._get_reconfigure_subentry(),
+                    data=self._data,
+                )
+            return self.async_create_entry(
+                title=self._data[CONF_ROOM_NAME],
+                data=self._data,
+                unique_id=slugify(self._data[CONF_ROOM_NAME]),
             )
-            # Reload explicitly rather than through an update listener: a room
-            # whose setup failed (e.g. missing room area) has none registered,
-            # and this is how it gets loaded once the values are in.
-            self.hass.config_entries.async_schedule_reload(
-                self._config_entry.entry_id
-            )
-            return self.async_create_entry(title="", data={})
-
-        return self.async_show_form(step_id="mpc", data_schema=_mpc_schema(self._data))
+        return self.async_show_form(step_id="design", data_schema=schema)

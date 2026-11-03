@@ -4,18 +4,23 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import CONF_BOOST_ENABLED, DOMAIN, HeatMode
+from .const import CONF_BOOST_ENABLED, HeatMode
 from .coordinator import HeatingRoomCoordinator
-from .entity import HeatingControllerEntity
+from .entity import HeatingControllerEntity, async_add_room_entities
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    coordinator: HeatingRoomCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([HeatingModeSelect(coordinator)])
+    async_add_room_entities(
+        entry,
+        async_add_entities,
+        lambda coordinator: [HeatingModeSelect(coordinator)],
+    )
 
 
 class HeatingModeSelect(HeatingControllerEntity, SelectEntity):

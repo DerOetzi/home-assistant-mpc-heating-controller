@@ -1,9 +1,8 @@
 """The hold-flow sensor is the ungated counterpart to the min-flow sensor."""
 
-from heating_controller.const import DOMAIN, FlowSupplyStatus
+from heating_controller.const import FlowSupplyStatus
 from homeassistant.core import HomeAssistant, ServiceCall
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-from test_coordinator import _room_data, _seed_entities
+from test_coordinator import _hub_entry, _room_data, _seed_entities
 
 
 def _register_stub_services(hass: HomeAssistant) -> None:
@@ -24,7 +23,7 @@ async def _setup_coasting_room(hass: HomeAssistant, data: dict) -> None:
         "climate.heizung_wohnzimmer", "heat", {"current_temperature": 25.0}
     )
     _register_stub_services(hass)
-    entry = MockConfigEntry(domain=DOMAIN, data=data)
+    entry = _hub_entry(data)
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -79,7 +78,7 @@ async def test_min_flow_sensor_reports_the_recovery_flow_for_a_cold_room(
         "climate.heizung_wohnzimmer", "off", {"current_temperature": 58.0}
     )
     _register_stub_services(hass)
-    entry = MockConfigEntry(domain=DOMAIN, data=_room_data(hass))
+    entry = _hub_entry(_room_data(hass))
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()

@@ -2,67 +2,25 @@
   "title": "Heating Controller",
   "config": {
     "step": {
-      "user": {
-        "title": "Room",
+      "sources": {
+        "title": "Heat pump and house signals",
         "data": {
-          "room_name": "Room name",
-          "trv_count": "Number of TRVs"
-        }
-      },
-      "trv": {
-        "title": "TRV {index}",
-        "data": {
-          "device_id": "Thermostat device",
-          "emitter_type": "Emitter type"
-        },
-        "data_description": {
-          "device_id": "Only devices with a device profile can be picked; see the README to request another model."
-        }
-      },
-      "trv_details": {
-        "title": "TRV {index} details",
-        "data": {
-          "radiator_type": "Panel radiator type",
-          "width_mm": "Radiator width (mm)",
-          "height_mm": "Radiator height (mm)",
-          "nominal_power_w": "Nominal power (W)"
-        }
-      },
-      "entities": {
-        "title": "Sensors and signals",
-        "data": {
-          "room_sensor_entity": "Room temperature sensor (optional)",
-          "window_contact_entities": "Window contacts",
-          "comfort_condition_entities": "Comfort condition entities (global)",
-          "room_comfort_condition_entities": "Room-specific comfort condition entities",
-          "outdoor_temperature_entity": "Outdoor temperature sensor",
+          "outdoor_temperature_entity": "Outdoor temperature sensor (missing value pauses learning)",
           "heat_source_climate_entity": "Heat source climate entity",
-          "flow_temperature_entity": "Flow temperature sensor (measured, with fallback while the heat source is unreachable)",
+          "flow_temperature_entity": "Flow temperature sensor (measured; a gap over 16 min pauses learning)",
+          "flow_threshold_c": "Fixed flow threshold (°C, used without or while the threshold entity is empty)",
           "flow_threshold_entity": "Heat-source flow threshold entity (optional)",
+          "flow_curve_entity": "Effective heating curve (optional, for the flow reserve)",
           "pv_boost_entity": "PV boost entity",
-          "learning_window_entity": "Learning window entity (optional)",
-          "learning_enabled_entity": "Learning enabled entity (optional, off pauses all learning)"
+          "comfort_condition_entities": "House-wide comfort condition entities",
+          "frost_protection_temperature_c": "Frost protection temperature (°C)"
         }
       },
-      "settings": {
-        "title": "Comfort / eco / boost / frost protection",
+      "control": {
+        "title": "Control and design",
         "data": {
-          "boost_enabled": "Enable boost mode",
-          "boost_temperature_offset_c": "Boost temperature offset (°C)",
-          "frost_protection_temperature_c": "Frost protection temperature (°C)",
-          "pv_boost_enabled": "Enable automatic PV boost",
-          "pv_boost_temperature_offset_c": "PV boost temperature offset (°C)"
-        }
-      },
-      "mpc": {
-        "title": "Grey-box thermal model",
-        "data": {
-          "design_indoor_temperature_c": "Design indoor temperature (°C)",
           "design_outdoor_temperature_c": "Design outdoor temperature (°C)",
           "design_temperature_system": "Radiator design temperature system",
-          "room_heat_load_w": "Design heat load (W)",
-          "room_area_m2": "Room area (m², sets the base heat capacity)",
-          "construction": "Construction (ISO 13790 class, sets the heat capacity per m²)",
           "mpc_demand_hysteresis_pct": "Demand hysteresis (%)",
           "mpc_hold_time_s": "Hold time (s)",
           "mpc_hold_override_demand_pct": "Hold override demand (%)",
@@ -78,88 +36,84 @@
       }
     },
     "abort": {
-      "already_configured": "This room is already configured."
-    },
-    "error": {
-      "device_missing": "This device no longer exists.",
-      "unsupported_device": "No device profile covers this device.",
-      "climate_missing": "The device has no single enabled climate entity."
+      "single_instance_allowed": "The heating controller is already set up; add rooms to it.",
+      "already_configured": "The heating controller is already set up; add rooms to it.",
+      "reconfigure_successful": "Settings saved; all rooms reload."
     }
   },
-  "options": {
-    "step": {
-      "trv": {
-        "title": "TRV {index}",
-        "data": {
-          "device_id": "Thermostat device",
-          "emitter_type": "Emitter type"
+  "config_subentries": {
+    "room": {
+      "initiate_flow": {
+        "user": "Add room"
+      },
+      "entry_type": "Room",
+      "step": {
+        "user": {
+          "title": "Room",
+          "data": {
+            "room_name": "Room name",
+            "trv_count": "Number of TRVs"
+          }
         },
-        "data_description": {
-          "device_id": "Only devices with a device profile can be picked; see the README to request another model."
+        "trv": {
+          "title": "TRV {index}",
+          "data": {
+            "device_id": "Thermostat device",
+            "emitter_type": "Emitter type"
+          },
+          "data_description": {
+            "device_id": "Only devices with a device profile can be picked; see the README to request another model."
+          }
+        },
+        "trv_details": {
+          "title": "TRV {index} details",
+          "data": {
+            "radiator_type": "Panel radiator type",
+            "width_mm": "Radiator width (mm)",
+            "height_mm": "Radiator height (mm)",
+            "nominal_power_w": "Nominal power (W)"
+          }
+        },
+        "signals": {
+          "title": "Sensors and signals",
+          "data": {
+            "room_sensor_entity": "Room temperature sensor (optional)",
+            "window_contact_entities": "Window contacts",
+            "use_house_comfort_conditions": "Apply the house-wide comfort conditions",
+            "room_comfort_condition_entities": "Room-specific comfort condition entities",
+            "learning_block_entity": "Block learning while on (optional, e.g. an extra heater in the room)"
+          }
+        },
+        "settings": {
+          "title": "Boost, PV boost and lead room",
+          "data": {
+            "boost_enabled": "Enable boost mode",
+            "boost_temperature_offset_c": "Boost temperature offset (°C)",
+            "pv_boost_enabled": "Enable automatic PV boost",
+            "pv_boost_temperature_offset_c": "PV boost temperature offset (°C)",
+            "lead_heating_limit": "Lead room for the heating limit",
+            "lead_flow": "Lead room for the flow temperature"
+          }
+        },
+        "design": {
+          "title": "Room design",
+          "data": {
+            "design_indoor_temperature_c": "Design indoor temperature (°C)",
+            "room_heat_load_w": "Design heat load (W)",
+            "room_area_m2": "Room area (m², sets the base heat capacity)",
+            "construction": "Construction (ISO 13790 class, sets the heat capacity per m²)"
+          }
         }
       },
-      "trv_details": {
-        "title": "TRV {index} details",
-        "data": {
-          "radiator_type": "Panel radiator type",
-          "width_mm": "Radiator width (mm)",
-          "height_mm": "Radiator height (mm)",
-          "nominal_power_w": "Nominal power (W)"
-        }
+      "abort": {
+        "reconfigure_successful": "Settings saved; all rooms reload."
       },
-      "entities": {
-        "title": "Sensors and signals",
-        "data": {
-          "room_sensor_entity": "Room temperature sensor (optional)",
-          "window_contact_entities": "Window contacts",
-          "comfort_condition_entities": "Comfort condition entities (global)",
-          "room_comfort_condition_entities": "Room-specific comfort condition entities",
-          "outdoor_temperature_entity": "Outdoor temperature sensor",
-          "heat_source_climate_entity": "Heat source climate entity",
-          "flow_temperature_entity": "Flow temperature sensor (measured, with fallback while the heat source is unreachable)",
-          "flow_threshold_entity": "Heat-source flow threshold entity (optional)",
-          "pv_boost_entity": "PV boost entity",
-          "learning_window_entity": "Learning window entity (optional)",
-          "learning_enabled_entity": "Learning enabled entity (optional, off pauses all learning)"
-        }
-      },
-      "settings": {
-        "title": "Comfort / eco / boost / frost protection",
-        "data": {
-          "boost_enabled": "Enable boost mode",
-          "boost_temperature_offset_c": "Boost temperature offset (°C)",
-          "frost_protection_temperature_c": "Frost protection temperature (°C)",
-          "pv_boost_enabled": "Enable automatic PV boost",
-          "pv_boost_temperature_offset_c": "PV boost temperature offset (°C)"
-        }
-      },
-      "mpc": {
-        "title": "Grey-box thermal model",
-        "data": {
-          "design_indoor_temperature_c": "Design indoor temperature (°C)",
-          "design_outdoor_temperature_c": "Design outdoor temperature (°C)",
-          "design_temperature_system": "Radiator design temperature system",
-          "room_heat_load_w": "Design heat load (W)",
-          "room_area_m2": "Room area (m², sets the base heat capacity)",
-          "construction": "Construction (ISO 13790 class, sets the heat capacity per m²)",
-          "mpc_demand_hysteresis_pct": "Demand hysteresis (%)",
-          "mpc_hold_time_s": "Hold time (s)",
-          "mpc_hold_override_demand_pct": "Hold override demand (%)",
-          "mpc_max_demand_step_pct": "Max demand step per 5 minutes (%)",
-          "flow_gate_close_surplus_c": "Surplus gate: close above setpoint + (K)",
-          "flow_gate_open_surplus_c": "Surplus gate: reopen below setpoint + (K)",
-          "flow_gate_hold_time_s": "Surplus gate: hold time before closing (s)",
-          "max_sensor_age_s": "Max sensor age (s)",
-          "stationary_range_c": "Stationary range for learning (K)",
-          "target_band_c": "Target band below setpoint (K)",
-          "trv_setpoint_mode": "TRV target mode"
-        }
+      "error": {
+        "device_missing": "This device no longer exists.",
+        "unsupported_device": "No device profile covers this device.",
+        "climate_missing": "The device has no single enabled climate entity.",
+        "already_configured": "A room with this name already exists."
       }
-    },
-    "error": {
-      "device_missing": "This device no longer exists.",
-      "unsupported_device": "No device profile covers this device.",
-      "climate_missing": "The device has no single enabled climate entity."
     }
   },
   "selector": {
@@ -224,6 +178,9 @@
       },
       "outdoor_temperature_missing": {
         "name": "Outdoor temperature missing"
+      },
+      "lead_heating_demand": {
+        "name": "Lead rooms heating demand"
       }
     },
     "button": {
@@ -322,6 +279,18 @@
       },
       "valve_curve": {
         "name": "Valve curve"
+      },
+      "lead_hold_flow_temperature": {
+        "name": "Lead rooms hold flow temperature"
+      },
+      "lead_min_flow_temperature": {
+        "name": "Lead rooms minimum flow temperature"
+      },
+      "hold_flow_reserve": {
+        "name": "Flow reserve hold"
+      },
+      "min_flow_reserve": {
+        "name": "Flow reserve minimum"
       }
     }
   },

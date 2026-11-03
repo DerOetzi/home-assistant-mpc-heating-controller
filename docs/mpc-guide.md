@@ -3,7 +3,7 @@
 Each room predicts how its own temperature responds to heating and adjusts its radiators'
 target temperature accordingly, rather than just reacting to whether the room is currently
 above or below setpoint. This page covers what to expect from that in day-to-day use — for
-what the fields in the setup/Configure flow actually do, see below.
+what the fields of the hub and the rooms actually do, see below.
 
 ## Modes and setpoints
 
@@ -41,7 +41,7 @@ stands:
 | `learned_at_limit` | The target lay below 0.15: the radiators supplied almost nothing and the room lives off its neighbours. The factor moved towards 0.15 only. |
 | `collecting` | A stretch is running. |
 | `coasting` | The room is more than 0.1 K above its setpoint or below its target band; the stretch starts once it is back or has held its temperature for an hour. |
-| `outside_window` | Learning window entity off, or sun. A room still moving after sunrise reports this, not `coasting`, and a learning window that closes after sunrise balances nothing. |
+| `outside_window` | Sun condition not met. A room still moving after sunrise reports this, not `coasting`. |
 | `paused` | Learning enabled entity off. |
 | `too_short` | The stretch ended with fewer than four usable hours. |
 | `gap` | A sample gap above 20 minutes. |
@@ -115,7 +115,7 @@ for, whatever the model believes the losses are.
   `coasting` until then) — or once it has held its temperature for an
   hour (trend below 0.05 K/h), counted from the start of that hour, so a room its
   neighbours keep above the setpoint still learns. It runs as long as learning is possible and is
-  balanced once when it ends: the learning window entity turns off, learning is paused, a
+  balanced once when it ends: learning is paused, a
   window contact opens, the configured room sensor drops out (the TRVs read up to a kelvin
   off at the radiator; the next stretch starts once it reports again), a TRV starts
   calibrating its valve, the outdoor temperature goes missing (see
@@ -148,24 +148,26 @@ for, whatever the model believes the losses are.
 - **Sun.** Neither factor learns while the sun is up or within two hours after sunset,
   when walls still release the afternoon's solar heat. Sunrise and sunset are calculated
   from the location configured in Home Assistant.
-- **Learning window entity.** The heat-loss factor additionally only learns while the
-  optional learning window entity is on — a night-mode helper, for
-  instance, so evening activity does not count. `unavailable` counts as off. Without an
-  entity this condition is always met. The capacity factor ignores it: its best signal is the
-  recovery after airing a room, which rarely happens at night.
-- **Learning enabled entity.** An optional external veto for both factors: while it is off,
-  nothing is learned, and a window that started before it came back on is discarded, since
-  part of its samples were taken while paused. `unavailable` counts as off. Use it when the
-  inputs themselves cannot be trusted — for instance a flow temperature template that falls
-  back to a calculated heating curve while the heat source is unreachable. Without an
-  entity learning is never paused. A missing outdoor temperature pauses learning on its own.
+- **Pause.** Both factors pause, and a window that started before the pause ended is
+  discarded since part of its samples were taken while paused:
+  - while the room's optional **block learning entity** is on — a reason only this room
+    has, such as an extra heater (an air conditioner heating the bedroom). `unavailable`
+    counts as off;
+  - while the hub's **flow temperature** has had no reading for more than 16 minutes. A heat
+    pump polled through its cloud reports about every 10 minutes and drops a poll now and
+    then; a gap that short is bridged with the last reading. Link the measured sensor, not a
+    template that fills in a calculated value: learning cannot tell the two apart;
+  - while the outdoor temperature is missing (see [Sensor reliability](#sensor-reliability)).
+
+  There is no separate learning window: the heat-loss balance runs in the sun condition
+  above, starting two hours after sunset. Evening activity (cooking, people) can fall into
+  a stretch; the drift check and the start once the room is settled catch part of it.
 
 The heat-loss factor may end up well below 1: room heat loads usually come from a design
 calculation for the worst case (neighbouring rooms unheated, full air change), which a room
 in operation rarely sees. It is limited to 0.1–2.
 
-The learning window entity, the learning enabled entity and the stationary range are set
-per room in the Configure flow.
+The stationary range is set on the hub, the block learning entity per room.
 
 ### Recalibrating
 
@@ -189,7 +191,7 @@ prediction was made with the old factors.
 ## Sizing a room correctly
 
 The **design indoor/outdoor temperature**, **radiator design temperature system** (e.g.
-55/45 °C), and **design heat load** you enter in the setup/Configure flow describe how much
+55/45 °C), and **design heat load** you enter for the hub and the room describe how much
 heat this room's actual radiators can put out at your real system's flow/return
 temperatures — this sets the ceiling on what the model can ever ask the room's own radiators
 for, independent of how well-calibrated the thermal model itself is.
@@ -214,8 +216,7 @@ per square metre of its **construction class** (ISO 13790, table 12):
 | Very heavy | 370 | Massive concrete walls and floors |
 
 The learned capacity factor (0.5–3) scales this base for furniture, open doors and heat
-exchange with neighbouring rooms. Both values are required; a room without them stops with
-a setup error until they are entered in the Configure flow.
+exchange with neighbouring rooms. Both values are required in the room's design step.
 
 The capacity also drives the valve demand and the recovery flow temperature: a lighter
 room reaches its setpoint faster in the prediction, so the controller asks for less
@@ -243,7 +244,7 @@ The current target is kept while it is still above the reading and within one st
 new one, since every write wakes the TRV. **Absolute** spreads the target over the TRV's
 range (18 °C up to its maximum) by demand; there even a few percent of demand ask for 20 °C
 or more and the valve opens almost fully. A TRV without a reading falls back to absolute.
-The mode is set per room in the Configure flow; the attribute `trv_setpoint_writes` of the
+The mode is set on the hub for all rooms; the attribute `trv_setpoint_writes` of the
 target valve opening sensor counts the target writes per TRV since setup.
 
 Every write wakes the TRV, so a valve switches between shut and open sparingly: a shut
@@ -394,11 +395,11 @@ Without the band a heavy room with little radiator reserve at a low flow tempera
 cannot climb the last 0.1 K within 30 minutes at any demand, and the valve stayed fully
 open for hours over one sensor step. With it the room settles within the band, a few
 hundredths to a tenth of a kelvin below the setpoint. A band of 0 aims at the exact
-setpoint. The band is set per room in the Configure flow.
+setpoint. The band is set on the hub for all rooms.
 
 ## Demand smoothing
 
-Three settings in the Configure flow's "Grey-box thermal model" step keep the requested
+Three settings in the hub's "Control and design" step keep the requested
 heating power from chattering cycle to cycle:
 
 - **Demand hysteresis (%)** — a change smaller than this from the last requested value is
@@ -495,8 +496,9 @@ If the flow threshold and the fallback both come from the same heating curve, th
 threshold check is fixed during an outage: with the threshold at the curve's warm end and
 the outdoor temperature clamped to the curve range, the fallback never drops below the
 threshold, so the room stays active. Learning does not see the difference between a
-measured and a calculated flow temperature; pause it through the learning enabled entity
-while the fallback is in use.
+measured and a calculated flow temperature, so the hub should read the measured one; a
+fallback template keeps the rooms controlled but lets learning continue on calculated
+values.
 
 ## Multiple rooms sharing one heat source
 
@@ -505,6 +507,22 @@ Each room independently reports its own required minimum flow temperature (see t
 several rooms, the room asking for the highest flow temperature at any moment is the one
 actually determining what the shared source needs to deliver — worth keeping in mind when
 tuning any individual room's design values.
+
+The hub sums this up over the **lead rooms**, marked per room by two checkboxes:
+
+- **Lead room for the heating limit** — *Lead rooms hold flow temperature* is the highest
+  gated hold flow among them; *Lead rooms heating demand* is on while it reaches the flow
+  threshold (the threshold entity if linked, else the hub's fixed threshold). Rooms that
+  live off their neighbours or are heated by something else are better left out, or they
+  keep the heat pump running for nothing.
+- **Lead room for the flow temperature** — *Lead rooms minimum flow temperature* is the
+  highest minimum flow (recovery included) among them, the flow the heating curve should
+  reach.
+
+With an effective heating curve entity on the hub, *Flow reserve hold* and *Flow reserve
+minimum* report the curve minus each value: negative means the curve does not reach what a
+lead room needs. Both values are rounded to 0.1 K; the reserves are unavailable while the
+lead flow is 0 (all lead rooms in their surplus buffer).
 
 ## How the minimum flow temperature is computed
 

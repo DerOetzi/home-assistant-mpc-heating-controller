@@ -6,7 +6,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A Home Assistant custom integration for **model-predictive-control (MPC) room heating** —
-one config entry per room, combining a self-calibrating grey-box thermal model with
+one hub per house with the rooms as its sub-entries, combining a self-calibrating grey-box
+thermal model with
 rate-limited demand control and a purpose-built Lovelace card to operate it.
 
 ## Features
@@ -58,12 +59,12 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   [docs/mpc-guide.md](docs/mpc-guide.md#sensor-reliability).
 - **Persisted learning** — each room's learned `ua_factor`/`capacity_factor` survive
   restarts (`homeassistant.helpers.storage.Store`, one file per room) and are removed
-  cleanly if the room's config entry is deleted. The admin-only
+  cleanly if the room is deleted from the hub. The admin-only
   `heating_controller.recalibrate` service sets or resets them.
 - **Learning only when gains are small** — learning pauses while the sun is up and for two
-  hours after sunset, the heat-loss factor also follows an optional learning window entity
-  (e.g. a night-mode helper), an optional learning enabled entity pauses both factors (e.g.
-  while an input is only estimated). The heat-loss factor comes from a heat balance
+  hours after sunset, while the outdoor temperature is missing or the flow temperature has
+  had no reading for over 16 minutes, and while a room's optional *block learning* entity is
+  on (e.g. an extra heater in that room). The heat-loss factor comes from a heat balance
   over each usable night stretch (four to eight hours) of the requested heating power, the capacity factor from replaying 30-minute
   windows with that power. See [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
 - **Custom Lovelace card** (`custom:heating-controller-card`) — a single card per room
@@ -91,29 +92,50 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
 
 ## Setup
 
-Add one config entry per room via **Settings → Devices & Services → Add Integration →
-Heating Controller**. The setup flow walks through:
+**Settings → Devices & Services → Add Integration → Heating Controller** creates the hub,
+once per house. It holds everything that applies to the whole house:
+
+1. **Heat pump and house signals** — outdoor temperature sensor, heat source `climate`
+   entity (operating state), measured flow temperature sensor, fixed flow threshold and an
+   optional threshold entity, optional effective heating curve (for the flow reserve),
+   PV-boost entity, house-wide comfort conditions, frost-protection temperature.
+2. **Control and design** — design outdoor temperature and system flow/return temperatures
+   (used to size the emitter curves), demand-control hysteresis/hold-time/max-step tuning,
+   surplus gate, sensor age, the stationary range that decides which factor a measurement
+   window trains, target band and TRV target mode.
+
+**Reconfigure** on the hub changes these; all rooms reload.
+
+Then **Add room** on the hub, once per room:
 
 1. **Room name and TRV count** — how many thermostatic radiator valves heat this room.
 2. **Per-TRV details** (repeated once per TRV) — the thermostat device, emitter type, and
    (depending on emitter type) panel radiator type/dimensions or nominal power. The
    device's profile supplies everything else, see [Supported devices](#supported-devices).
-3. **Entities** — optional room temperature sensor, window contacts, room-specific comfort
-   conditions, PV-boost entity, optional learning window and learning enabled entities,
-   plus the required outdoor
-   temperature sensor, shared heat source `climate` entity (operating state) and flow
-   temperature sensor.
-4. **Settings** — boost enable/offset, frost-protection temperature, PV-boost enable/offset.
-5. **MPC parameters** — design indoor/outdoor temperature and system flow/return
-   temperatures (used to size the emitter curve), room heat load, room area and
-   construction class (the base heat capacity), demand-control
-   hysteresis/hold-time/max-step tuning, and the stationary range that decides which
-   factor a measurement window trains.
+3. **Sensors and signals** — optional room temperature sensor, window contacts, whether the
+   house-wide comfort conditions apply, room-specific comfort conditions, optional entity
+   that blocks learning while on.
+4. **Boost, PV boost and lead room** — boost enable/offset, PV-boost enable/offset, and
+   whether the room is a lead room for the heating limit and/or the flow temperature.
+5. **Room design** — design indoor temperature, room heat load, room area and construction
+   class (the base heat capacity).
 
-All of the above is editable afterwards via the entry's **Configure** options flow — it
-re-runs the same steps pre-filled with the current values.
+**Reconfigure** on a room re-runs steps 2–5 pre-filled (the name stays: the room's
+learning files are keyed by it). Deleting a room removes its entities and its learning
+files.
 
-Deleting a room's config entry removes its entities and its persisted learning-factor file.
+### Hub entities
+
+The hub's device *Heizung* reports the lead rooms:
+
+- *Lead rooms hold flow temperature* — highest gated hold flow among the heating-limit lead
+  rooms (attributes: `room` with the highest value, `rooms`).
+- *Lead rooms minimum flow temperature* — highest minimum flow among the flow lead rooms.
+- *Lead rooms heating demand* — on while the hold flow reaches the flow threshold;
+  unavailable while either is missing.
+- *Flow reserve hold* / *Flow reserve minimum* — heating curve minus the two flows above,
+  only with a heating curve entity; unavailable while the flow is 0 (all lead rooms in
+  their surplus buffer).
 
 ## Supported devices
 
@@ -180,12 +202,13 @@ rows) are configured entirely through the editor's sortable lists — see
 
 ## Notes
 
-- Each room is its own config entry — deleting a room removes only that room's entities and
-  learning data, other rooms are unaffected.
+- Each room is a sub-entry of the hub — deleting a room removes only that room's entities and
+  learning data, other rooms keep running. Adding, changing or deleting a room reloads all
+  rooms.
 - Learning (the `ua_factor`/`capacity_factor` self-calibration) only runs while the shared
   heat source is actually calling for heat at or above the configured flow threshold; outside the
   heating season the room simply stops adjusting until it's needed again. Within that time
-  it also waits for the sun, the learning window entity and the learning enabled entity, see
+  it also waits for the sun, the outdoor and flow readings and the room's block entity, see
   [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
 - The card doesn't care about entity IDs — rename any of a room's entities freely, the card
   keeps working.

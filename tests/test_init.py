@@ -1,12 +1,8 @@
 import pytest
 import voluptuous as vol
-from heating_controller.const import (
-    DEFAULT_FLOW_THRESHOLD_C,
-    DEFAULT_TARGET_BAND_C,
-    DOMAIN,
-    HeatMode,
-)
+from heating_controller.const import DOMAIN, HeatMode
 from heating_controller.controller.mpc.types import LearningFactors
+from heating_controller.store import LearningFactorsStore
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, HomeAssistant, ServiceCall
 from homeassistant.exceptions import Unauthorized
@@ -16,6 +12,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry, MockUs
 from test_coordinator import (
     ENTRY_DATA,
     TRV_EMITTER,
+    _hub_entry,
     _room_data,
     _seed_entities,
     register_trv_device,
@@ -35,7 +32,7 @@ async def test_setup_entry_registers_service_and_entities(hass: HomeAssistant) -
     hass.services.async_register("switch", "turn_on", switch_handler)
     hass.services.async_register("switch", "turn_off", switch_handler)
 
-    entry = MockConfigEntry(domain=DOMAIN, data=_room_data(hass))
+    entry = _hub_entry(_room_data(hass))
     entry.add_to_hass(hass)
 
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -73,7 +70,7 @@ async def test_remove_entry_deletes_learning_factors_store(hass: HomeAssistant) 
     hass.services.async_register("switch", "turn_on", switch_handler)
     hass.services.async_register("switch", "turn_off", switch_handler)
 
-    entry = MockConfigEntry(domain=DOMAIN, data=_room_data(hass))
+    entry = _hub_entry(_room_data(hass))
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -99,40 +96,6 @@ async def test_remove_entry_deletes_learning_factors_store(hass: HomeAssistant) 
     assert await leftover_gate_store.async_load() is None
 
 
-async def test_migration_drops_the_numeric_flow_threshold(hass: HomeAssistant) -> None:
-    _seed_entities(hass)
-
-    async def climate_handler(call: ServiceCall) -> None:
-        pass
-
-    async def switch_handler(call: ServiceCall) -> None:
-        pass
-
-    hass.services.async_register("climate", "set_temperature", climate_handler)
-    hass.services.async_register("switch", "turn_on", switch_handler)
-    hass.services.async_register("switch", "turn_off", switch_handler)
-
-    legacy_data = {
-        key: value
-        for key, value in _room_data(hass).items()
-        if key != "flow_threshold_entity"
-    }
-    legacy_data["flow_threshold_c"] = 30.0
-    entry = MockConfigEntry(domain=DOMAIN, data=legacy_data, version=1)
-    entry.add_to_hass(hass)
-
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-
-    assert entry.version == 7
-    assert "flow_threshold_c" not in entry.data
-
-    coordinator = hass.data[DOMAIN][entry.entry_id]
-    assert coordinator.flow_threshold_c == DEFAULT_FLOW_THRESHOLD_C
-
-    assert await hass.config_entries.async_unload(entry.entry_id)
-
-
 async def _setup_room(hass: HomeAssistant) -> MockConfigEntry:
     _seed_entities(hass)
 
@@ -143,7 +106,7 @@ async def _setup_room(hass: HomeAssistant) -> MockConfigEntry:
     hass.services.async_register("switch", "turn_on", handler)
     hass.services.async_register("switch", "turn_off", handler)
 
-    entry = MockConfigEntry(domain=DOMAIN, data=_room_data(hass))
+    entry = _hub_entry(_room_data(hass))
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -235,7 +198,7 @@ async def test_setup_drops_the_old_observer_store(hass: HomeAssistant) -> None:
     hass.services.async_register("climate", "set_temperature", handler)
     hass.services.async_register("switch", "turn_on", handler)
     hass.services.async_register("switch", "turn_off", handler)
-    entry = MockConfigEntry(domain=DOMAIN, data=_room_data(hass), entry_id=entry_id)
+    entry = _hub_entry(_room_data(hass), entry_id=entry_id)
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -299,182 +262,6 @@ async def test_recalibrate_is_admin_only(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-_ADDED_IN_V3 = ("room_area_m2", "construction", "flow_temperature_entity")
-
-
-def _register_noop_services(hass: HomeAssistant) -> None:
-    async def handler(call: ServiceCall) -> None:
-        pass
-
-    hass.services.async_register("climate", "set_temperature", handler)
-    hass.services.async_register("switch", "turn_on", handler)
-    hass.services.async_register("switch", "turn_off", handler)
-
-
-async def test_migration_to_v3_invents_no_values(hass: HomeAssistant) -> None:
-    _seed_entities(hass)
-    _register_noop_services(hass)
-    data = {key: value for key, value in _room_data(hass).items() if key not in _ADDED_IN_V3}
-    entry = MockConfigEntry(domain=DOMAIN, data=data, version=2)
-    entry.add_to_hass(hass)
-
-    assert not await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-
-    assert entry.version == 7
-    assert all(key not in entry.data for key in _ADDED_IN_V3)
-    assert entry.state is ConfigEntryState.SETUP_ERROR
-
-
-async def test_migration_to_v6_switches_to_relative_targets(
-    hass: HomeAssistant,
-) -> None:
-    _seed_entities(hass)
-    _register_noop_services(hass)
-    data = {key: value for key, value in _room_data(hass).items() if key != "trv_setpoint_mode"}
-    entry = MockConfigEntry(domain=DOMAIN, data=data, version=5)
-    entry.add_to_hass(hass)
-
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-
-    assert entry.version == 7
-    assert entry.data["trv_setpoint_mode"] == "relative"
-
-    assert await hass.config_entries.async_unload(entry.entry_id)
-
-
-async def test_migration_to_v7_binds_a_trv_by_its_device(
-    hass: HomeAssistant,
-) -> None:
-    _seed_entities(hass)
-    _register_noop_services(hass)
-    device_id = register_trv_device(
-        hass,
-        properties=(
-            ("climate", "climate", ""),
-            ("switch", "switch_heat_available", "_trv_active"),
-            ("sensor", "pi_heating_demand", "_pi_heating_demand"),
-        ),
-    )
-    data = {
-        **ENTRY_DATA,
-        "trvs": [
-            {
-                "entity_id": "climate.heizung_wohnzimmer",
-                "trv_active_switch": "switch.heizung_wohnzimmer_trv_active",
-                "valve_position_entity": "sensor.heizung_wohnzimmer_pi_heating_demand",
-                "min_target_temperature_c": 5.0,
-                "max_target_temperature_c": 28.0,
-                "target_temperature_step_c": 0.5,
-                **TRV_EMITTER,
-            }
-        ],
-    }
-    entry = MockConfigEntry(domain=DOMAIN, data=data, version=6)
-    entry.add_to_hass(hass)
-
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-
-    assert entry.version == 7
-    assert entry.data["trvs"] == [{"device_id": device_id, **TRV_EMITTER}]
-    coordinator = hass.data[DOMAIN][entry.entry_id]
-    assert coordinator.trv_entity_ids == ["climate.heizung_wohnzimmer"]
-    assert coordinator._valve_position_entities == [
-        "sensor.heizung_wohnzimmer_pi_heating_demand"
-    ]
-
-    assert await hass.config_entries.async_unload(entry.entry_id)
-
-
-async def test_migration_to_v7_stops_at_a_trv_without_profile(
-    hass: HomeAssistant,
-) -> None:
-    _seed_entities(hass)
-    _register_noop_services(hass)
-    register_trv_device(hass, model_id="unknown-model")
-    data = {
-        **ENTRY_DATA,
-        "trvs": [{"entity_id": "climate.heizung_wohnzimmer", **TRV_EMITTER}],
-    }
-    entry = MockConfigEntry(domain=DOMAIN, data=data, version=6)
-    entry.add_to_hass(hass)
-
-    assert not await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-
-    assert entry.state is ConfigEntryState.MIGRATION_ERROR
-    assert entry.version == 6
-
-
-async def test_migration_to_v4_sets_the_default_target_band(
-    hass: HomeAssistant,
-) -> None:
-    _seed_entities(hass)
-    _register_noop_services(hass)
-    data = {key: value for key, value in _room_data(hass).items() if key != "target_band_c"}
-    entry = MockConfigEntry(domain=DOMAIN, data=data, version=3)
-    entry.add_to_hass(hass)
-
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-
-    assert entry.version == 7
-    assert entry.data["target_band_c"] == DEFAULT_TARGET_BAND_C
-
-    assert await hass.config_entries.async_unload(entry.entry_id)
-
-
-@pytest.mark.parametrize("missing", _ADDED_IN_V3)
-async def test_setup_fails_without_a_required_value(
-    hass: HomeAssistant, missing: str
-) -> None:
-    _seed_entities(hass)
-    _register_noop_services(hass)
-    data = {key: value for key, value in _room_data(hass).items() if key != missing}
-    entry = MockConfigEntry(domain=DOMAIN, data=data, version=3)
-    entry.add_to_hass(hass)
-
-    assert not await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-
-    assert entry.state is ConfigEntryState.SETUP_ERROR
-    assert missing in entry.reason
-
-
-async def test_options_flow_loads_a_room_whose_setup_failed(
-    hass: HomeAssistant,
-) -> None:
-    _seed_entities(hass)
-    _register_noop_services(hass)
-    data = {key: value for key, value in _room_data(hass).items() if key not in _ADDED_IN_V3}
-    entry = MockConfigEntry(domain=DOMAIN, data=data, version=3)
-    entry.add_to_hass(hass)
-    assert not await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-    assert entry.state is ConfigEntryState.SETUP_ERROR
-
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
-    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"flow_temperature_entity": "sensor.flow_temperature"}
-    )
-    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"room_area_m2": 20.0, "construction": "medium"}
-    )
-    await hass.async_block_till_done()
-
-    assert entry.state is ConfigEntryState.LOADED
-    assert hass.data[DOMAIN][entry.entry_id].mpc.effective_capacity_j_per_k == (
-        20.0 * 165 * 1000
-    )
-
-    assert await hass.config_entries.async_unload(entry.entry_id)
-
-
 async def test_unload_flushes_the_valve_curve_and_removal_leaves_no_file(
     hass: HomeAssistant, freezer, hass_storage
 ) -> None:
@@ -502,10 +289,7 @@ async def test_unload_flushes_the_valve_curve_and_removal_leaves_no_file(
     hass.services.async_register("climate", "set_temperature", handler)
     hass.services.async_register("switch", "turn_on", handler)
     hass.services.async_register("switch", "turn_off", handler)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={**ENTRY_DATA, "trvs": [{"device_id": device_id, **TRV_EMITTER}]},
-    )
+    entry = _hub_entry({**ENTRY_DATA, "trvs": [{"device_id": device_id, **TRV_EMITTER}]})
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -536,3 +320,102 @@ async def test_unload_flushes_the_valve_curve_and_removal_leaves_no_file(
     # No delayed write is left to bring the file back.
     await _poll(hass, freezer, 11)
     assert key not in hass_storage
+
+
+async def test_removing_a_room_drops_its_stores_and_keeps_the_hub(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup_room(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    await coordinator.store.async_save(LearningFactors(ua_factor=0.8, capacity_factor=1.0))
+
+    hass.config_entries.async_remove_subentry(entry, entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.entry_id not in hass.data[DOMAIN]
+    assert hass.states.get("select.wohnzimmer_heating_mode") is None
+    leftover = LearningFactorsStore(hass, ENTRY_DATA["room_name"], entry.entry_id)
+    assert await leftover.async_load() is None
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_room_whose_trv_is_gone_stays_out(hass: HomeAssistant) -> None:
+    _register_noop_services(hass)
+    _seed_entities(hass)
+    entry = _hub_entry({**ENTRY_DATA, "trvs": [{"device_id": "gone", **TRV_EMITTER}]})
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.entry_id not in hass.data[DOMAIN]
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_hub_reports_the_lead_rooms(hass: HomeAssistant) -> None:
+    _register_noop_services(hass)
+    _seed_entities(hass)
+    hass.states.async_set("sensor.flow_curve", "36.0")
+    entry = _hub_entry(
+        {
+            **_room_data(hass),
+            "lead_heating_limit": True,
+            "lead_flow": True,
+            "flow_curve_entity": "sensor.flow_curve",
+        }
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    hold_c = coordinator.normal_gated_hold_flow_temperature_c
+    min_c = coordinator.normal_min_flow_temperature_c
+    assert hold_c is not None and min_c is not None
+
+    hold = hass.states.get("sensor.heizung_lead_rooms_hold_flow_temperature")
+    assert float(hold.state) == round(hold_c, 1)
+    assert hold.attributes["room"] == "Wohnzimmer"
+    assert hold.attributes["rooms"] == ["Wohnzimmer"]
+    minimum = hass.states.get("sensor.heizung_lead_rooms_minimum_flow_temperature")
+    assert float(minimum.state) == round(min_c, 1)
+
+    demand = hass.states.get("binary_sensor.heizung_lead_rooms_heating_demand")
+    assert demand.state == ("on" if round(hold_c, 1) >= 30.0 else "off")
+
+    reserve = hass.states.get("sensor.heizung_flow_reserve_hold")
+    if round(hold_c, 1) > 0:
+        assert float(reserve.state) == round(36.0 - round(hold_c, 1), 1)
+
+    hass.states.async_set("input_number.flow_threshold", "unavailable")
+    await hass.async_block_till_done()
+    demand = hass.states.get("binary_sensor.heizung_lead_rooms_heating_demand")
+    assert demand.state == "unavailable"
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_hub_without_lead_rooms_reports_nothing(hass: HomeAssistant) -> None:
+    entry = await _setup_room(hass)
+
+    hold = hass.states.get("sensor.heizung_lead_rooms_hold_flow_temperature")
+    assert hold.state == "unknown"
+    assert hold.attributes["rooms"] == []
+    demand = hass.states.get("binary_sensor.heizung_lead_rooms_heating_demand")
+    assert demand.state == "unavailable"
+    assert hass.states.get("sensor.heizung_flow_reserve_hold") is None
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+def _register_noop_services(hass: HomeAssistant) -> None:
+    async def handler(call: ServiceCall) -> None:
+        pass
+
+    hass.services.async_register("climate", "set_temperature", handler)
+    hass.services.async_register("switch", "turn_on", handler)
+    hass.services.async_register("switch", "turn_off", handler)

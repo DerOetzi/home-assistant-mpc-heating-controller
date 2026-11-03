@@ -7,7 +7,7 @@ from heating_controller.const import DOMAIN
 from homeassistant.components.frontend import DATA_EXTRA_MODULE_URL
 from homeassistant.core import HomeAssistant, ServiceCall
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from test_coordinator import _room_data, _seed_entities
+from test_coordinator import _hub_entry, _room_data, _seed_entities
 
 
 def _register_stub_services(hass: HomeAssistant) -> None:
@@ -20,8 +20,8 @@ def _register_stub_services(hass: HomeAssistant) -> None:
 
 
 async def _setup_entry(hass: HomeAssistant, room_name: str) -> MockConfigEntry:
-    entry = MockConfigEntry(
-        domain=DOMAIN, data={**_room_data(hass), "room_name": room_name}
+    entry = _hub_entry(
+        {**_room_data(hass), "room_name": room_name}, entry_id=f"hub-{room_name}"
     )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
