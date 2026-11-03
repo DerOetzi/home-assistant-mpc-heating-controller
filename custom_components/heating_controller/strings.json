@@ -250,7 +250,7 @@
         "name": "Hold flow temperature"
       },
       "heating_demand": {
-        "name": "Heating demand"
+        "name": "Target valve opening"
       },
       "requested_heating_power": {
         "name": "Requested heating power"

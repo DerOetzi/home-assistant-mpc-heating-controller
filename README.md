@@ -23,8 +23,11 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   [`docs/mpc-guide.md`](docs/mpc-guide.md#radiator-lag-and-the-room-observer).
 - **Per-TRV emitter modelling** — each thermostatic radiator valve is configured with its
   emitter type (panel radiator or towel radiator), panel radiator type (10/11/21/22/33) and
-  dimensions, or a fixed nominal power for towel radiators — used to translate MPC demand
-  into an actual valve target temperature.
+  dimensions, or a fixed nominal power for towel radiators. The MPC demand is the target
+  valve opening (sensor "Target valve opening", entity `heating_demand`); the planner
+  expects the heat the radiators give off at that opening, and in relative mode each TRV's
+  offset comes from its valve curve: learned, until then the profile's starting value (a
+  weighted fallback only for TRVs without either).
 - **Comfort / eco / boost / frost-protection mode state machine** — a `select` entity per
   room drives the active mode; `comfort`/`eco` setpoints are independently adjustable
   `number` entities, boost applies a temporary offset on top of comfort, and frost
@@ -135,7 +138,8 @@ What the controller does with each entity:
 - **climate** — reads the TRV's own temperature and writes the target temperature.
 - **Valve opening** — the heat the radiator really gives off, see
   [docs/mpc-guide.md](docs/mpc-guide.md#valve-position-the-heat-the-radiators-really-get).
-  Each TRV with it also learns its own valve curve (setpoint offset → opening), see
+  Each TRV with it also learns its own valve curve (setpoint offset → opening), which
+  sets its offset for the target opening in relative mode, see
   [docs/mpc-guide.md](docs/mpc-guide.md#valve-curve).
 - **Heat available** — switched on while the heat source delivers heat, so the TRV knows
   whether opening its valve can help.
@@ -156,7 +160,10 @@ valve_characteristic_seed:
   - [3.0, 100]
 ```
 
-Without it a TRV learns its curve from scratch. The Danfoss Ally profiles carry the values
+Until a TRV has learned its curve (and while its curve scatters) the starting value sets its
+offsets. Without one a TRV learns its curve from scratch and until then gets a weighted
+fallback offset that fits the target opening poorly, so give a profile for a new TRV model a
+starting value. The Danfoss Ally profiles carry the values
 above, read off one TRV in October 2026; each TRV replaces them with what it learns.
 
 Upgrading from a version that configured TRVs by entity migrates every TRV to its device.

@@ -121,14 +121,49 @@ def test_the_first_reported_target_is_no_change():
     assert learner.bins() == []
 
 
-def test_without_samples_the_seed_is_the_curve():
+def test_without_samples_the_status_is_seed():
     seeded = ValveCurveLearner(DANFOSS_SEED)
     unseeded = ValveCurveLearner(None)
 
     assert seeded.status is ValveCurveStatus.SEED
-    assert seeded.characteristic() == DANFOSS_SEED
     assert unseeded.status is ValveCurveStatus.SEED
-    assert unseeded.characteristic() is None
+
+
+def _no_samples(trv):
+    pass
+
+
+def _two_bins(trv):
+    trv.sample(0.7, 30, times=3)
+    trv.sample(1.2, 50, times=3)
+
+
+def _scattered_bin(trv):
+    for opening_pct in (10, 20, 50, 60, 80):
+        trv.sample(0.7, opening_pct)
+
+
+@pytest.mark.parametrize(
+    ("prepare", "status"),
+    [
+        pytest.param(_no_samples, ValveCurveStatus.SEED, id="seed"),
+        pytest.param(_two_bins, ValveCurveStatus.LEARNING, id="learning"),
+        pytest.param(_scattered_bin, ValveCurveStatus.SCATTERED, id="scattered"),
+    ],
+)
+def test_until_learned_the_seed_is_the_curve(prepare, status):
+    seeded = _Trv(ValveCurveLearner(DANFOSS_SEED))
+    unseeded = _Trv(ValveCurveLearner(None))
+    prepare(seeded)
+    prepare(unseeded)
+
+    # The planner counts in openings: the seed maps them to offsets until
+    # the TRV has learned its own curve; partial bins are not merged. Without
+    # a seed there is no curve and the control keeps the weighted mapping.
+    assert seeded.learner.status is status
+    assert seeded.learner.characteristic() == DANFOSS_SEED
+    assert unseeded.learner.status is status
+    assert unseeded.learner.characteristic() is None
 
 
 def test_a_bin_counts_from_three_samples():
@@ -177,6 +212,7 @@ def test_curve_is_monotone():
 
     trv.sample(0.7, 50, times=3)
     trv.sample(1.2, 45, times=3)
+    trv.sample(2.2, 85, times=3)
 
     assert trv.learner.characteristic().opening_pct(1.2) == pytest.approx(50)
 
@@ -186,27 +222,25 @@ def test_without_seed_the_full_open_anchor_is_added():
 
     trv.sample(0.7, 30, times=3)
     trv.sample(1.2, 50, times=3)
+    trv.sample(2.2, 85, times=3)
 
-    assert _points(trv.learner) == ((0.7, 30.0), (1.2, 50.0), (3.0, 100.0))
+    # Learned, but no point from 2.5 K on: 3.0 K counts as fully open.
+    assert _points(trv.learner) == (
+        (0.7, 30.0),
+        (1.2, 50.0),
+        (2.2, 85.0),
+        (3.0, 100.0),
+    )
 
 
 def test_a_learned_wide_offset_needs_no_anchor():
     trv = _Trv(ValveCurveLearner(None))
 
     trv.sample(0.7, 30, times=3)
+    trv.sample(1.2, 50, times=3)
     trv.sample(2.7, 95, times=3)
 
-    assert _points(trv.learner) == ((0.7, 30.0), (2.7, 95.0))
-
-
-def test_scattered_bin_disables_the_curve():
-    trv = _Trv(ValveCurveLearner(DANFOSS_SEED))
-
-    for opening_pct in (10, 20, 50, 60, 80):
-        trv.sample(0.7, opening_pct)
-
-    assert trv.learner.status is ValveCurveStatus.SCATTERED
-    assert trv.learner.characteristic() is None
+    assert _points(trv.learner) == ((0.7, 30.0), (1.2, 50.0), (2.7, 95.0))
 
 
 def test_spread_below_five_samples_does_not_scatter():

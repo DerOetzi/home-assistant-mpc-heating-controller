@@ -6,7 +6,10 @@ valve to valve (pre-setting, valve insert, how the TRV sits on it), so each
 TRV learns it while it runs: whenever its reported setpoint changes, the
 opening it holds some minutes later is one sample for that offset.
 
-Only learned and shown here; the controller does not use the curve yet.
+In relative mode the controller sets each TRV's offset for the target
+opening from this curve (see HeatEmitterModel.calculate_target_temperatures):
+the learned one, until then and for a scattered TRV the profile's seed. Only
+a TRV with neither falls back to the weighted mapping.
 """
 
 from __future__ import annotations
@@ -69,11 +72,14 @@ _BIN_ROUNDING_DIGITS = 6
 class ValveCurveStatus(StrEnum):
     # No valid bin yet: the seed (if any) is the curve.
     SEED = "seed"
-    # One or two valid bins.
+    # Valid bins, but too few or none where the valve opens wide: still the
+    # seed, partial bins are not merged.
     LEARNING = "learning"
-    # Enough valid bins, one of them where the valve opens wide.
+    # Enough valid bins, one of them where the valve opens wide: learned
+    # points, the seed beyond them.
     LEARNED = "learned"
-    # One bin scatters too much for a static curve.
+    # One bin scatters too much for a static curve: the seed, as the
+    # nearest to how the valve opens.
     SCATTERED = "scattered"
 
 
@@ -230,12 +236,18 @@ class ValveCurveLearner:
         return ValveCurveStatus.LEARNING
 
     def characteristic(self) -> ValveCharacteristic | None:
-        """Learned points, the seed beyond them; None if there is no curve."""
-        if self.status is ValveCurveStatus.SCATTERED:
-            return None
-        learned = [(bin_.offset_c, bin_.opening_pct) for bin_ in self._valid_bins()]
-        if not learned:
+        """Learned points with the seed beyond them; else the seed.
+
+        Until learned (and for a scattered TRV) the profile's seed is the
+        curve: the planner counts in openings, and the seed maps them to
+        offsets far better than the power-weighted fallback. Partial bins
+        are not merged; a curve of one or two bins says nothing about the
+        rest of the range. None only without seed and not learned: the
+        control then keeps its weighted mapping (unknown TRV models).
+        """
+        if self.status is not ValveCurveStatus.LEARNED:
             return self._seed
+        learned = [(bin_.offset_c, bin_.opening_pct) for bin_ in self._valid_bins()]
 
         points = list(learned)
         if self._seed is not None:

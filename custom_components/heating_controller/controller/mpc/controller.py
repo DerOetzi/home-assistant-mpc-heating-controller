@@ -8,9 +8,9 @@ from math import ceil
 from ...const import CapacityOutcome, TrvSetpointMode
 from .hot_water import HotWaterChargeDetector
 from .learner import LearnerPrediction, RoomMpcModelLearner
-from .math_helper import clamp, round_to_step
+from .math_helper import clamp
 from .models.capacity import ThermalCapacityModel
-from .models.emitter import HeatEmitterModel
+from .models.emitter import HeatEmitterModel, below_activation
 from .models.loss import RoomLossModel
 from .models.valve import ValveCharacteristic
 from .observer import ObserverEstimate, RoomStateObserver, step_radiator_power_w
@@ -404,20 +404,29 @@ class RoomMpcController:
             ),
         )
 
-        optimal_demand = self._find_optimal_demand_prediction(mpc_input, estimate)
+        # Below this a demand writes the TRVs their minimum target (see the
+        # emitter): neither the search nor the smoothing may settle there.
+        activation_pct = self._emitter_model.activation_threshold_pct(
+            self._current_trv_targets
+        )
+        optimal_demand = self._find_optimal_demand_prediction(
+            mpc_input, estimate, activation_pct
+        )
         if apply_side_effects and skip_demand_smoothing:
             stabilized_demand_pct = self._reset_demand_rate_limiting(
                 mpc_input, optimal_demand.demand_pct
             )
         elif apply_side_effects:
             stabilized_demand_pct = self._apply_demand_rate_limiting(
-                mpc_input, optimal_demand.demand_pct
+                mpc_input, optimal_demand.demand_pct, activation_pct
             )
         else:
             stabilized_demand_pct = optimal_demand.demand_pct
 
-        requested_heating_power_w = round_to_step(
-            available_heating_power_w * (stabilized_demand_pct / 100), 0.01
+        # The demand is the target valve opening: what the radiators give
+        # off there, on the same curve the observer uses for a reported one.
+        requested_heating_power_w = self._emitter_model.planned_heating_power_w(
+            mpc_input.room_temp_c, mpc_input.flow_temp_c, stabilized_demand_pct
         )
 
         # The TRVs are thermostats: a small demand can open a valve fully. Where
@@ -474,6 +483,8 @@ class RoomMpcController:
                 self._trv_setpoint_mode,
                 mpc_input.trv_temperatures,
                 self._current_trv_targets,
+                # Fetched on every call: the curves keep learning.
+                self.valve_characteristics(),
             ),
             input=mpc_input,
             demand_pct=stabilized_demand_pct,
@@ -588,7 +599,10 @@ class RoomMpcController:
         )
 
     def _find_optimal_demand_prediction(
-        self, mpc_input: RoomMpcInput, estimate: ObserverEstimate
+        self,
+        mpc_input: RoomMpcInput,
+        estimate: ObserverEstimate,
+        activation_pct: float,
     ) -> _DemandPrediction:
         """Demand whose prediction lands closest to the target band.
 
@@ -605,6 +619,11 @@ class RoomMpcController:
         hold_demand_pct = self._hold_demand_pct(mpc_input)
 
         for demand_pct in range(0, 101, MPC_DEMAND_SEARCH_STEP_PCT):
+            if below_activation(demand_pct, activation_pct):
+                # The TRVs would get their minimum target, not this opening:
+                # a small hold opening otherwise planned heat a shut valve
+                # never got, and the room cycled shut-open-overshoot.
+                continue
             predicted_temperature_c = self._predict_room_temperature_c(
                 mpc_input, estimate, demand_pct, MPC_PREDICTION_HORIZON_S
             )
@@ -640,21 +659,16 @@ class RoomMpcController:
         return 0.0
 
     def _hold_demand_pct(self, mpc_input: RoomMpcInput) -> float:
-        """Demand that holds the setpoint in steady state."""
+        """Valve opening that holds the setpoint in steady state."""
         hold_power_w = max(
             0.0,
             self._loss_model.calculate_heat_loss_w(
                 mpc_input.target_temp_c, mpc_input.outdoor_temp_c
-            )
+            ),
         )
-        available_heating_power_w = (
-            self._emitter_model.calculate_available_heating_power_w(
-                mpc_input.target_temp_c, mpc_input.flow_temp_c
-            )
+        return self._emitter_model.opening_for_power_pct(
+            mpc_input.target_temp_c, mpc_input.flow_temp_c, hold_power_w
         )
-        if available_heating_power_w <= 0:
-            return 100.0
-        return clamp(100 * hold_power_w / available_heating_power_w, 0, 100)
 
     def _predict_room_temperature_c(
         self,
@@ -690,12 +704,9 @@ class RoomMpcController:
         step_count = max(1, ceil(duration_s / MPC_SIMULATION_STEP_S))
 
         for _ in range(step_count):
-            available_heating_power_w = (
-                self._emitter_model.calculate_available_heating_power_w(
-                    simulated_room_temperature_c, flow_temperature_c
-                )
+            target_power_w = self._emitter_model.planned_heating_power_w(
+                simulated_room_temperature_c, flow_temperature_c, demand_pct
             )
-            target_power_w = available_heating_power_w * (demand_pct / 100)
             time_constant_s = self._emitter_model.time_constant_s(
                 simulated_room_temperature_c,
                 flow_temperature_c,
@@ -729,9 +740,21 @@ class RoomMpcController:
         return simulated_room_temperature_c
 
     def _apply_demand_rate_limiting(
-        self, mpc_input: RoomMpcInput, demand_pct: float
+        self, mpc_input: RoomMpcInput, demand_pct: float, activation_pct: float
     ) -> float:
+        """Step-limited demand, held against small and quick changes.
+
+        Never an output strictly between 0 and activation_pct: the TRVs get
+        their minimum target there, so a ramp value the hysteresis held
+        (0 -> 5.33 % on the way to 10 % with a shut valve) kept the valve
+        shut while the planner counted it open. Below the threshold the
+        output is 0 until the stepped target reaches it.
+        """
         config = self._rate_limit_config
+        if below_activation(self._last_output_demand_pct, activation_pct):
+            # Output while the threshold was lower: the TRVs shut on it now,
+            # so hysteresis and hold time must not keep it.
+            self._last_output_demand_pct = 0.0
 
         # Stamped on every call, also when the output is held below.
         if self._last_rate_limit_ts is None:
@@ -751,21 +774,26 @@ class RoomMpcController:
             self._target_demand_pct - max_step_pct,
             self._target_demand_pct + max_step_pct,
         )
+        output_pct = (
+            0.0
+            if below_activation(self._target_demand_pct, activation_pct)
+            else self._target_demand_pct
+        )
 
         if (
-            abs(self._target_demand_pct - self._last_output_demand_pct)
+            abs(output_pct - self._last_output_demand_pct)
             < config.demand_hysteresis_pct
         ):
             return self._last_output_demand_pct
 
         if (
             mpc_input.now_ts - self._last_demand_update_ts < config.hold_time_s
-            and abs(self._target_demand_pct - self._last_output_demand_pct)
+            and abs(output_pct - self._last_output_demand_pct)
             < config.hold_override_demand_pct
         ):
             return self._last_output_demand_pct
 
-        self._last_output_demand_pct = self._target_demand_pct
+        self._last_output_demand_pct = output_pct
         self._last_demand_update_ts = mpc_input.now_ts
 
         return self._last_output_demand_pct

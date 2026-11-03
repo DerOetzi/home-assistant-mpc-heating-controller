@@ -7,12 +7,15 @@ from heating_controller.const import (
     DesignTemperatureSystem,
     PanelRadiatorType,
     RoomTemperatureStrategy,
+    TrvSetpointMode,
     UaBalanceOutcome,
 )
 from heating_controller.controller.mpc.controller import (
+    MPC_DEMAND_SEARCH_STEP_PCT,
     FlowGateConfig,
     MpcRateLimitConfig,
     RoomMpcController,
+    _DemandPrediction,
 )
 from heating_controller.controller.mpc.observer import ObserverEstimate
 from heating_controller.controller.mpc.results import RoomMpcErrorCode, RoomMpcInput
@@ -22,8 +25,9 @@ from heating_controller.controller.mpc.types import (
     RoomThermalConfig,
     TrvConfig,
 )
+from heating_controller.controller.mpc.valve_curve import ValveCurveStatus
 from learner_helpers import feed_night
-from test_valve_curve import DANFOSS_SEED
+from test_valve_curve import DANFOSS_SEED, _Trv
 
 
 def make_controller(flow_gate_config=None, **rate_limit_overrides):
@@ -707,19 +711,48 @@ def test_band_still_closes_above_the_setpoint(monkeypatch):
     assert _heavy_room_demand(monkeypatch, 0.1, 21.3) == 0
 
 
-def _valve_controller():
+def _valve_controller(
+    seed=None,
+    *,
+    room_heat_load_w=600,
+    room_area_m2=15,
+    width_mm=1000,
+    target_band_c=0.0,
+    trv_setpoint_mode=TrvSetpointMode.ABSOLUTE,
+):
+    """One TRV reporting its valve opening, demand applied as computed."""
     return RoomMpcController(
         thermal_config=RoomThermalConfig(
-            room_heat_load_w=600, room_area_m2=15, construction=Construction.MEDIUM
+            room_heat_load_w=room_heat_load_w,
+            room_area_m2=room_area_m2,
+            construction=Construction.MEDIUM,
         ),
-        trvs=[TrvConfig(name="trv1", valve_position_configured=True)],
+        trvs=[
+            TrvConfig(
+                name="trv1",
+                width_mm=width_mm,
+                valve_position_configured=True,
+                valve_characteristic_seed=seed,
+            )
+        ],
         rate_limit_config=MpcRateLimitConfig(
             demand_hysteresis_pct=0, hold_time_s=0, max_demand_step_pct=100
         ),
         max_sensor_age_s=1800,
         room_sensor_configured=False,
-        target_band_c=0.0,
+        target_band_c=target_band_c,
+        trv_setpoint_mode=trv_setpoint_mode,
     )
+
+
+# Hauptbad-like: 8 m², a big radiator; at a 35 °C flow, 22 °C and 8 °C outside
+# the open valve gives 324 W against a 66 W loss.
+HAUPTBAD = {
+    "room_heat_load_w": 150,
+    "room_area_m2": 8,
+    "width_mm": 2000,
+    "target_band_c": 0.1,
+}
 
 
 def test_the_observer_follows_the_reported_valve_not_the_demand(monkeypatch):
@@ -743,27 +776,97 @@ def test_the_observer_follows_the_reported_valve_not_the_demand(monkeypatch):
     assert later.result.radiator_power_w > 0.5 * first.result.measured_heating_power_w
 
 
-def test_hold_demand_is_the_loss_at_the_setpoint():
-    controller = _unsmoothed_controller()
+def _hold_at_setpoint(controller, clock):
+    """Room at 21 °C, radiator already giving the loss at its hold opening.
+
+    Returns the loss. With the radiator warm the search has no lag to make
+    up and settles on the opening that holds the setpoint.
+    """
     controller.recalibrate_learning_factors(
         LearningFactors(ua_factor=0.7, capacity_factor=1.0)
     )
-    mpc_input = RoomMpcInput(
-        now_ts=1_000_000.0,
+    loss_w = controller._loss_model.calculate_heat_loss_w(21.0, 5.0)
+    state_input = RoomMpcInput(
+        now_ts=clock.now_ts - 60,
         target_temp_c=21.0,
-        room_temp_c=20.5,
+        room_temp_c=21.0,
         outdoor_temp_c=5.0,
         flow_temp_c=40.0,
         used_room_sensor_strategy=RoomTemperatureStrategy.ROOM_SENSOR,
-        trv_temperatures=[20.5],
+        trv_temperatures=[21.0],
     )
-    loss_w = controller._loss_model.calculate_heat_loss_w(21.0, 5.0)
-    available_w = controller._emitter_model.calculate_available_heating_power_w(
+    controller._observer.commit(
+        ObserverEstimate(
+            timestamp=state_input.now_ts,
+            room_temperature_c=21.0,
+            radiator_power_w=loss_w,
+        ),
+        state_input,
+        target_power_w=loss_w,
+        demand_pct=controller._hold_demand_pct(state_input),
+    )
+    _feed(controller, 21.0, outdoor_temp_c=5.0, flow_temp_c=40.0)
+    controller.set_trv_temperature(0, 20.3)
+    return loss_w
+
+
+def test_hold_demand_is_the_opening_that_gives_the_loss(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _valve_controller()
+    loss_w = _hold_at_setpoint(controller, clock)
+    emitter = controller._emitter_model
+
+    result = controller.compute(target_temperature_c=21.0).result
+
+    assert 0 < loss_w < emitter.calculate_available_heating_power_w(21.0, 40.0)
+    # The opening, not the share of available power: little water already
+    # gives most of the heat.
+    hold_pct = controller._hold_demand_pct(result.input)
+    assert emitter.planned_heating_power_w(21.0, 40.0, hold_pct) == pytest.approx(
+        loss_w, rel=0.01
+    )
+    assert hold_pct < 100 * loss_w / emitter.calculate_available_heating_power_w(
         21.0, 40.0
     )
-    assert 0 < loss_w < available_w
-    assert controller._hold_demand_pct(mpc_input) == pytest.approx(
-        100 * loss_w / available_w
+    # The search runs on a 5 % grid: the point next to the hold opening.
+    assert abs(result.demand_pct - hold_pct) <= MPC_DEMAND_SEARCH_STEP_PCT
+    assert emitter.planned_heating_power_w(
+        21.0, 40.0, result.demand_pct
+    ) == pytest.approx(loss_w, rel=0.05)
+
+
+def test_planner_prefers_a_small_opening_when_a_small_one_gives_most_heat(
+    monkeypatch,
+):
+    """Hauptbad-like: 8 m², a big radiator, a low flow, 0.2 K below setpoint.
+
+    At a 35 °C flow and 22 °C the open valve gives 324 W, the loss at 8 °C
+    outside is 66 W. On the valve curve 3.5 % opening already holds that,
+    25 % gives 230 W (71 %). Planned as available x demand, the same search
+    picked 60 % (194 W planned, about 290 W real) and the room overshot.
+    """
+    _Clock(monkeypatch)
+    controller = _valve_controller(**HAUPTBAD)
+    _feed(controller, 21.8, outdoor_temp_c=8.0, flow_temp_c=35.0)
+
+    result = controller.compute(target_temperature_c=22.0).result
+
+    assert 0 < result.demand_pct <= 30
+
+
+def test_requested_power_is_the_planned_power(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _valve_controller()
+    _hold_at_setpoint(controller, clock)
+
+    result = controller.compute(target_temperature_c=21.0).result
+
+    assert 0 < result.demand_pct < 100
+    assert result.requested_heating_power_w == pytest.approx(
+        controller._emitter_model.planned_heating_power_w(
+            21.0, 40.0, result.demand_pct
+        ),
+        abs=0.01,
     )
 
 
@@ -920,11 +1023,10 @@ def test_demand_step_scales_with_the_time_since_the_last_call(monkeypatch):
     clock.advance(6)
     second = controller.compute(target_temperature_c=25.0)
 
-    assert first.result.demand_pct > 0
-    assert (
-        abs(second.result.demand_pct - first.result.demand_pct)
-        <= 20 * 6 / 300 + 1e-9
-    )
+    # The cold room asks for 100 %: the first call steps to 20 %, the second
+    # 6 s later by 20 % * 6 / 300 more.
+    assert first.result.demand_pct == 20
+    assert second.result.demand_pct == pytest.approx(20 + 20 * 6 / 300)
 
 
 def test_first_call_allows_the_full_step(monkeypatch):
@@ -1098,8 +1200,9 @@ def test_learning_does_not_change_the_demand(monkeypatch):
         blind, clock, [0.7, 2.2], [30.0, 85.0], report_targets=False
     )
 
-    assert learning.valve_characteristics()[1] is not None
-    assert blind.valve_characteristics() == [None, None]
+    # Learning, not yet learned: absolute mode would ignore a curve anyway.
+    assert _all_bins(learning)["trv_b"] != []
+    assert _all_bins(blind) == {"trv_a": [], "trv_b": []}
     assert [r.result.demand_pct for r in learned] == [
         r.result.demand_pct for r in unlearned
     ]
@@ -1119,6 +1222,14 @@ def test_valve_curves_survive_export_and_restore(monkeypatch):
     assert _all_bins(restored) == _all_bins(controller)
 
 
+def _learn_curve(controller, name="trv1"):
+    """Three bins up to 2.2 K: the TRV's curve counts as learned."""
+    trv = _Trv(controller.valve_curve_learners[name])
+    for offset_c, opening_pct in ((0.7, 30), (1.2, 50), (2.2, 85)):
+        trv.sample(offset_c, opening_pct, times=3)
+    assert controller.valve_curve_learners[name].status is ValveCurveStatus.LEARNED
+
+
 def test_a_seed_reaches_the_learner():
     controller = _valve_room(
         [
@@ -1130,7 +1241,13 @@ def test_a_seed_reaches_the_learner():
         ]
     )
 
+    # The curve until learned; then it fills in beyond the learned span
+    # (0.1 K below, 2.5 and 3.0 K above).
     assert controller.valve_characteristics() == [DANFOSS_SEED]
+    _learn_curve(controller)
+    [curve] = controller.valve_characteristics()
+    assert curve.points[0] == (0.1, 5.0)
+    assert curve.points[-2:] == ((2.5, 90.0), (3.0, 100.0))
 
 
 def test_a_mixed_room_learns_only_where_the_valve_reports(monkeypatch):
@@ -1150,7 +1267,147 @@ def test_a_mixed_room_learns_only_where_the_valve_reports(monkeypatch):
     _valve_curve_cycles(controller, clock, [0.7, 0.7], [30.0, None])
 
     assert list(controller.valve_curve_learners) == ["climate.with_valve"]
-    first, second = controller.valve_characteristics()
-    assert first is not None and second is None
+    learners = controller.valve_curve_learners
+    assert learners["climate.with_valve"].status is ValveCurveStatus.LEARNING
+    # Still learning: the seed; without a valve entity no curve at all.
+    assert controller.valve_characteristics() == [DANFOSS_SEED, None]
     assert list(controller.export_valve_curves()) == ["climate.with_valve"]
     assert list(controller.valve_curve_report()) == ["climate.with_valve"]
+
+
+def _relative_targets(controller, clock):
+    _hold_at_setpoint(controller, clock)
+    return controller.compute(target_temperature_c=21.0).result
+
+
+def _scatter(controller):
+    trv = _Trv(controller.valve_curve_learners["trv1"])
+    for opening_pct in (10, 20, 50, 60, 80):
+        trv.sample(0.7, opening_pct)
+    assert controller.valve_curve_learners["trv1"].status is ValveCurveStatus.SCATTERED
+
+
+@pytest.mark.parametrize(
+    ("prepare", "uses_seed"),
+    [
+        pytest.param(lambda controller: None, True, id="seed"),
+        pytest.param(_scatter, True, id="scattered"),
+        pytest.param(_learn_curve, False, id="learned"),
+    ],
+)
+def test_a_trv_with_a_curve_gets_the_offset_for_the_opening(
+    monkeypatch, prepare, uses_seed
+):
+    clock = _Clock(monkeypatch)
+    controller = _valve_controller(
+        DANFOSS_SEED, trv_setpoint_mode=TrvSetpointMode.RELATIVE
+    )
+    prepare(controller)
+    [curve] = controller.valve_characteristics()
+    result = _relative_targets(controller, clock)
+
+    assert (curve == DANFOSS_SEED) is uses_seed
+    assert 0 < result.demand_pct < 100
+    # TRV reading 20.3 °C: the nearest 0.5 K step to reading + offset, at
+    # least the first step above reading + 0.1 K.
+    offset_c = curve.offset_c(result.demand_pct)
+    assert result.trv_targets[0] == max(
+        20.5, round((20.3 + offset_c) / 0.5) * 0.5
+    )
+
+
+@pytest.mark.parametrize(
+    "prepare",
+    [
+        pytest.param(lambda controller: None, id="unlearned"),
+        pytest.param(_scatter, id="scattered"),
+    ],
+)
+def test_a_trv_without_seed_or_learned_curve_keeps_the_weighted_mapping(
+    monkeypatch, prepare
+):
+    """The last resort for a TRV model whose profile has no seed."""
+    clock = _Clock(monkeypatch)
+    controller = _valve_controller(trv_setpoint_mode=TrvSetpointMode.RELATIVE)
+    prepare(controller)
+
+    result = _relative_targets(controller, clock)
+
+    assert controller.valve_characteristics() == [None]
+    assert result.demand_pct > 0
+    assert result.trv_targets == controller._emitter_model.calculate_target_temperatures(
+        result.demand_pct, TrvSetpointMode.RELATIVE, [20.3]
+    )
+
+
+@pytest.mark.parametrize(
+    ("current_target_c", "threshold_pct"),
+    [pytest.param(5.0, 10, id="shut"), pytest.param(22.5, 5, id="open")],
+)
+def test_the_planner_skips_openings_below_the_threshold(
+    monkeypatch, current_target_c, threshold_pct
+):
+    _Clock(monkeypatch)
+    controller = _valve_controller(**HAUPTBAD)
+    _feed(controller, 22.0, outdoor_temp_c=8.0, flow_temp_c=35.0)
+    controller.set_current_trv_targets([current_target_c])
+
+    result = controller.compute(target_temperature_c=22.0).result
+
+    # At its setpoint the room holds with about 3.5 %. A shut valve opens
+    # only from 10 %, an open one stays open down to 5 %: below that the TRV
+    # would get its minimum target and none of the planned heat.
+    assert controller._hold_demand_pct(result.input) < 5
+    assert result.demand_pct == 0 or result.demand_pct >= threshold_pct
+    shut = result.trv_targets == [5.0]
+    assert shut == (result.demand_pct == 0)
+    assert (result.requested_heating_power_w == 0) == shut
+
+
+def _planner_asks(controller, monkeypatch, demands_pct):
+    """Replace the search: each compute gets the next requested demand."""
+    requests = iter(demands_pct)
+
+    def fake_search(mpc_input, estimate, activation_pct):
+        return _DemandPrediction(
+            demand_pct=next(requests),
+            predicted_temperature_c=mpc_input.target_temp_c,
+            prediction_error=0.0,
+        )
+
+    monkeypatch.setattr(controller, "_find_optimal_demand_prediction", fake_search)
+
+
+def _smoothed_outputs(monkeypatch, current_targets, demands_pct, interval_s=40):
+    clock = _Clock(monkeypatch)
+    # Default smoothing: 20 % per 5 minutes, 5 % hysteresis, 300 s hold.
+    controller = make_controller()
+    _feed(controller, 20.8, outdoor_temp_c=5.0, flow_temp_c=40.0)
+    controller.set_current_trv_targets(current_targets)
+    _planner_asks(controller, monkeypatch, demands_pct)
+    outputs = []
+    for _ in demands_pct:
+        outputs.append(controller.compute(target_temperature_c=21.0).result.demand_pct)
+        clock.advance(interval_s)
+    return outputs
+
+
+@pytest.mark.parametrize(
+    ("current_target_c", "threshold_pct", "demands_pct", "final_pct"),
+    [
+        # Shut valve, ramp from 0: it passed 5.33 %, which the hysteresis
+        # then held although the TRV got its minimum target for it.
+        pytest.param(5.0, 10, [0] + [10] * 20, 10, id="shut_opens"),
+        # Shut valve, from 15 % down to a request of 5 %: the ramp passed
+        # about 9 %, below the 10 % a shut TRV needs.
+        pytest.param(5.0, 10, [15] * 3 + [5] * 30, 0, id="shut_closes"),
+        pytest.param(22.0, 5, [15] * 3 + [5] * 30, 5, id="open_stays_open"),
+    ],
+)
+def test_smoothing_never_stops_below_the_threshold(
+    monkeypatch, current_target_c, threshold_pct, demands_pct, final_pct
+):
+    outputs = _smoothed_outputs(monkeypatch, [current_target_c], demands_pct)
+
+    assert not [pct for pct in outputs if 0 < pct < threshold_pct]
+    assert outputs[-1] == pytest.approx(final_pct)

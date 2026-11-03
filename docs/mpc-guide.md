@@ -224,10 +224,19 @@ overshoot or demand that switches back and forth before tuning the demand smooth
 
 ## TRV target mode
 
-The controller turns its demand into a target temperature for each TRV, and the TRV opens
-its valve by its own reading at the radiator. **Relative** (default) sets the target a
-demand-dependent step above that reading — 0.1 K at the smallest active demand up to 3 K at
-full demand, rounded up to the TRV's step — so a small demand opens the valve only partly.
+The controller's demand is the **target valve opening** (sensor `heating_demand`, named
+"Target valve opening"), and it turns that into a target temperature for each TRV; the TRV
+opens its valve by its own reading at the radiator. **Relative** (default) sets the target a
+step above that reading. A TRV with a valve curve (see [Valve curve](#valve-curve): its
+learned curve, until then the profile's starting value) gets the offset its curve needs for
+the target opening —
+every TRV of the room the same opening, whatever its radiator's size — rounded to the
+nearest step of the TRV, but at least the first step above reading plus 0.1 K. Rounding up
+instead moved a small offset by up to a whole step, and a Danfoss Ally already opens about
+45 % at 0.5 K. Only a TRV with neither (no valve entity, or a TRV model whose profile has no
+starting value and that has not learned its curve yet) falls back, as a last resort, to a demand-dependent step weighted by its
+radiator's share of the room's power — 0.1 K at the smallest active demand up to 3 K at full
+demand, rounded up to the TRV's step — so a small demand opens the valve only partly.
 (A Danfoss Ally freshly opened about 55 % at 1.1–1.5 K above its reading and about 90 % from
 2.4 K on.)
 The current target is kept while it is still above the reading and within one step of the
@@ -235,12 +244,20 @@ new one, since every write wakes the TRV. **Absolute** spreads the target over t
 range (18 °C up to its maximum) by demand; there even a few percent of demand ask for 20 °C
 or more and the valve opens almost fully. A TRV without a reading falls back to absolute.
 The mode is set per room in the Configure flow; the attribute `trv_setpoint_writes` of the
-heating demand sensor counts the target writes per TRV since setup.
+target valve opening sensor counts the target writes per TRV since setup.
 
 Every write wakes the TRV, so a valve switches between shut and open sparingly: a shut
-valve opens from 10 % demand on, an open one stays open down to 5 %, and a TRV switches
+valve opens from 10 % target opening on, an open one stays open down to 5 %, and a TRV switches
 at most every 15 minutes — except when frost protection is forced (open window, heat
-source off), which shuts it at once.
+source off), which shuts it at once. On the valve curve these openings are much more heat
+than their number suggests: at a 40 °C flow 10 % opening gives about 44 % of full output,
+5 % about 27 %. The planner therefore never plans an opening below the threshold that
+applies — while any TRV of the room is shut, nothing between 0 and 10 % — since the TRV
+would get its minimum target and none of the planned heat. A room whose hold opening lies
+below the threshold thus alternates between shut and the threshold opening. On top, the
+TRV's 0.5 K step and the 0.1 K floor above its reading make even a small offset open it
+noticeably, so a room near its hold opening may still pulse in a PWM-like way; worth
+watching in the live evaluation.
 
 While a TRV calibrates its valve (adaptation run, reported by the device profile's
 adaptation status entity) nothing is written to it, neither target nor heat-available
@@ -282,7 +299,12 @@ off at that opening instead of the requested power (sensor `measured_heating_pow
 
 The opening is taken as proportional to the flow. With less water the radiator cools it
 further and its output stays high: at a 40 °C flow a 10 % opening still gives about 44 % of
-full output, 50 % about 87 %. A TRV without such an entity counts with the demand. If the entity goes stale or
+full output, 50 % about 87 %. A TRV without such an entity counts with the demand, linearly.
+The planner uses the same curve: it searches the target opening, and the power it expects
+at an opening (sensor `requested_heating_power`) is what this curve gives there. Planned as
+a linear share of the available power, a small demand opened the valves far more than
+planned (a bathroom at 15 % demand got 50 % opening and 130–190 W instead of about 32 W)
+and the room cycled hourly. If the entity goes stale or
 unavailable, the room's learning stops (status
 `valve_position_missing`) until it reports again.
 
@@ -290,8 +312,13 @@ unavailable, the room's learning stops (status
 
 Each TRV that reports its valve opening learns how far the valve opens for a setpoint
 offset (setpoint minus the TRV's own reading). The Danfoss PI behind it differs from valve
-to valve — pre-setting, insert, how the TRV sits — so one curve per TRV. For now the curve is
-only learned and shown; the control does not use it yet.
+to valve — pre-setting, insert, how the TRV sits — so one curve per TRV. In relative mode the
+control sets each TRV's offset from its curve (see [TRV target mode](#trv-target-mode)), read
+anew on every calculation: the learned curve once `learned`, until then — and for a
+`scattered` TRV — the profile's starting value. The planner counts in openings, and the
+starting value maps them to offsets far closer than the power-weighted fallback, which only
+a TRV without starting value and learned curve gets. One or two learned bins are not merged
+in before `learned`: they say nothing about the rest of the range.
 
 A sample starts whenever the TRV reports a new setpoint: the offset is that setpoint minus
 the TRV's reading at that moment. Only a heating offset of the relative mode starts one —
@@ -313,9 +340,12 @@ Without a starting value and no learned point from 2.5 K on, 3.0 K counts as ful
 | Status | Meaning |
 |---|---|
 | `seed` | No bin has 3 samples yet: the starting value (if any) is the curve. |
-| `learning` | 1–2 bins count. |
-| `learned` | At least 3 bins count, one of them at 2.0 K or more. |
-| `scattered` | A bin with at least 5 samples spreads more than 30 percentage points (p90−p10): the TRV's PI integrates too much for a fixed curve, so it has none. |
+| `learning` | Bins count, but fewer than 3 or none at 2.0 K or more: still the starting value (if any); the bins are not merged yet. |
+| `learned` | At least 3 bins count, one of them at 2.0 K or more: the learned points, the starting value filling in beyond the learned span. |
+| `scattered` | A bin with at least 5 samples spreads more than 30 percentage points (p90−p10): the TRV's PI integrates too much for a fixed curve, so the starting value (if any) is used. |
+
+Without a starting value a TRV has no curve until `learned` (and none while `scattered`); it
+then gets the weighted fallback.
 
 The diagnostic sensor `sensor.<room>_valve_curve` (the entity id follows the HA language:
 on a German install `sensor.<raum>_ventilkennlinie`) counts the TRVs with status `learned`. Its
@@ -348,13 +378,14 @@ Each room runs its model alongside the room as a state observer (sensor
   difference.
 - The valve demand is planned from the estimate and the radiators' current output, so a
   room whose radiators are still hot closes earlier. The demand that holds the setpoint is
-  the loss at the setpoint over the available radiator power. The hold and recovery flow
+  the valve opening at which the radiators give off the loss at the setpoint. The hold and recovery flow
   temperatures use the lag as well; the flow requirement stays weather-driven.
 
 ## Target band
 
-Each cycle the controller tries every valve demand from 0 to 100 % and predicts the room
-30 minutes ahead. A prediction between the setpoint minus the **target band** (default
+Each cycle the controller tries every target valve opening from 0 to 100 % in 5 % steps and
+predicts the room 30 minutes ahead, with the power the radiators give off at that opening
+(see [Valve position](#valve-position-the-heat-the-radiators-really-get)). A prediction between the setpoint minus the **target band** (default
 0.1 K, one step of the usual room sensor) and the setpoint counts as on target; among
 those, the demand nearest the one that holds the setpoint wins. Below the band the
 demand that comes closest wins, above the setpoint the lowest one.
@@ -380,6 +411,12 @@ heating power from chattering cycle to cycle:
   jumping straight there. The cap scales with the time since the previous calculation, so
   several calculations within seconds (state changes arrive in bursts) allow only a
   proportionally small step in total; the first calculation after a start allows the full step.
+
+The smoothed demand never stops between 0 and the valve's open threshold (10 % while a TRV
+of the room is shut, 5 % while all are open, see [TRV target mode](#trv-target-mode)): the
+TRV would get its minimum target there while the model counted the valve open. Rising, the
+output stays at 0 until the stepped value reaches the threshold; falling below it, the output
+goes to 0.
 
 Larger values make a room's demand steadier but slower to react; smaller values make it more
 responsive but more prone to small back-and-forth adjustments.
@@ -520,7 +557,7 @@ on its own it would keep reporting a requirement for a room sitting well above s
 stored heat, typically after a warm spell in spring or autumn. The surplus gate suppresses
 the floor in exactly that case. It closes only when both signals agree:
 
-- the model wants no heat over its prediction horizon (heating demand at 0 %), **and**
+- the model wants no heat over its prediction horizon (target valve opening at 0 %), **and**
 - the room is above its current target by more than **"close above setpoint"**
 
 Both are needed. Demand alone also reads 0 % for a room sitting exactly at setpoint, which

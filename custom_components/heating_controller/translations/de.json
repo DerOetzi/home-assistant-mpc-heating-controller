@@ -250,7 +250,7 @@
         "name": "Haltevorlauftemperatur"
       },
       "heating_demand": {
-        "name": "Heizleistungsanforderung"
+        "name": "Ziel-Ventilöffnung"
       },
       "requested_heating_power": {
         "name": "Angeforderte Heizleistung"

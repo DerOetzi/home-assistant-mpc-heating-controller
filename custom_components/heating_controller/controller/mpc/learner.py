@@ -70,10 +70,10 @@ UA_BALANCE_MIN_MEAN_DELTA_C = 8.0
 # balance; otherwise the result depends on the capacity more than on the
 # losses.
 UA_BALANCE_MAX_STORAGE_SHARE = 0.5
-# A target this low means the radiators supplied almost nothing: the room
-# lives off its neighbours, whose heat the model has no coupling for. The
-# factor still moves, but only down to this limit. Rooms that never learned
-# otherwise kept the design heat load and with it an inflated hold flow.
+# Plausibility floor against implausible nights: a balance pointing below this
+# factor is taken as a data error (sensor, valve or flow reading), not as a
+# room that barely loses heat. The factor still moves, but only down to this
+# limit, and the outcome is learned_at_limit.
 UA_BALANCE_MIN_TARGET_FACTOR = 0.15
 # Above this the stretch is a measurement artefact and is discarded.
 UA_BALANCE_MAX_TARGET_FACTOR = 2.0
