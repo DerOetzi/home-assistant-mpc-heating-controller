@@ -40,7 +40,7 @@ async def test_setup_registers_card_module(hass: HomeAssistant) -> None:
     await _setup_entry(hass, "Wohnzimmer")
 
     urls = [url for url in hass.data[DATA_EXTRA_MODULE_URL].urls if DOMAIN in url]
-    assert urls == [frontend.CARD_URL]
+    assert urls == [frontend.card_url(frontend.frontend_hash())]
 
 
 async def test_card_registered_once_for_multiple_rooms(hass: HomeAssistant) -> None:
@@ -67,10 +67,37 @@ async def test_card_is_served_without_auth_and_cached(
     await _setup_entry(hass, "Wohnzimmer")
 
     client = await hass_client_no_auth()
-    response = await client.get(frontend.CARD_URL)
+    response = await client.get(frontend.card_url(frontend.frontend_hash()))
 
     assert response.status == 200
     cache_control = response.headers["Cache-Control"]
     assert "no-cache" not in cache_control
     assert "max-age" in cache_control
     assert "customElements.define" in await response.text()
+
+
+async def test_imported_modules_share_the_versioned_path(
+    hass: HomeAssistant, hass_client_no_auth
+) -> None:
+    """A relative import ("./entities.js") must resolve under the same hash."""
+    _seed_entities(hass)
+    _register_stub_services(hass)
+    await _setup_entry(hass, "Wohnzimmer")
+
+    client = await hass_client_no_auth()
+    version = frontend.frontend_hash()
+    response = await client.get(f"{frontend.STATIC_URL_PATH}/{version}/entities.js")
+
+    assert response.status == 200
+    assert "export const managedDetailRows" in await response.text()
+
+
+def test_hash_changes_with_any_module(tmp_path) -> None:
+    """Changing a module the entry imports must move the whole card's URL."""
+    (tmp_path / "heating-controller-card.js").write_text("import './entities.js';")
+    (tmp_path / "entities.js").write_text("export const a = 1;")
+    before = frontend.frontend_hash(str(tmp_path))
+
+    (tmp_path / "entities.js").write_text("export const a = 2;")
+
+    assert frontend.frontend_hash(str(tmp_path)) != before

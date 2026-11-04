@@ -54,6 +54,7 @@ from .const import (
     CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT,
     CONF_MPC_HOLD_TIME,
     CONF_MPC_MAX_DEMAND_STEP_PCT,
+    CONF_OPAQUE_SURFACES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PV_BOOST_ENABLED,
     CONF_PV_BOOST_ENTITY,
@@ -73,6 +74,7 @@ from .const import (
     CONF_TRV_WIDTH_MM,
     CONF_USE_HOUSE_COMFORT_CONDITIONS,
     CONF_WINDOW_CONTACT_ENTITIES,
+    CONF_WINDOW_SURFACES,
     DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C,
     DEFAULT_FLOW_GATE_HOLD_TIME_S,
     DEFAULT_FLOW_GATE_OPEN_SURPLUS_C,
@@ -95,6 +97,7 @@ from .controller.mpc.controller import (
     RoomMpcController,
 )
 from .controller.mpc.math_helper import clamp, round_to_step
+from .controller.mpc.models.gains import GainBreakdown, profile_index
 from .controller.mpc.results import RoomMpcResult
 from .controller.mpc.types import (
     FlowGateState,
@@ -103,9 +106,11 @@ from .controller.mpc.types import (
     TrvConfig,
 )
 from .controller.state import HeatingStateConfig, HeatingStateController
+from .irradiance import IrradianceProvider, SunSeries
 from .profiles import TrvBinding
 from .store import (
     FlowGateStateStore,
+    GainStore,
     LearningFactorsStore,
     ValveCurveStore,
     async_remove_observer_store,
@@ -268,6 +273,8 @@ class HeatingRoomCoordinator:
             flow_threshold_c=self.flow_threshold_c,
             room_area_m2=self.data[CONF_ROOM_AREA],
             construction=Construction(self.data[CONF_CONSTRUCTION]),
+            window_surfaces=tuple(self.data.get(CONF_WINDOW_SURFACES) or ()),
+            opaque_surfaces=tuple(self.data.get(CONF_OPAQUE_SURFACES) or ()),
         )
         rate_limit_config = MpcRateLimitConfig(
             demand_hysteresis_pct=self.data[CONF_MPC_DEMAND_HYSTERESIS_PCT],
@@ -300,11 +307,16 @@ class HeatingRoomCoordinator:
             self.data.get(CONF_STATIONARY_RANGE, DEFAULT_STATIONARY_RANGE_C)
         )
         self.mpc.set_sun_condition(self.is_sun_condition_met)
+        self.mpc.set_gain_context(self.profile_index_at, self.fresh_sun_series)
 
         self.store = LearningFactorsStore(hass, self.room_name, room_id)
         self.flow_gate_store = FlowGateStateStore(hass, self.room_name, room_id)
         self._persisted_flow_gate_state: FlowGateState | None = None
         self.valve_curve_store = ValveCurveStore(hass, self.room_name, room_id)
+        self.gain_store = GainStore(hass, self.room_name, room_id)
+        # Set by the hub when some room has sun surfaces.
+        self.sun_provider: IrradianceProvider | None = None
+        self.workday_entity: str | None = None
         # When the pending delayed write is due. HA's delayed save moves a
         # pending write out on every call, so samples finishing more often
         # than the delay would postpone it until shutdown.
@@ -332,7 +344,42 @@ class HeatingRoomCoordinator:
         self._unsub: list[Callable[[], None]] = []
         self._listeners: list[Callable[[], None]] = []
 
-    def async_add_listener(self, update_callback: Callable[[], None]) -> Callable[[], None]:
+    def set_sun_provider(
+        self, provider: IrradianceProvider, workday_entity: str | None
+    ) -> None:
+        self.sun_provider = provider
+        self.workday_entity = workday_entity
+
+    def fresh_sun_series(self) -> SunSeries | None:
+        """The hub's irradiance series, unless it is too old to use."""
+        provider = self.sun_provider
+        if provider is None or not provider.series.fresh(time.time()):
+            return None
+        return provider.series
+
+    def is_workday(self, timestamp: float) -> bool:
+        """The workday entity's state; without one Monday to Friday."""
+        if self.workday_entity:
+            state = self.hass.states.get(self.workday_entity)
+            if state is not None and state.state in (STATE_ON, STATE_OFF):
+                return state.state == STATE_ON
+        return dt_util.as_local(dt_util.utc_from_timestamp(timestamp)).weekday() < 5
+
+    def profile_index_at(self, timestamp: float) -> int:
+        local = dt_util.as_local(dt_util.utc_from_timestamp(timestamp))
+        return profile_index(local.hour, self.is_workday(timestamp))
+
+    def current_gain(self) -> GainBreakdown:
+        now_ts = time.time()
+        gains = self.mpc.gain_model
+        return gains.breakdown(
+            self.profile_index_at(now_ts),
+            gains.sun_regressors(self.fresh_sun_series(), now_ts),
+        )
+
+    def async_add_listener(
+        self, update_callback: Callable[[], None]
+    ) -> Callable[[], None]:
         self._listeners.append(update_callback)
         return lambda: self._listeners.remove(update_callback)
 
@@ -348,6 +395,10 @@ class HeatingRoomCoordinator:
         else:
             await self._async_import_legacy_learning_factors()
 
+        gains = await self.gain_store.async_load()
+        if gains is not None:
+            self.mpc.gain_model.restore(gains)
+
         flow_gate_state = await self.flow_gate_store.async_load()
         if flow_gate_state is not None:
             self.mpc.restore_flow_gate_state(flow_gate_state)
@@ -355,9 +406,7 @@ class HeatingRoomCoordinator:
 
         # The disturbance observer is gone; its file would stay behind in
         # .storage -- drop after season 2026/27.
-        await async_remove_observer_store(
-            self.hass, self.room_name, self.room_id
-        )
+        await async_remove_observer_store(self.hass, self.room_name, self.room_id)
 
         valve_curves = await self.valve_curve_store.async_load()
         if valve_curves is not None:
@@ -702,11 +751,24 @@ class HeatingRoomCoordinator:
         persisted_factors = self.mpc.consume_persisted_learning_factors()
         if persisted_factors is not None:
             await self.store.async_save(persisted_factors)
+        if self.mpc.gain_model.consume_changed():
+            await self.gain_store.async_save(self.mpc.gain_model.export())
 
     async def async_recalibrate(
-        self, ua_factor: float | None, capacity_factor: float | None
+        self,
+        ua_factor: float | None,
+        capacity_factor: float | None,
+        reset_gains: bool = False,
     ) -> None:
         """Set the factors; one left out keeps its learned value."""
+        if reset_gains:
+            self.mpc.gain_model.reset()
+            await self.gain_store.async_save(self.mpc.gain_model.export())
+            self.mpc.gain_model.consume_changed()
+            _LOGGER.info("Reset learned gains for room %s", self.room_name)
+            if ua_factor is None and capacity_factor is None:
+                self._notify_listeners()
+                return
         factors = LearningFactors(
             ua_factor=self.mpc.learned_ua_factor if ua_factor is None else ua_factor,
             capacity_factor=(
@@ -786,11 +848,7 @@ class HeatingRoomCoordinator:
         # The room reads as unheated only because the heat source has not
         # reported yet: no forced frost protection, nothing to write. A real
         # reason (open window, a mode the user picked) still goes through.
-        if (
-            heat_source_pending
-            and not self.blocked
-            and not self.state.is_window_open
-        ):
+        if heat_source_pending and not self.blocked and not self.state.is_window_open:
             self._notify_listeners()
             return
 
@@ -915,10 +973,7 @@ class HeatingRoomCoordinator:
         Until then nothing is written, as for any other missing input;
         learning pauses all the same (the controller tells the learner).
         """
-        return (
-            self._outdoor_seen
-            or not self._in_startup_grace()
-        )
+        return self._outdoor_seen or not self._in_startup_grace()
 
     def _in_startup_grace(self) -> bool:
         return time.time() - self._started_ts < STARTUP_GRACE_S
@@ -976,9 +1031,9 @@ class HeatingRoomCoordinator:
             ):
                 continue
             min_target_c = trv.min_target_temperature_c
-            switches = (current_target_c is None or current_target_c <= min_target_c) != (
-                target_temperature_c <= min_target_c
-            )
+            switches = (
+                current_target_c is None or current_target_c <= min_target_c
+            ) != (target_temperature_c <= min_target_c)
             if (
                 switches
                 and not forced
@@ -1026,6 +1081,20 @@ class HeatingRoomCoordinator:
     @property
     def trv_entity_ids(self) -> list[str]:
         return self._trv_entity_ids
+
+    @property
+    def trv_valve_positions(self) -> dict[str, float | None]:
+        """The valve opening each TRV reports (pi_heating_demand), in percent.
+
+        None for a TRV whose profile has no valve-position entity or whose
+        entity has no number right now.
+        """
+        return {
+            climate: self._float_state(valve) if valve else None
+            for climate, valve in zip(
+                self._trv_entity_ids, self._valve_position_entities, strict=True
+            )
+        }
 
     @property
     def radiators_not_heating(self) -> list[str]:
@@ -1105,15 +1174,15 @@ class HeatingRoomCoordinator:
             if self.normal_flow_gate_closed:
                 return FlowSupplyStatus.SURPLUS
             return FlowSupplyStatus.NO_REQUIREMENT
-        
+
         if required < self.flow_threshold_c:
             return FlowSupplyStatus.BELOW_THRESHOLD
-            
+
         if not self.trv_active:
             return FlowSupplyStatus.SOURCE_INACTIVE
 
         current = self.current_flow_temperature_c
         if current is not None and current >= required:
             return FlowSupplyStatus.SUFFICIENT
-        
+
         return FlowSupplyStatus.UNDERSUPPLIED

@@ -261,9 +261,7 @@ def test_export_restore_keeps_finished_samples_only():
     data = trv.learner.export()
     restored = ValveCurveLearner(DANFOSS_SEED)
     restored.restore(data)
-    restored.observe(
-        trv.now_ts + 700, READING_C + 2.2, READING_C, 85, True
-    )
+    restored.observe(trv.now_ts + 700, READING_C + 2.2, READING_C, 85, True)
 
     assert restored.bins() == trv.learner.bins()
     assert len(restored.bins()) == 2

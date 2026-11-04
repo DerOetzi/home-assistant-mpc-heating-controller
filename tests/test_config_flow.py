@@ -23,6 +23,12 @@ HUB_SOURCES = {
     "comfort_condition_entities": ["input_boolean.comfort_release"],
     "frost_protection_temperature_c": 6.0,
 }
+HUB_SUN = {
+    "building_rotation_deg": -15,
+    "roof_orientation": "east_west",
+    "roof_tilt_deg": 43,
+    "workday_entity": "binary_sensor.workday_sensor",
+}
 HUB_CONTROL = {
     "design_outdoor_temperature_c": -12.0,
     "design_temperature_system": "system_55_45",
@@ -70,17 +76,40 @@ async def test_hub_flow_creates_the_hub(hass: HomeAssistant) -> None:
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], HUB_CONTROL
     )
+    assert result["step_id"] == "sun"
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], HUB_SUN)
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == HUB_TITLE
     assert result["data"] == {
         **HUB_SOURCES,
         **HUB_CONTROL,
+        **HUB_SUN,
         "flow_gate_close_surplus_c": 0.5,
         "flow_gate_open_surplus_c": 0.2,
         "flow_gate_hold_time_s": 900.0,
         "trv_setpoint_mode": "relative",
     }
+
+
+async def test_hub_sun_step_defaults(hass: HomeAssistant) -> None:
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], HUB_SOURCES
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], HUB_CONTROL
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"]["building_rotation_deg"] == 0
+    assert result["data"]["roof_orientation"] == "none"
+    assert result["data"]["roof_tilt_deg"] == 45
+    assert "workday_entity" not in result["data"]
     entry = hass.config_entries.async_entries(DOMAIN)[0]
     assert entry.version == HUB_VERSION
 
@@ -118,6 +147,7 @@ async def test_hub_reconfigure_clears_an_optional_entity(hass: HomeAssistant) ->
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], HUB_CONTROL
     )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], HUB_SUN)
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
@@ -177,10 +207,80 @@ async def test_room_flow_adds_a_room(hass: HomeAssistant) -> None:
         "room_name": "Wohnzimmer",
         "trvs": [{"device_id": device_id, **TRV_EMITTER}],
         "room_comfort_condition_entities": [],
+        "window_surfaces": [],
+        "opaque_surfaces": [],
         **ROOM_SIGNALS,
         **ROOM_SETTINGS,
         **ROOM_DESIGN,
     }
+
+
+async def test_room_flow_offers_the_roof_surfaces_of_the_hub(
+    hass: HomeAssistant,
+) -> None:
+    device_id = register_trv_device(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=HUB_VERSION,
+        unique_id=DOMAIN,
+        data={**HUB_SOURCES, **HUB_CONTROL, **HUB_SUN},
+    )
+    entry.add_to_hass(hass)
+    configure = hass.config_entries.subentries.async_configure
+    result = await _start_room_flow(hass, entry)
+    result = await configure(
+        result["flow_id"], {"room_name": "Schlafzimmer", "trv_count": 1}
+    )
+    result = await configure(
+        result["flow_id"], {"device_id": device_id, "emitter_type": "panel"}
+    )
+    result = await configure(
+        result["flow_id"],
+        {"radiator_type": "22", "width_mm": 1000.0, "height_mm": 600.0},
+    )
+    result = await configure(result["flow_id"], ROOM_SIGNALS)
+    result = await configure(result["flow_id"], ROOM_SETTINGS)
+    assert result["step_id"] == "design"
+
+    result = await configure(
+        result["flow_id"],
+        {
+            **ROOM_DESIGN,
+            "window_surfaces": ["south"],
+            "opaque_surfaces": ["south", "roof_east", "roof_west"],
+        },
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    (subentry,) = entry.subentries.values()
+    assert subentry.data["window_surfaces"] == ["south"]
+    assert subentry.data["opaque_surfaces"] == ["south", "roof_east", "roof_west"]
+
+
+async def test_room_flow_without_roof_rejects_a_roof_surface(
+    hass: HomeAssistant,
+) -> None:
+    device_id = register_trv_device(hass)
+    entry = _empty_hub(hass)
+    configure = hass.config_entries.subentries.async_configure
+    result = await _start_room_flow(hass, entry)
+    result = await configure(
+        result["flow_id"], {"room_name": "Schlafzimmer", "trv_count": 1}
+    )
+    result = await configure(
+        result["flow_id"], {"device_id": device_id, "emitter_type": "panel"}
+    )
+    result = await configure(
+        result["flow_id"],
+        {"radiator_type": "22", "width_mm": 1000.0, "height_mm": 600.0},
+    )
+    result = await configure(result["flow_id"], ROOM_SIGNALS)
+    result = await configure(result["flow_id"], ROOM_SETTINGS)
+
+    with pytest.raises(InvalidData):
+        await configure(
+            result["flow_id"], {**ROOM_DESIGN, "opaque_surfaces": ["roof_east"]}
+        )
 
 
 async def test_room_flow_rejects_a_device_without_profile(hass: HomeAssistant) -> None:

@@ -78,7 +78,9 @@ async def test_remove_entry_deletes_learning_factors_store(hass: HomeAssistant) 
     coordinator = hass.data[DOMAIN][entry.entry_id]
     from heating_controller.controller.mpc.types import LearningFactors
 
-    await coordinator.store.async_save(LearningFactors(ua_factor=1.1, capacity_factor=1.2))
+    await coordinator.store.async_save(
+        LearningFactors(ua_factor=1.1, capacity_factor=1.2)
+    )
     assert await coordinator.store.async_load() is not None
 
     assert await hass.config_entries.async_remove(entry.entry_id)
@@ -158,6 +160,34 @@ async def test_recalibrate_keeps_a_factor_that_is_left_out(
 
     assert coordinator.mpc.learned_ua_factor == 1.0
     assert coordinator.mpc.learned_capacity_factor == 1.3
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_recalibrate_resets_gains_and_keeps_the_factors(
+    hass: HomeAssistant, hass_admin_user: MockUser
+) -> None:
+    entry = await _setup_room(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator.mpc.recalibrate_learning_factors(
+        LearningFactors(ua_factor=0.9, capacity_factor=1.3)
+    )
+    gains = coordinator.mpc.gain_model
+    gains.add_night_point(14.0, 230.0, 6.0, 20.0)
+
+    await hass.services.async_call(
+        DOMAIN,
+        "recalibrate",
+        {"entity_id": "button.wohnzimmer_unblock", "reset_gains": True},
+        blocking=True,
+        context=Context(user_id=hass_admin_user.id),
+    )
+
+    assert gains.night_points == 0
+    assert coordinator.mpc.learned_ua_factor == 0.9
+    assert coordinator.mpc.learned_capacity_factor == 1.3
+    persisted = await coordinator.gain_store.async_load()
+    assert persisted["night"] is None
 
     assert await hass.config_entries.async_unload(entry.entry_id)
 
@@ -289,7 +319,9 @@ async def test_unload_flushes_the_valve_curve_and_removal_leaves_no_file(
     hass.services.async_register("climate", "set_temperature", handler)
     hass.services.async_register("switch", "turn_on", handler)
     hass.services.async_register("switch", "turn_off", handler)
-    entry = _hub_entry({**ENTRY_DATA, "trvs": [{"device_id": device_id, **TRV_EMITTER}]})
+    entry = _hub_entry(
+        {**ENTRY_DATA, "trvs": [{"device_id": device_id, **TRV_EMITTER}]}
+    )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -327,7 +359,9 @@ async def test_removing_a_room_drops_its_stores_and_keeps_the_hub(
 ) -> None:
     entry = await _setup_room(hass)
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    await coordinator.store.async_save(LearningFactors(ua_factor=0.8, capacity_factor=1.0))
+    await coordinator.store.async_save(
+        LearningFactors(ua_factor=0.8, capacity_factor=1.0)
+    )
 
     hass.config_entries.async_remove_subentry(entry, entry.entry_id)
     await hass.async_block_till_done()

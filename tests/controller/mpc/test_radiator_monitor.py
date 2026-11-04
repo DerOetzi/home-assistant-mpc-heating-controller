@@ -86,9 +86,7 @@ def test_a_hot_water_charge_starts_the_hour_over():
     monitor = RadiatorDeliveryMonitor()
 
     end_ts = _feed(monitor, [21.1] * (HOUR - 4))
-    end_ts = _feed(
-        monitor, [21.1] * 4, start_ts=end_ts + STEP_S, hot_water_charge=True
-    )
+    end_ts = _feed(monitor, [21.1] * 4, start_ts=end_ts + STEP_S, hot_water_charge=True)
     _feed(monitor, [21.1] * 4, start_ts=end_ts + STEP_S)
 
     assert monitor.not_heating is False
@@ -116,9 +114,7 @@ def test_no_verdict_while_the_flow_is_too_cool_for_a_sound_radiator():
     monitor = RadiatorDeliveryMonitor()
 
     for index in range(HOUR + 6):
-        monitor.update(
-            START_TS + index * STEP_S, 100.0, 21.1, 20.9, True, 0.18
-        )
+        monitor.update(START_TS + index * STEP_S, 100.0, 21.1, 20.9, True, 0.18)
 
     assert monitor.not_heating is False
 
@@ -127,9 +123,7 @@ def test_a_cold_radiator_at_a_warm_flow_is_still_reported():
     monitor = RadiatorDeliveryMonitor()
 
     for index in range(HOUR):
-        monitor.update(
-            START_TS + index * STEP_S, 100.0, 21.1, 20.6, True, 0.42
-        )
+        monitor.update(START_TS + index * STEP_S, 100.0, 21.1, 20.6, True, 0.42)
 
     assert monitor.not_heating is True
 

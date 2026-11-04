@@ -15,6 +15,7 @@ export const ROLES = {
   min_flow_temperature: "minFlow",
   heating_demand: "demand",
   radiator_not_heating: "radiatorAlert",
+  additional_heat: "additionalHeat",
 };
 
 export const REQUIRED_ROLES = ["mode", "automation"];
@@ -56,6 +57,9 @@ export const CONDITION_KEY = "comfort_conditions";
 // Identifies the auto-populated detail rows. TRVs and windows append their
 // entity id; the room sensor is a singleton.
 export const ROOM_SENSOR_KEY = "room_sensor";
+// The heat the radiators do not supply (steady gain, day profile, sun); a
+// singleton like the room sensor.
+export const ADDITIONAL_HEAT_KEY = "additional_heat";
 
 // Identifies the room-temperature entity as a managed header row -- present
 // by default (leading, unlabeled), but sortable/hideable/nameable through the

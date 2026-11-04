@@ -133,7 +133,9 @@ class _PreparedEmitter:
 
 
 class HeatEmitterModel:
-    def __init__(self, thermal_config: RoomThermalConfig, trvs: list[TrvConfig]) -> None:
+    def __init__(
+        self, thermal_config: RoomThermalConfig, trvs: list[TrvConfig]
+    ) -> None:
         self._design_temperatures = DESIGN_SYSTEM_TEMPERATURES[
             thermal_config.design_temperature_system
         ]
@@ -159,7 +161,11 @@ class HeatEmitterModel:
     @staticmethod
     def _calculate_emitter_heat_capacity_j_per_k(trv: TrvConfig) -> float:
         if trv.emitter_type == HeatEmitterType.PANEL:
-            if trv.height_mm is None or trv.width_mm is None or trv.radiator_type is None:
+            if (
+                trv.height_mm is None
+                or trv.width_mm is None
+                or trv.radiator_type is None
+            ):
                 return 0.0
             meters = (trv.width_mm / 1000) * (
                 clamp(trv.height_mm, MIN_RADIATOR_HEIGHT_MM, MAX_RADIATOR_HEIGHT_MM)
@@ -191,7 +197,9 @@ class HeatEmitterModel:
             return trv.nominal_power_w or 0
         return 0
 
-    def _calculate_panel_radiator_table_reference_power_w(self, trv: TrvConfig) -> float:
+    def _calculate_panel_radiator_table_reference_power_w(
+        self, trv: TrvConfig
+    ) -> float:
         if trv.height_mm is None or trv.width_mm is None or trv.radiator_type is None:
             return 0
         scaled_power_per_meter = self._scale_panel_radiator_power_per_meter(
@@ -203,25 +211,36 @@ class HeatEmitterModel:
     def _scale_panel_radiator_power_per_meter(
         height_mm: float, radiator_type: PanelRadiatorType
     ) -> float:
-        reference_power = PANEL_RADIATOR_REFERENCE_POWER_W_PER_METER.get(radiator_type, 0)
+        reference_power = PANEL_RADIATOR_REFERENCE_POWER_W_PER_METER.get(
+            radiator_type, 0
+        )
         clamped_height_mm = clamp(
             height_mm, MIN_RADIATOR_HEIGHT_MM, MAX_RADIATOR_HEIGHT_MM
         )
-        return reference_power * (
-            clamped_height_mm / REFERENCE_HEIGHT_MM
-        ) ** HEIGHT_SCALING_EXPONENT
+        return (
+            reference_power
+            * (clamped_height_mm / REFERENCE_HEIGHT_MM) ** HEIGHT_SCALING_EXPONENT
+        )
 
     def _convert_reference_power_to_design_system(
         self, table_reference_power_w: float, exponent: float
     ) -> float:
-        if table_reference_power_w <= 0 or self._design_temperatures.overtemperature_c <= 0:
+        if (
+            table_reference_power_w <= 0
+            or self._design_temperatures.overtemperature_c <= 0
+        ):
             return 0
         reference_overtemperature_c = DESIGN_SYSTEM_TEMPERATURES[
             DesignTemperatureSystem.SYSTEM_75_65
         ].overtemperature_c
-        return table_reference_power_w * (
-            self._design_temperatures.overtemperature_c / reference_overtemperature_c
-        ) ** exponent
+        return (
+            table_reference_power_w
+            * (
+                self._design_temperatures.overtemperature_c
+                / reference_overtemperature_c
+            )
+            ** exponent
+        )
 
     @staticmethod
     def _calculate_distribution_weights(
@@ -684,7 +703,9 @@ class HeatEmitterModel:
         )
 
     @staticmethod
-    def _calculate_target_temperature(emitter: _PreparedEmitter, demand: float) -> float:
+    def _calculate_target_temperature(
+        emitter: _PreparedEmitter, demand: float
+    ) -> float:
         trv = emitter.trv
         weighted_demand = clamp(demand * emitter.distribution_weight, 0, 1)
         effective_demand = weighted_demand ** (1 / emitter.exponent)
@@ -807,7 +828,6 @@ def _relative_target_c(
 def _activation_threshold_pct(trv: TrvConfig, current_target_c: float | None) -> float:
     """Demand a TRV needs to be open: more to open a shut valve than to stay."""
     is_open = (
-        current_target_c is not None
-        and current_target_c > trv.min_target_temperature_c
+        current_target_c is not None and current_target_c > trv.min_target_temperature_c
     )
     return MIN_ACTIVE_DEMAND_PCT if is_open else OPEN_ACTIVE_DEMAND_PCT

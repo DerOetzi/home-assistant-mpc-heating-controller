@@ -17,7 +17,9 @@ class HeatingControllerEntity(Entity):
     _attr_has_entity_name = True
     _attr_should_poll = False
 
-    def __init__(self, coordinator: HeatingRoomCoordinator, unique_id_suffix: str) -> None:
+    def __init__(
+        self, coordinator: HeatingRoomCoordinator, unique_id_suffix: str
+    ) -> None:
         self._coordinator = coordinator
         self._attr_unique_id = f"{coordinator.room_id}_{unique_id_suffix}"
         self._attr_device_info = DeviceInfo(

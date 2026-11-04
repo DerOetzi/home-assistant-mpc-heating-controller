@@ -46,6 +46,10 @@ class RoomThermalConfig:
     _: KW_ONLY
     room_area_m2: float
     construction: Construction
+    # Building surfaces whose sun reaches the room: through windows at once,
+    # through walls and roof surfaces with a delay.
+    window_surfaces: tuple[str, ...] = ()
+    opaque_surfaces: tuple[str, ...] = ()
 
 
 @dataclass

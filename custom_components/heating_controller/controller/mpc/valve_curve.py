@@ -148,8 +148,7 @@ class ValveCurveLearner:
 
         if (
             self._last_target_c is not None
-            and abs(trv_target_c - self._last_target_c)
-            > VALVE_CURVE_TARGET_TOLERANCE_C
+            and abs(trv_target_c - self._last_target_c) > VALVE_CURVE_TARGET_TOLERANCE_C
         ):
             # A new setpoint ends whatever sample was open; only a heating
             # offset starts the next one.

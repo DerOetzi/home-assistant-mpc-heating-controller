@@ -89,7 +89,9 @@ def _imports_of(path: Path) -> list[tuple[str, list[str]]]:
 
 def _exports_of(path: Path) -> set[str]:
     source = path.read_text(encoding="utf-8")
-    return set(re.findall(r"^export\s+(?:const|class|function)\s+(\w+)", source, re.MULTILINE))
+    return set(
+        re.findall(r"^export\s+(?:const|class|function)\s+(\w+)", source, re.MULTILINE)
+    )
 
 
 def test_every_import_resolves_to_an_exported_symbol() -> None:
@@ -129,9 +131,9 @@ def test_translations_cover_the_same_keys(ctx) -> None:
 
 def test_translation_falls_back_and_substitutes(ctx) -> None:
     assert ctx.eval('t({locale: {language: "de"}}, "section_details")') == "Details"
-    assert (
-        ctx.eval('t({locale: {language: "fr"}}, "status_blocked")') == "Blocked"
-    ), "unknown language must fall back to English, not to the key"
+    assert ctx.eval('t({locale: {language: "fr"}}, "status_blocked")') == "Blocked", (
+        "unknown language must fall back to English, not to the key"
+    )
     assert ctx.eval('t(null, "status_blocked")') == "Blocked"
     assert ctx.eval('t({}, "totally_unknown_key")') == "totally_unknown_key"
     assert (
@@ -257,7 +259,10 @@ var roles = resolveRoles(hass, "dev");
 def test_resolve_roles_maps_by_translation_key(ctx) -> None:
     ctx.eval(_HASS_FIXTURE)
     assert ctx.eval("roles.roomTemp.entity_id") == "sensor.katharina_raumtemperatur"
-    assert ctx.eval("roles.automation.entity_id") == "binary_sensor.katharina_heizautomatik"
+    assert (
+        ctx.eval("roles.automation.entity_id")
+        == "binary_sensor.katharina_heizautomatik"
+    )
 
 
 def test_radiator_alert_is_quiet_without_a_cold_radiator(ctx) -> None:
@@ -283,7 +288,9 @@ var alertRoles = resolveRoles(hass, "dev");
 var alert = radiatorAlert(hass, alertRoles);
 """
     )
-    assert ctx.eval("alert.entityId") == "binary_sensor.katharina_heizkorper_heizt_nicht"
+    assert (
+        ctx.eval("alert.entityId") == "binary_sensor.katharina_heizkorper_heizt_nicht"
+    )
     assert ctx.eval("alert.text") == (
         "Radiator not heating – check or bleed it: Heizung klein"
     )
@@ -309,6 +316,64 @@ def test_managed_row_defaults(ctx) -> None:
     assert by_key["trv:climate.gross"]["name"] == "Heizung groß"
     assert by_key["trv:climate.gross"]["value"] == "21.1 °C → 5 °C"
     assert by_key["window:binary_sensor.fenster_a"]["value"] == "Closed"
+
+
+def test_trv_rows_show_the_valve_opening(ctx) -> None:
+    ctx.eval(_HASS_FIXTURE)
+    ctx.eval(
+        'hass.states["sensor.katharina_heating_demand"].attributes.trv_valve_positions'
+        ' = { "climate.gross": 34.4, "climate.klein": null };'
+    )
+    rows = _json(ctx, "managedDetailRows(hass, roles)")
+    by_key = {r["key"]: r for r in rows}
+    assert by_key["trv:climate.gross"]["value"] == "21.1 °C → 5 °C · 34 %"
+    assert by_key["trv:climate.klein"]["value"] == "21.2 °C → 5 °C"
+    ctx.eval(
+        'delete hass.states["sensor.katharina_heating_demand"].attributes.trv_valve_positions;'
+    )
+
+
+_ADDITIONAL_HEAT = """
+hass.entities["sensor.katharina_zusatzwarme"] = {
+  entity_id: "sensor.katharina_zusatzwarme",
+  device_id: "dev", platform: "heating_controller",
+  translation_key: "additional_heat",
+};
+hass.states["sensor.katharina_zusatzwarme"] = {
+  entity_id: "sensor.katharina_zusatzwarme",
+  state: "%s",
+  attributes: { ungated_w: %s },
+};
+var heatRoles = resolveRoles(hass, "dev");
+var heatRow = managedDetailRows(hass, heatRoles).filter(
+  function(r){ return r.key === "additional_heat"; }
+)[0] || null;
+"""
+
+
+def test_additional_heat_row_shows_the_used_gain(ctx) -> None:
+    ctx.eval(_HASS_FIXTURE)
+    ctx.eval(_ADDITIONAL_HEAT % ("120.4", "120.4"))
+    row = _json(ctx, "heatRow")
+    assert row["entity"] == "sensor.katharina_zusatzwarme"
+    assert row["name"] == "Additional heat"
+    assert row["value"] == "120 W"
+
+
+def test_additional_heat_row_names_what_is_still_learning(ctx) -> None:
+    ctx.eval(_HASS_FIXTURE)
+    ctx.eval('hass.locale.language = "de";')
+    ctx.eval(_ADDITIONAL_HEAT % ("0", "85.2"))
+    row = _json(ctx, "heatRow")
+    assert row["name"] == "Zusatzwärme"
+    assert row["value"] == "0 W (lernt: 85 W)"
+    ctx.eval('hass.locale.language = "en";')
+
+
+def test_additional_heat_row_hidden_while_unknown(ctx) -> None:
+    ctx.eval(_HASS_FIXTURE)
+    ctx.eval(_ADDITIONAL_HEAT % ("unknown", "null"))
+    assert ctx.eval("heatRow") is None
 
 
 def test_managed_rows_follow_the_language(ctx) -> None:
@@ -532,8 +597,8 @@ def test_comfort_condition_toggle_writable_sets_explicit_state(ctx) -> None:
     )
     assert ctx.eval("onButton._class") == "segment active"
     assert ctx.eval("offButton._class") == "segment"
-    ctx.eval('onButton._listeners.click({ stopPropagation: function () {} });')
-    ctx.eval('offButton._listeners.click({ stopPropagation: function () {} });')
+    ctx.eval("onButton._listeners.click({ stopPropagation: function () {} });")
+    ctx.eval("offButton._listeners.click({ stopPropagation: function () {} });")
     assert _json(ctx, "calls") == [["switch.desk", True], ["switch.desk", False]]
 
 
@@ -560,8 +625,14 @@ def test_comfort_condition_toggle_uses_editor_overrides(ctx) -> None:
         document.createElement = realCreateElement;
         """
     )
-    assert ctx.eval("row.children[0].innerHTML") == '<ha-icon icon="mdi:briefcase"></ha-icon>Homeoffice'
-    assert ctx.eval("row.children[1].innerHTML") == '<ha-icon icon="mdi:home"></ha-icon>Zuhause'
+    assert (
+        ctx.eval("row.children[0].innerHTML")
+        == '<ha-icon icon="mdi:briefcase"></ha-icon>Homeoffice'
+    )
+    assert (
+        ctx.eval("row.children[1].innerHTML")
+        == '<ha-icon icon="mdi:home"></ha-icon>Zuhause'
+    )
     assert ctx.eval("row.children[1]._class") == "segment active"
 
 
@@ -591,7 +662,7 @@ def test_comfort_condition_toggle_read_only_shows_single_active_state(ctx) -> No
     assert ctx.eval("el._class") == "value condition-indicator"
     assert ctx.eval("el.children.length") == 0
     assert ctx.eval("el.innerHTML") == '<span class="num">On</span>'
-    ctx.eval('el._listeners.click({ stopPropagation: function () {} });')
+    ctx.eval("el._listeners.click({ stopPropagation: function () {} });")
     assert _json(ctx, "seen") == ["binary_sensor.homeoffice"]
 
 
@@ -614,7 +685,10 @@ def test_comfort_condition_toggle_read_only_reflects_off_state(ctx) -> None:
         document.createElement = realCreateElement;
         """
     )
-    assert ctx.eval("el.innerHTML") == '<ha-icon icon="mdi:home"></ha-icon><span class="num">Zuhause</span>'
+    assert (
+        ctx.eval("el.innerHTML")
+        == '<ha-icon icon="mdi:home"></ha-icon><span class="num">Zuhause</span>'
+    )
 
 
 def test_boost_button_has_no_click_handler_when_active(ctx) -> None:
@@ -631,4 +705,4 @@ def test_boost_button_has_no_click_handler_when_active(ctx) -> None:
         """
     )
     assert ctx.eval("btn.disabled") is True
-    assert ctx.eval('typeof btn._listeners.click') == "undefined"
+    assert ctx.eval("typeof btn._listeners.click") == "undefined"

@@ -21,6 +21,7 @@ from homeassistant.helpers.typing import ConfigType
 from . import frontend
 from .const import (
     ATTR_CAPACITY_FACTOR,
+    ATTR_RESET_GAINS,
     ATTR_UA_FACTOR,
     CONF_ROOM_NAME,
     CONF_TRVS,
@@ -44,6 +45,7 @@ from .profiles import (
 )
 from .store import (
     FlowGateStateStore,
+    GainStore,
     LearningFactorsStore,
     ValveCurveStore,
 )
@@ -68,9 +70,10 @@ RECALIBRATE_SCHEMA = vol.All(
                     min=MIN_LEARNED_CAPACITY_FACTOR, max=MAX_LEARNED_CAPACITY_FACTOR
                 ),
             ),
+            vol.Optional(ATTR_RESET_GAINS): cv.boolean,
         }
     ),
-    cv.has_at_least_one_key(ATTR_UA_FACTOR, ATTR_CAPACITY_FACTOR),
+    cv.has_at_least_one_key(ATTR_UA_FACTOR, ATTR_CAPACITY_FACTOR, ATTR_RESET_GAINS),
 )
 
 PLATFORMS = [
@@ -136,7 +139,9 @@ async def _async_setup_room(
     return coordinator
 
 
-async def _async_update_listener(hass: HomeAssistant, entry: HeatingConfigEntry) -> None:
+async def _async_update_listener(
+    hass: HomeAssistant, entry: HeatingConfigEntry
+) -> None:
     """A changed hub or room reloads all rooms; a removed room drops its files."""
     hub: HeatingHub = entry.runtime_data
     for room_id, coordinator in hub.rooms.items():
@@ -188,6 +193,7 @@ async def _async_remove_room_stores(
     await LearningFactorsStore(hass, room_name, room_id).async_remove()
     await FlowGateStateStore(hass, room_name, room_id).async_remove()
     await ValveCurveStore(hass, room_name, room_id).async_remove()
+    await GainStore(hass, room_name, room_id).async_remove()
 
 
 def _referenced_coordinators(
@@ -221,6 +227,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
             await coordinator.async_recalibrate(
                 call.data.get(ATTR_UA_FACTOR),
                 call.data.get(ATTR_CAPACITY_FACTOR),
+                call.data.get(ATTR_RESET_GAINS, False),
             )
 
     hass.services.async_register(DOMAIN, SERVICE_UNBLOCK, async_handle_unblock)

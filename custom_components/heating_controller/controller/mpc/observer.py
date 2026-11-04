@@ -141,10 +141,9 @@ class RoomStateObserver:
                 radiator_power_w, state.target_power_w, time_constant_s, step_s
             )
             net_heating_power_w = (
-                (radiator_power_w + next_radiator_power_w) / 2
-                - self._loss_model.calculate_heat_loss_w(
-                    room_temperature_c, state.outdoor_temperature_c
-                )
+                radiator_power_w + next_radiator_power_w
+            ) / 2 - self._loss_model.calculate_heat_loss_w(
+                room_temperature_c, state.outdoor_temperature_c
             )
             room_temperature_c += self._capacity_model.predict_temperature_change_c(
                 net_heating_power_w, step_s

@@ -17,6 +17,7 @@ from homeassistant.util import slugify
 from .const import (
     CONF_BOOST_ENABLED,
     CONF_BOOST_TEMPERATURE_OFFSET,
+    CONF_BUILDING_ROTATION,
     CONF_COMFORT_CONDITION_ENTITIES,
     CONF_CONSTRUCTION,
     CONF_DESIGN_INDOOR_TEMPERATURE,
@@ -39,10 +40,13 @@ from .const import (
     CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT,
     CONF_MPC_HOLD_TIME,
     CONF_MPC_MAX_DEMAND_STEP_PCT,
+    CONF_OPAQUE_SURFACES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PV_BOOST_ENABLED,
     CONF_PV_BOOST_ENTITY,
     CONF_PV_BOOST_TEMPERATURE_OFFSET,
+    CONF_ROOF_ORIENTATION,
+    CONF_ROOF_TILT,
     CONF_ROOM_AREA,
     CONF_ROOM_COMFORT_CONDITION_ENTITIES,
     CONF_ROOM_HEAT_LOAD,
@@ -61,14 +65,18 @@ from .const import (
     CONF_TRVS,
     CONF_USE_HOUSE_COMFORT_CONDITIONS,
     CONF_WINDOW_CONTACT_ENTITIES,
+    CONF_WINDOW_SURFACES,
+    CONF_WORKDAY_ENTITY,
     DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C,
     DEFAULT_FLOW_GATE_HOLD_TIME_S,
     DEFAULT_FLOW_GATE_OPEN_SURPLUS_C,
     DEFAULT_FLOW_THRESHOLD_C,
+    DEFAULT_ROOF_TILT_DEG,
     DEFAULT_STATIONARY_RANGE_C,
     DEFAULT_TARGET_BAND_C,
     DEFAULT_TRV_SETPOINT_MODE,
     DOMAIN,
+    FACADES,
     HUB_TITLE,
     MAX_STATIONARY_RANGE_C,
     MAX_TARGET_BAND_C,
@@ -82,6 +90,8 @@ from .const import (
     DesignTemperatureSystem,
     HeatEmitterType,
     PanelRadiatorType,
+    RoofOrientation,
+    Surface,
     TrvSetpointMode,
 )
 from .migration import HUB_VERSION
@@ -113,7 +123,9 @@ def _optional(name: str, defaults: dict[str, Any]) -> vol.Optional:
     return vol.Optional(name)
 
 
-def _merge(data: dict[str, Any], schema: vol.Schema, user_input: dict[str, Any]) -> None:
+def _merge(
+    data: dict[str, Any], schema: vol.Schema, user_input: dict[str, Any]
+) -> None:
     """Take a step's input; a cleared optional field drops its old value."""
     for key in schema.schema:
         data.pop(str(key), None)
@@ -307,13 +319,22 @@ class HeatingControllerConfigFlow(ConfigFlow, domain=DOMAIN):
         schema = _hub_control_schema(self._data)
         if user_input is not None:
             _merge(self._data, schema, user_input)
+            return await self.async_step_sun()
+        return self.async_show_form(step_id="control", data_schema=schema)
+
+    async def async_step_sun(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        schema = _hub_sun_schema(self._data)
+        if user_input is not None:
+            _merge(self._data, schema, user_input)
             if self._reconfiguring:
                 # The update listener reloads the hub and with it every room.
                 return self.async_update_and_abort(
                     self._get_reconfigure_entry(), data=self._data
                 )
             return self.async_create_entry(title=HUB_TITLE, data=self._data)
-        return self.async_show_form(step_id="control", data_schema=schema)
+        return self.async_show_form(step_id="sun", data_schema=schema)
 
 
 # --- Room --------------------------------------------------------------------
@@ -443,9 +464,85 @@ def _room_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
     )
 
 
-def _room_design_schema(defaults: dict[str, Any]) -> vol.Schema:
+def _hub_sun_schema(defaults: dict[str, Any]) -> vol.Schema:
     return vol.Schema(
         {
+            vol.Required(
+                CONF_BUILDING_ROTATION,
+                default=defaults.get(CONF_BUILDING_ROTATION, 0.0),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=-180,
+                    max=180,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                    unit_of_measurement="°",
+                )
+            ),
+            vol.Required(
+                CONF_ROOF_ORIENTATION,
+                default=defaults.get(CONF_ROOF_ORIENTATION, RoofOrientation.NONE),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[o.value for o in RoofOrientation],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    translation_key=CONF_ROOF_ORIENTATION,
+                )
+            ),
+            vol.Required(
+                CONF_ROOF_TILT,
+                default=defaults.get(CONF_ROOF_TILT, DEFAULT_ROOF_TILT_DEG),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0,
+                    max=90,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                    unit_of_measurement="°",
+                )
+            ),
+            _optional(CONF_WORKDAY_ENTITY, defaults): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=_BOOLEAN_SIGNAL_DOMAINS)
+            ),
+        }
+    )
+
+
+def _surface_selector(surfaces: list[str]) -> selector.SelectSelector:
+    return selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=surfaces,
+            multiple=True,
+            mode=selector.SelectSelectorMode.LIST,
+            translation_key="surface",
+        )
+    )
+
+
+def _room_design_schema(
+    defaults: dict[str, Any], roof: RoofOrientation = RoofOrientation.NONE
+) -> vol.Schema:
+    roof_surfaces = {
+        RoofOrientation.EAST_WEST: [Surface.ROOF_EAST, Surface.ROOF_WEST],
+        RoofOrientation.NORTH_SOUTH: [Surface.ROOF_NORTH, Surface.ROOF_SOUTH],
+        RoofOrientation.NONE: [],
+    }[roof]
+    facades = [surface.value for surface in FACADES]
+    opaque = facades + [surface.value for surface in roof_surfaces]
+    return vol.Schema(
+        {
+            vol.Optional(
+                CONF_WINDOW_SURFACES,
+                default=[
+                    s for s in defaults.get(CONF_WINDOW_SURFACES, []) if s in facades
+                ],
+            ): _surface_selector(facades),
+            vol.Optional(
+                CONF_OPAQUE_SURFACES,
+                default=[
+                    s for s in defaults.get(CONF_OPAQUE_SURFACES, []) if s in opaque
+                ],
+            ): _surface_selector(opaque),
             vol.Required(
                 CONF_DESIGN_INDOOR_TEMPERATURE,
                 default=defaults.get(CONF_DESIGN_INDOOR_TEMPERATURE, 20.0),
@@ -589,7 +686,12 @@ class RoomSubentryFlow(ConfigSubentryFlow):
     async def async_step_design(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        schema = _room_design_schema(self._data)
+        schema = _room_design_schema(
+            self._data,
+            RoofOrientation(
+                self._get_entry().data.get(CONF_ROOF_ORIENTATION, RoofOrientation.NONE)
+            ),
+        )
         if user_input is not None:
             _merge(self._data, schema, user_input)
             if self._reconfiguring:

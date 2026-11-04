@@ -16,14 +16,23 @@ from homeassistant.core import Event, EventStateChangedData, HomeAssistant, call
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
+    CONF_BUILDING_ROTATION,
     CONF_FLOW_CURVE_ENTITY,
     CONF_FLOW_THRESHOLD,
     CONF_FLOW_THRESHOLD_ENTITY,
     CONF_LEAD_FLOW,
     CONF_LEAD_HEATING_LIMIT,
+    CONF_OPAQUE_SURFACES,
+    CONF_ROOF_ORIENTATION,
+    CONF_ROOF_TILT,
+    CONF_WINDOW_SURFACES,
+    CONF_WORKDAY_ENTITY,
     DEFAULT_FLOW_THRESHOLD_C,
+    DEFAULT_ROOF_TILT_DEG,
+    RoofOrientation,
 )
 from .coordinator import HeatingRoomCoordinator
+from .irradiance import IrradianceProvider, SurfaceGeometry, building_surfaces
 
 # Like the min/max helpers the lead figures replace.
 LEAD_ROUND_DIGITS = 1
@@ -49,12 +58,42 @@ class HeatingHub:
         self.flow_curve_entity: str | None = entry.data.get(CONF_FLOW_CURVE_ENTITY)
         self._listeners: list[Callable[[], None]] = []
         self._unsub: list[Callable[[], None]] = []
+        self.workday_entity: str | None = entry.data.get(CONF_WORKDAY_ENTITY)
+        self.irradiance: IrradianceProvider | None = None
 
     def add_room(self, coordinator: HeatingRoomCoordinator) -> None:
         self.rooms[coordinator.room_id] = coordinator
         self._unsub.append(coordinator.async_add_listener(self._notify_listeners))
 
+    def used_surfaces(self) -> list[SurfaceGeometry]:
+        """The building's surfaces some room has windows or walls on."""
+        used = {
+            surface
+            for room in self.rooms.values()
+            for key in (CONF_WINDOW_SURFACES, CONF_OPAQUE_SURFACES)
+            for surface in room.data.get(key) or []
+        }
+        return [
+            geometry
+            for geometry in building_surfaces(
+                float(self.entry.data.get(CONF_BUILDING_ROTATION, 0.0)),
+                RoofOrientation(
+                    self.entry.data.get(CONF_ROOF_ORIENTATION, RoofOrientation.NONE)
+                ),
+                float(self.entry.data.get(CONF_ROOF_TILT, DEFAULT_ROOF_TILT_DEG)),
+            )
+            if geometry.surface in used
+        ]
+
     def async_setup(self) -> None:
+        surfaces = self.used_surfaces()
+        if surfaces:
+            self.irradiance = IrradianceProvider(
+                self.hass, surfaces, self._notify_listeners
+            )
+            self.irradiance.async_start()
+            for room in self.rooms.values():
+                room.set_sun_provider(self.irradiance, self.workday_entity)
         tracked = [
             entity_id
             for entity_id in (self._flow_threshold_entity, self.flow_curve_entity)
@@ -68,11 +107,15 @@ class HeatingHub:
             )
 
     def async_unload(self) -> None:
+        if self.irradiance is not None:
+            self.irradiance.async_stop()
         for unsub in self._unsub:
             unsub()
         self._unsub = []
 
-    def async_add_listener(self, update_callback: Callable[[], None]) -> Callable[[], None]:
+    def async_add_listener(
+        self, update_callback: Callable[[], None]
+    ) -> Callable[[], None]:
         self._listeners.append(update_callback)
         return lambda: self._listeners.remove(update_callback)
 

@@ -109,7 +109,9 @@ class RadiatorNotHeatingBinarySensor(HeatingControllerEntity, BinarySensorEntity
         return {"trv_entities": self._coordinator.radiators_not_heating}
 
 
-class OutdoorTemperatureMissingBinarySensor(HeatingControllerEntity, BinarySensorEntity):
+class OutdoorTemperatureMissingBinarySensor(
+    HeatingControllerEntity, BinarySensorEntity
+):
     """On while the room runs without an outdoor temperature.
 
     The TRVs then hold the target of the active mode as an absolute setpoint

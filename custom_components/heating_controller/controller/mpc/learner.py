@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import pairwise
 
@@ -12,6 +13,7 @@ from ...const import (
     UaBalanceOutcome,
 )
 from .models.capacity import ThermalCapacityModel
+from .models.gains import HourOutcome, RoomGainModel, SunSource, profile_index
 from .models.loss import RoomLossModel
 from .results import RoomMpcInput
 from .types import LearningFactors, RoomModelLearningState, UaBalanceInfo
@@ -86,6 +88,19 @@ UA_BALANCE_WEIGHT = 0.3
 VALVE_SATURATED_OPENING_PCT = 95.0
 UA_BALANCE_MAX_SATURATED_SHARE = 0.5
 
+# Hourly gain learning: every full clock hour with samples near both edges
+# (a restart within the hour leaves its start uncovered).
+GAIN_HOUR_S = 3600
+GAIN_HOUR_MIN_SAMPLES = 6
+GAIN_HOUR_EDGE_S = 10 * 60
+
+
+def _default_profile_index(timestamp: float) -> int:
+    # UTC and Monday to Friday; the coordinator supplies local time and the
+    # workday entity.
+    moment = time.gmtime(timestamp)
+    return profile_index(moment.tm_hour, moment.tm_wday < 5)
+
 
 @dataclass
 class LearnerHistoryEntry:
@@ -108,6 +123,8 @@ class LearnerHistoryEntry:
     # room below its target band.
     valve_saturated: bool = False
     window_open: bool = False
+    # Learning paused, outdoor temperature missing or learner disabled.
+    learning_paused: bool = False
 
 
 @dataclass
@@ -146,9 +163,14 @@ class RoomMpcModelLearner:
         loss_model: RoomLossModel,
         capacity_model: ThermalCapacityModel,
         target_band_c: float = 0.0,
+        gain_model: RoomGainModel | None = None,
     ) -> None:
         self._loss_model = loss_model
         self._capacity_model = capacity_model
+        self._gain_model = gain_model
+        self._gain_hour_done_ts: float | None = None
+        self._profile_index_at: Callable[[float], int] = _default_profile_index
+        self._sun_source: Callable[[], SunSource | None] = lambda: None
         self._target_band_c = max(0.0, target_band_c)
 
         self._history: list[LearnerHistoryEntry] = []
@@ -274,7 +296,9 @@ class RoomMpcModelLearner:
             self._ua_blocked_until_ts = max(self._ua_blocked_until_ts, now_ts)
         self._window_open = window_open
         if window_open and self._enabled:
-            self._learning_state = self._create_learning_state(LearningStatus.SUPPRESSED)
+            self._learning_state = self._create_learning_state(
+                LearningStatus.SUPPRESSED
+            )
 
     def set_outdoor_temperature_missing(self, missing: bool, now_ts: float) -> None:
         # Without an outdoor temperature the controller plans nothing and the
@@ -316,9 +340,96 @@ class RoomMpcModelLearner:
                 hot_water_charge=mpc_input.hot_water_charge,
                 valve_saturated=self._valve_saturated(mpc_input),
                 window_open=self._window_open,
+                learning_paused=(
+                    self._learning_paused
+                    or self._outdoor_temperature_missing
+                    or not self._enabled
+                ),
             )
         )
+        self._maybe_learn_gain_hour(mpc_input.now_ts)
         self._cleanup_history(mpc_input.now_ts)
+
+    def set_gain_context(
+        self,
+        profile_index_at: Callable[[float], int],
+        sun_source: Callable[[], SunSource | None],
+    ) -> None:
+        """Where the hourly gain learning gets its day profile and sun from."""
+        self._profile_index_at = profile_index_at
+        self._sun_source = sun_source
+
+    def _maybe_learn_gain_hour(self, now_ts: float) -> None:
+        if self._gain_model is None or len(self._history) < 2:
+            return
+        hour_end_ts = (now_ts // GAIN_HOUR_S) * GAIN_HOUR_S
+        hour_start_ts = hour_end_ts - GAIN_HOUR_S
+        if self._history[-2].timestamp >= hour_end_ts:
+            return
+        if (
+            self._gain_hour_done_ts is not None
+            and hour_start_ts < self._gain_hour_done_ts
+        ):
+            return
+        self._gain_hour_done_ts = hour_end_ts
+        outcome = self._evaluate_gain_hour(hour_start_ts, hour_end_ts)
+        self._gain_model.set_hour_outcome(outcome, hour_start_ts)
+
+    def _evaluate_gain_hour(self, start_ts: float, end_ts: float) -> HourOutcome:
+        gains = self._gain_model
+        window = [
+            entry for entry in self._history if start_ts <= entry.timestamp <= end_ts
+        ]
+        if (
+            len(window) < GAIN_HOUR_MIN_SAMPLES
+            or window[0].timestamp > start_ts + GAIN_HOUR_EDGE_S
+            or window[-1].timestamp < end_ts - GAIN_HOUR_EDGE_S
+        ):
+            return HourOutcome.TOO_SHORT
+        checks = (
+            ("learning_paused", HourOutcome.PAUSED),
+            ("window_open", HourOutcome.WINDOW_OPEN),
+            ("room_sensor_fallback", HourOutcome.ROOM_SENSOR_FALLBACK),
+            ("valve_position_missing", HourOutcome.VALVE_POSITION_MISSING),
+            ("trv_adapting", HourOutcome.TRV_ADAPTING),
+            ("radiator_not_heating", HourOutcome.RADIATOR_NOT_HEATING),
+            ("valve_saturated", HourOutcome.VALVE_SATURATED),
+        )
+        for flag, outcome in checks:
+            if any(getattr(entry, flag) for entry in window):
+                return outcome
+        if self._ua_blocked_until_ts > start_ts:
+            # A window just closed, or the configuration changed.
+            return HourOutcome.SUPPRESSED
+
+        heat_j = 0.0
+        room_ks = 0.0
+        outdoor_ks = 0.0
+        for previous, current in pairwise(window):
+            duration_s = current.timestamp - previous.timestamp
+            if duration_s > UA_BALANCE_MAX_GAP_S:
+                return HourOutcome.GAP
+            heat_j += self._balance_heating_power_w(previous, current) * duration_s
+            room_ks += previous.room_temperature_c * duration_s
+            outdoor_ks += previous.outdoor_temperature_c * duration_s
+        duration_s = window[-1].timestamp - window[0].timestamp
+        mid_ts = (start_ts + end_ts) / 2
+
+        sun_values = gains.sun_regressors(self._sun_source(), mid_ts)
+        if sun_values is None:
+            if not (self._sun_condition(start_ts) and self._sun_condition(end_ts)):
+                return HourOutcome.SUN_MISSING
+            # Dark for the whole hour: the sun terms are zero anyway.
+            sun_values = [0.0] * len(gains.sun_terms)
+
+        slope_c_per_s = self._trend_drift_c(window) / duration_s
+        stored_w = self._capacity_model.effective_capacity_j_per_k * slope_c_per_s
+        loss_w = self._loss_model.effective_ua_w_per_k * (
+            (room_ks - outdoor_ks) / duration_s
+        )
+        unexplained_w = stored_w - heat_j / duration_s + loss_w - gains.steady_gain_w
+        gains.add_hour(self._profile_index_at(mid_ts), sun_values, unexplained_w)
+        return HourOutcome.LEARNED
 
     def _track_degraded_inputs(self, mpc_input: RoomMpcInput) -> None:
         # The TRVs sit at the radiator and read up to a kelvin off the room
@@ -350,9 +461,7 @@ class RoomMpcModelLearner:
                 end_ts = min(end_ts, mpc_input.radiator_not_heating_since_ts)
             self._close_ua_balance(end_ts)
         if was_degraded and not degraded:
-            self._ua_blocked_until_ts = max(
-                self._ua_blocked_until_ts, mpc_input.now_ts
-            )
+            self._ua_blocked_until_ts = max(self._ua_blocked_until_ts, mpc_input.now_ts)
         self._room_sensor_fallback = mpc_input.room_sensor_fallback
         self._valve_position_missing = mpc_input.valve_position_missing
         self._trv_adapting = mpc_input.trv_adapting
@@ -455,9 +564,7 @@ class RoomMpcModelLearner:
         # the prediction was made with: the controller rarely applies the
         # planned demand for the whole window, and the radiators keep heating
         # after the valve closed.
-        simulated_temperatures_c = self._simulate_room_temperatures_c(
-            relevant_history
-        )
+        simulated_temperatures_c = self._simulate_room_temperatures_c(relevant_history)
         simulation_error_c = self._mean_of_last_samples(
             [entry.room_temperature_c for entry in relevant_history]
         ) - self._mean_of_last_samples(simulated_temperatures_c)
@@ -479,11 +586,10 @@ class RoomMpcModelLearner:
         room_temperature_c = history[0].room_temperature_c
         simulated = [room_temperature_c]
         for previous, current in pairwise(history):
-            net_heating_power_w = (
-                _interval_radiator_power_w(previous, current)
-                - self._loss_model.calculate_heat_loss_w(
-                    room_temperature_c, previous.outdoor_temperature_c
-                )
+            net_heating_power_w = _interval_radiator_power_w(
+                previous, current
+            ) - self._loss_model.calculate_heat_loss_w(
+                room_temperature_c, previous.outdoor_temperature_c
             )
             room_temperature_c += self._capacity_model.predict_temperature_change_c(
                 net_heating_power_w, current.timestamp - previous.timestamp
@@ -654,9 +760,7 @@ class RoomMpcModelLearner:
                 return UaBalanceOutcome.GAP
             if previous.valve_saturated:
                 saturated_s += duration_s
-            heat_j += (
-                self._balance_heating_power_w(previous, current) * duration_s
-            )
+            heat_j += self._balance_heating_power_w(previous, current) * duration_s
             outdoor_ks += previous.outdoor_temperature_c * duration_s
             room_ks += previous.room_temperature_c * duration_s
             if previous.flow_temperature_c is not None:
@@ -713,6 +817,17 @@ class RoomMpcModelLearner:
             info.last_target_factor = target_factor
             info.last_drift_c = drift_c
             return rejection
+
+        if self._gain_model is not None:
+            # A point for the night regression of heat-loss factor and steady
+            # gain; a target below the floor is a valid balance as well -- the
+            # room living off its neighbours is exactly such a gain.
+            self._gain_model.add_night_point(
+                temperature_difference_ks / window_duration_s,
+                (heat_j - stored_heat_j) / window_duration_s,
+                window_duration_s / 3600,
+                self._loss_model.effective_ua_w_per_k,
+            )
 
         learned_target_factor = max(target_factor, UA_BALANCE_MIN_TARGET_FACTOR)
         current_factor = self._loss_model.learned_ua_factor
@@ -771,8 +886,7 @@ class RoomMpcModelLearner:
         return (
             bool(openings_pct)
             and min(openings_pct) >= VALVE_SATURATED_OPENING_PCT
-            and mpc_input.room_temp_c
-            < mpc_input.target_temp_c - self._target_band_c
+            and mpc_input.room_temp_c < mpc_input.target_temp_c - self._target_band_c
         )
 
     def _stationary_since_ts(self, index: int, start_ts: float) -> float | None:
@@ -804,8 +918,7 @@ class RoomMpcModelLearner:
     ) -> float:
         # Mean of both ends of the interval, see _interval_radiator_power_w.
         return (
-            self._balance_point_power_w(entry)
-            + self._balance_point_power_w(next_entry)
+            self._balance_point_power_w(entry) + self._balance_point_power_w(next_entry)
         ) / 2
 
     def _balance_point_power_w(self, entry: LearnerHistoryEntry) -> float:
@@ -892,14 +1005,15 @@ class RoomMpcModelLearner:
 
     def _is_stationary(self, history: list[LearnerHistoryEntry]) -> bool:
         room_temperatures = [entry.room_temperature_c for entry in history]
-        return max(room_temperatures) - min(room_temperatures) < self._stationary_range_c
+        return (
+            max(room_temperatures) - min(room_temperatures) < self._stationary_range_c
+        )
 
     def _is_paused_window(self, prediction: LearnerPrediction | None) -> bool:
         if self._learning_paused:
             return True
         return (
-            prediction is not None
-            and prediction.timestamp < self._learning_resumed_ts
+            prediction is not None and prediction.timestamp < self._learning_resumed_ts
         )
 
     def _is_sun_free_window(self, prediction: LearnerPrediction) -> bool:

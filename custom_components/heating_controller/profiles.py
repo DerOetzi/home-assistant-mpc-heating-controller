@@ -90,9 +90,12 @@ PROFILE_SCHEMA = vol.Schema(
                 vol.Optional("model_ids", default=[]): [vol.Coerce(str)],
             },
             vol.Any(
-                vol.Schema({vol.Required("models"): vol.Length(min=1)}, extra=vol.ALLOW_EXTRA),
                 vol.Schema(
-                    {vol.Required("model_ids"): vol.Length(min=1)}, extra=vol.ALLOW_EXTRA
+                    {vol.Required("models"): vol.Length(min=1)}, extra=vol.ALLOW_EXTRA
+                ),
+                vol.Schema(
+                    {vol.Required("model_ids"): vol.Length(min=1)},
+                    extra=vol.ALLOW_EXTRA,
                 ),
                 msg="match needs models or model_ids",
             ),
@@ -262,7 +265,10 @@ def device_selector_filters(
     """Device selector filters offering only devices a profile covers."""
     filters: list[dict[str, str]] = []
     for profile in profiles:
-        base = {"integration": profile.integration, "manufacturer": profile.manufacturer}
+        base = {
+            "integration": profile.integration,
+            "manufacturer": profile.manufacturer,
+        }
         filters.extend({**base, "model": model} for model in sorted(profile.models))
         filters.extend(
             {**base, "model_id": model_id} for model_id in sorted(profile.model_ids)
@@ -325,7 +331,9 @@ def resolve_trv(
     registry_entries = er.async_entries_for_device(er.async_get(hass), device_id)
     entity_ids: dict[str, str] = {}
     for role, match in profile.entities.items():
-        candidates = [entry.entity_id for entry in registry_entries if match.matches(entry)]
+        candidates = [
+            entry.entity_id for entry in registry_entries if match.matches(entry)
+        ]
         if len(candidates) == 1:
             entity_ids[role] = candidates[0]
         elif role != ROLE_CLIMATE:
@@ -352,10 +360,7 @@ def resolve_trv(
         heat_available_entity=entity_ids.get(ROLE_HEAT_AVAILABLE),
         adaptation_status_entity=entity_ids.get(ROLE_ADAPTATION_STATUS),
         adaptation_busy=(
-            profile.adaptation_busy
-            if ROLE_ADAPTATION_STATUS in entity_ids
-            else None
+            profile.adaptation_busy if ROLE_ADAPTATION_STATUS in entity_ids else None
         ),
         valve_characteristic_seed=profile.valve_characteristic_seed,
     )
-

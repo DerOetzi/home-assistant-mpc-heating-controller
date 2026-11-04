@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -11,6 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     PERCENTAGE,
     EntityCategory,
+    UnitOfIrradiance,
     UnitOfPower,
     UnitOfTemperature,
 )
@@ -18,7 +20,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import CapacityOutcome, UaBalanceOutcome
+from .const import CapacityOutcome, Surface, UaBalanceOutcome
 from .controller.mpc.learner import UA_BALANCE_MIN_WINDOW_S
 from .controller.mpc.valve_curve import ValveCurveStatus
 from .coordinator import HeatingRoomCoordinator
@@ -38,6 +40,11 @@ async def async_setup_entry(
     ]
     if hub.flow_curve_entity:
         hub_entities += [HoldFlowReserveSensor(hub), MinFlowReserveSensor(hub)]
+    if hub.irradiance is not None:
+        hub_entities += [
+            IrradianceSensor(hub, geometry.surface)
+            for geometry in hub.irradiance.geometries
+        ]
     async_add_entities(hub_entities)
     async_add_room_entities(
         entry,
@@ -58,6 +65,7 @@ async def async_setup_entry(
             UaFactorSensor(coordinator),
             CapacityFactorSensor(coordinator),
             ValveCurveSensor(coordinator),
+            AdditionalHeatSensor(coordinator),
         ],
     )
 
@@ -143,6 +151,55 @@ class MinFlowReserveSensor(_FlowReserveSensor):
 
     def _reserve(self) -> float | None:
         return self._hub.min_flow_reserve
+
+
+class IrradianceSensor(HeatingHubEntity, SensorEntity):
+    """Sun on one surface of the building, from Open-Meteo."""
+
+    _attr_device_class = SensorDeviceClass.IRRADIANCE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfIrradiance.WATTS_PER_SQUARE_METER
+    _attr_suggested_display_precision = 0
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, hub: HeatingHub, surface: Surface) -> None:
+        super().__init__(hub, f"irradiance_{surface}")
+        self._surface = surface
+        self._attr_translation_key = f"irradiance_{surface}"
+
+    @property
+    def available(self) -> bool:
+        provider = self._hub.irradiance
+        return provider is not None and provider.series.fresh(time.time())
+
+    @property
+    def native_value(self) -> float | None:
+        provider = self._hub.irradiance
+        if provider is None:
+            return None
+        return _rounded(provider.series.value_at(self._surface, time.time()), 1)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        provider = self._hub.irradiance
+        if provider is None:
+            return {}
+        now_ts = time.time()
+        geometry = next(
+            (g for g in provider.geometries if g.surface == self._surface), None
+        )
+        return {
+            "azimuth_deg": geometry.azimuth_deg if geometry else None,
+            "tilt_deg": geometry.tilt_deg if geometry else None,
+            "last_update": _iso(provider.series.fetched_ts),
+            "last_error": provider.last_error,
+            "forecast": [
+                [_iso(start_ts), round(value, 1)]
+                for start_ts, value in provider.series.forecast(
+                    self._surface, now_ts, 24
+                )
+            ],
+        }
 
 
 class _DiagnosticSensor(HeatingControllerEntity, SensorEntity):
@@ -286,6 +343,7 @@ class HeatingDemandSensor(_DiagnosticSensor):
                 zip(self._coordinator.trv_entity_ids, result.trv_targets, strict=True)
             ),
             "trv_setpoint_writes": dict(self._coordinator.trv_setpoint_writes),
+            "trv_valve_positions": self._coordinator.trv_valve_positions,
         }
 
 
@@ -302,6 +360,59 @@ class RequestedHeatingPowerSensor(_DiagnosticSensor):
     def native_value(self) -> float | None:
         result = self._coordinator.last_result
         return result.requested_heating_power_w if result else None
+
+
+class AdditionalHeatSensor(_DiagnosticSensor):
+    """Heat the radiators do not supply: steady gain, day profile and sun.
+
+    The state counts only determined terms -- what the model may use; the
+    attribute ungated_w adds the ones still being learned.
+    """
+
+    _attr_translation_key = "additional_heat"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_suggested_display_precision = 0
+
+    def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
+        super().__init__(coordinator, "additional_heat")
+
+    @property
+    def native_value(self) -> float:
+        return round(self._coordinator.current_gain().total_w, 1)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        gains = self._coordinator.mpc.gain_model
+        now = self._coordinator.current_gain()
+        profile = gains.profile_w()
+        blocks = len(profile) // 2
+        return {
+            "steady_gain_w": round(now.steady_w, 1),
+            "profile_now_w": round(now.profile_w, 1),
+            "sun_now_w": round(now.sun_w, 1),
+            "ungated_w": round(now.ungated_w, 1),
+            "gain_profile_workday_w": [round(v) for v in profile[:blocks]],
+            "gain_profile_other_days_w": [round(v) for v in profile[blocks:]],
+            "profile_determined": [
+                gains.profile_determined(index) for index in range(len(profile))
+            ],
+            "sun_coefficients_w": {
+                term: round(value, 1)
+                for term, value in gains.sun_coefficients_w().items()
+            },
+            "sun_determined": {
+                term: gains.sun_determined(index)
+                for index, term in enumerate(gains.sun_terms)
+            },
+            "hour_samples": gains.hour_samples,
+            "residual_rms_w": _rounded(gains.residual_rms_w, 1),
+            "last_hour": _iso(gains.last_hour_ts),
+            "last_hour_outcome": (
+                gains.last_hour_outcome.value if gains.last_hour_outcome else None
+            ),
+        }
 
 
 class AvailableHeatingPowerSensor(_DiagnosticSensor):
@@ -436,6 +547,7 @@ class UaLearningStatusSensor(_DiagnosticSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         info = self._coordinator.mpc.get_ua_balance_info()
+        gains = self._coordinator.mpc.gain_model
         since_ts = info.collecting_since_ts
         return {
             "collecting_since": _iso(since_ts),
@@ -454,6 +566,12 @@ class UaLearningStatusSensor(_DiagnosticSensor):
             "last_mean_room_c": _rounded(info.last_mean_room_c, 2),
             "last_mean_flow_c": _rounded(info.last_mean_flow_c, 2),
             "last_mean_heating_w": _rounded(info.last_mean_heating_w, 1),
+            # Night regression of heat-loss factor and steady gain.
+            "learned_gain_w": _rounded(gains.learned_gain_w, 1),
+            "gain_sigma_w": _rounded(gains.gain_sigma_w, 1),
+            "gain_fit_points": gains.night_points,
+            "gain_determined": gains.gain_determined,
+            "regression_ua_factor": _rounded(gains.regression_ua_factor, 4),
         }
 
 

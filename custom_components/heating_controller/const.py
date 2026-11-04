@@ -83,6 +83,17 @@ CONF_MAX_SENSOR_AGE = "max_sensor_age_s"
 CONF_STATIONARY_RANGE = "stationary_range_c"
 CONF_TARGET_BAND = "target_band_c"
 CONF_TRV_SETPOINT_MODE = "trv_setpoint_mode"
+# Sun on the building: how the house is turned, its roof, and which day
+# counts as a workday for the gain profile.
+CONF_BUILDING_ROTATION = "building_rotation_deg"
+CONF_ROOF_ORIENTATION = "roof_orientation"
+CONF_ROOF_TILT = "roof_tilt_deg"
+CONF_WORKDAY_ENTITY = "workday_entity"
+# Per room: surfaces whose windows let the sun in at once, and outer walls or
+# roof surfaces that pass it on with a delay.
+CONF_WINDOW_SURFACES = "window_surfaces"
+CONF_OPAQUE_SURFACES = "opaque_surfaces"
+DEFAULT_ROOF_TILT_DEG = 45.0
 
 # Settings of the whole house, held once by the hub entry.
 HUB_KEYS = (
@@ -108,6 +119,10 @@ HUB_KEYS = (
     CONF_STATIONARY_RANGE,
     CONF_TARGET_BAND,
     CONF_TRV_SETPOINT_MODE,
+    CONF_BUILDING_ROTATION,
+    CONF_ROOF_ORIENTATION,
+    CONF_ROOF_TILT,
+    CONF_WORKDAY_ENTITY,
 )
 
 # Settings of one room, held by its subentry.
@@ -129,12 +144,15 @@ ROOM_KEYS = (
     CONF_CONSTRUCTION,
     CONF_LEAD_HEATING_LIMIT,
     CONF_LEAD_FLOW,
+    CONF_WINDOW_SURFACES,
+    CONF_OPAQUE_SURFACES,
 )
 
 SERVICE_UNBLOCK = "unblock"
 SERVICE_RECALIBRATE = "recalibrate"
 ATTR_UA_FACTOR = "ua_factor"
 ATTR_CAPACITY_FACTOR = "capacity_factor"
+ATTR_RESET_GAINS = "reset_gains"
 
 LEARNING_CYCLE_INTERVAL_MINUTES = 30
 SENSOR_POLL_INTERVAL_MINUTES = 5
@@ -279,3 +297,27 @@ class CapacityOutcome(StrEnum):
     PAUSED = "paused"
     WAITING = "waiting"
     DISABLED = "disabled"
+
+
+class RoofOrientation(StrEnum):
+    """Which way the two roof surfaces of a gable roof face."""
+
+    NONE = "none"
+    EAST_WEST = "east_west"
+    NORTH_SOUTH = "north_south"
+
+
+class Surface(StrEnum):
+    """An outer surface of the building the sun can shine on."""
+
+    NORTH = "north"
+    EAST = "east"
+    SOUTH = "south"
+    WEST = "west"
+    ROOF_NORTH = "roof_north"
+    ROOF_EAST = "roof_east"
+    ROOF_SOUTH = "roof_south"
+    ROOF_WEST = "roof_west"
+
+
+FACADES = (Surface.NORTH, Surface.EAST, Surface.SOUTH, Surface.WEST)

@@ -10,8 +10,9 @@ unblock:
 recalibrate:
   name: Recalibrate
   description: >-
-    Set the learned UA and capacity factors of one or more rooms. A factor
-    left out stays unchanged; pass 1.0 to reset it. Admin only.
+    Set the learned UA and capacity factors of one or more rooms, or reset
+    their learned gains. A factor left out stays unchanged; pass 1.0 to reset
+    it. Admin only.
   target:
     entity:
       integration: heating_controller
@@ -36,3 +37,11 @@ recalibrate:
           max: 3.0
           step: 0.001
           mode: box
+    reset_gains:
+      name: Reset gains
+      description: >-
+        Forget the learned steady gain, gain profile and sun terms of the
+        room and learn them anew.
+      example: true
+      selector:
+        boolean:

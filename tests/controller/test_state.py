@@ -136,7 +136,9 @@ def test_determine_base_target_temperature_per_mode():
 
 
 def test_effective_target_temperature_adds_pv_boost_offset_when_enabled():
-    controller = make_controller(pv_boost_enabled=True, pv_boost_temperature_offset_c=1.5)
+    controller = make_controller(
+        pv_boost_enabled=True, pv_boost_temperature_offset_c=1.5
+    )
     controller.set_pv_boost(True)
     assert controller.effective_target_temperature(20.0) == 21.5
 

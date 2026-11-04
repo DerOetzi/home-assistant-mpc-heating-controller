@@ -1,5 +1,6 @@
 """The hold-flow sensor is the ungated counterpart to the min-flow sensor."""
 
+import pytest
 from heating_controller.const import FlowSupplyStatus
 from homeassistant.core import HomeAssistant, ServiceCall
 from test_coordinator import _hub_entry, _room_data, _seed_entities
@@ -136,8 +137,13 @@ def test_ua_learning_status_sensor_rounds_the_means() -> None:
         last_mean_heating_w=312.5678,
     )
     sensor = object.__new__(UaLearningStatusSensor)
+    from heating_controller.controller.mpc.models.gains import RoomGainModel
+
+    gains = RoomGainModel(1000, 31.25)
+    for delta_c in (10.0, 14.0, 18.0):
+        gains.add_night_point(delta_c, 20.0 * delta_c - 50.0, 6.0, 31.25)
     sensor._coordinator = SimpleNamespace(
-        mpc=SimpleNamespace(get_ua_balance_info=lambda: info)
+        mpc=SimpleNamespace(get_ua_balance_info=lambda: info, gain_model=gains)
     )
 
     attributes = sensor.extra_state_attributes
@@ -146,6 +152,10 @@ def test_ua_learning_status_sensor_rounds_the_means() -> None:
     assert attributes["last_mean_room_c"] == 20.99
     assert attributes["last_mean_flow_c"] is None
     assert attributes["last_mean_heating_w"] == 312.6
+    assert attributes["learned_gain_w"] == pytest.approx(50.0, abs=5)
+    assert attributes["gain_fit_points"] == 3
+    assert attributes["gain_determined"] is True
+    assert attributes["regression_ua_factor"] == pytest.approx(0.64, abs=0.02)
 
 
 async def test_capacity_learning_status_sensor_reports_the_replay(
@@ -167,17 +177,13 @@ def test_valve_curve_sensor_shows_status_and_rounded_bins() -> None:
     from heating_controller.sensor import ValveCurveSensor
 
     learner = ValveCurveLearner(None)
-    learner.restore(
-        {"samples": [[0.7123, 30.0], [0.7123, 100 / 3], [0.7123, 40.0]]}
-    )
+    learner.restore({"samples": [[0.7123, 30.0], [0.7123, 100 / 3], [0.7123, 40.0]]})
     sensor = object.__new__(ValveCurveSensor)
     # Only TRVs with a valve entity are in the report; a second TRV without
     # one stays out of the attributes.
     sensor._coordinator = SimpleNamespace(
         mpc=SimpleNamespace(
-            valve_curve_report=lambda: {
-                "climate.a": (learner.status, learner.bins())
-            }
+            valve_curve_report=lambda: {"climate.a": (learner.status, learner.bins())}
         ),
     )
 

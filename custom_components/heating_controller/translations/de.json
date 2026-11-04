@@ -33,6 +33,16 @@
           "target_band_c": "Zielband unter Sollwert (K)",
           "trv_setpoint_mode": "TRV-Sollwert-Modus"
         }
+      },
+      "sun": {
+        "title": "Sonne und Werktage",
+        "description": "Die Sonne auf den Flächen des Hauses kommt von Open-Meteo (der Standort dieses Home Assistant geht an api.open-meteo.com). Abgerufen werden nur Flächen, die ein Raum wählt.",
+        "data": {
+          "building_rotation_deg": "Drehung des Hauses (°, Richtung der Nordfassade; z. B. -15 bei 15° nach Westen gedreht)",
+          "roof_orientation": "Dachflächen",
+          "roof_tilt_deg": "Dachneigung (°)",
+          "workday_entity": "Werktag-Entity (an = Werktag; ohne sie Montag bis Freitag)"
+        }
       }
     },
     "abort": {
@@ -101,7 +111,9 @@
             "design_indoor_temperature_c": "Auslegungs-Innentemperatur (°C)",
             "room_heat_load_w": "Auslegungsheizlast (W)",
             "room_area_m2": "Raumfläche (m², Basis der Wärmekapazität)",
-            "construction": "Bauweise (Klasse nach ISO 13790, Wärmekapazität je m²)"
+            "construction": "Bauweise (Klasse nach ISO 13790, Wärmekapazität je m²)",
+            "window_surfaces": "Flächen mit Fenstern (Sonne wirkt sofort)",
+            "opaque_surfaces": "Außenwände und Dachflächen (Sonne wirkt verzögert)"
           }
         }
       },
@@ -154,6 +166,25 @@
       "options": {
         "absolute": "Absolut (über den TRV-Bereich verteilt)",
         "relative": "Relativ (über der TRV-eigenen Messung)"
+      }
+    },
+    "roof_orientation": {
+      "options": {
+        "none": "Keine / Flachdach",
+        "east_west": "Ost und West",
+        "north_south": "Nord und Süd"
+      }
+    },
+    "surface": {
+      "options": {
+        "north": "Nordfassade",
+        "east": "Ostfassade",
+        "south": "Südfassade",
+        "west": "Westfassade",
+        "roof_north": "Dach Nord",
+        "roof_east": "Dach Ost",
+        "roof_south": "Dach Süd",
+        "roof_west": "Dach West"
       }
     }
   },
@@ -291,6 +322,33 @@
       },
       "min_flow_reserve": {
         "name": "Vorlauf-Reserve Mindestvorlauf"
+      },
+      "irradiance_north": {
+        "name": "Einstrahlung Nordfassade"
+      },
+      "irradiance_east": {
+        "name": "Einstrahlung Ostfassade"
+      },
+      "irradiance_south": {
+        "name": "Einstrahlung Südfassade"
+      },
+      "irradiance_west": {
+        "name": "Einstrahlung Westfassade"
+      },
+      "irradiance_roof_north": {
+        "name": "Einstrahlung Dach Nord"
+      },
+      "irradiance_roof_east": {
+        "name": "Einstrahlung Dach Ost"
+      },
+      "irradiance_roof_south": {
+        "name": "Einstrahlung Dach Süd"
+      },
+      "irradiance_roof_west": {
+        "name": "Einstrahlung Dach West"
+      },
+      "additional_heat": {
+        "name": "Zusatzwärme"
       }
     }
   },
@@ -301,7 +359,7 @@
     },
     "recalibrate": {
       "name": "Neu kalibrieren",
-      "description": "Setzt die gelernten UA- und Kapazitätsfaktoren eines oder mehrerer Räume. Ein weggelassener Faktor bleibt unverändert; 1.0 setzt ihn zurück. Nur für Admins.",
+      "description": "Setzt die gelernten UA- und Kapazitätsfaktoren eines oder mehrerer Räume oder setzt deren gelernte Gewinne zurück. Ein weggelassener Faktor bleibt unverändert; 1.0 setzt ihn zurück. Nur für Admins.",
       "fields": {
         "ua_factor": {
           "name": "UA-Faktor",
@@ -310,6 +368,10 @@
         "capacity_factor": {
           "name": "Kapazitätsfaktor",
           "description": "Gelernter Faktor der Wärmekapazität. 1.0 setzt ihn auf den Auslegungswert zurück."
+        },
+        "reset_gains": {
+          "name": "Gewinne zurücksetzen",
+          "description": "Vergisst den gelernten festen Gewinn, das Gewinnprofil und die Sonnenterme des Raums und lernt sie neu."
         }
       }
     }

@@ -33,6 +33,16 @@
           "target_band_c": "Target band below setpoint (K)",
           "trv_setpoint_mode": "TRV target mode"
         }
+      },
+      "sun": {
+        "title": "Sun and workdays",
+        "description": "Sun on the building's surfaces comes from Open-Meteo (the location of this Home Assistant is sent to api.open-meteo.com). Only surfaces a room picks are fetched.",
+        "data": {
+          "building_rotation_deg": "Building rotation (°, the north facade faces this bearing; e.g. -15 for a house turned 15° west)",
+          "roof_orientation": "Roof surfaces",
+          "roof_tilt_deg": "Roof pitch (°)",
+          "workday_entity": "Workday entity (on = workday; without it Monday to Friday)"
+        }
       }
     },
     "abort": {
@@ -101,7 +111,9 @@
             "design_indoor_temperature_c": "Design indoor temperature (°C)",
             "room_heat_load_w": "Design heat load (W)",
             "room_area_m2": "Room area (m², sets the base heat capacity)",
-            "construction": "Construction (ISO 13790 class, sets the heat capacity per m²)"
+            "construction": "Construction (ISO 13790 class, sets the heat capacity per m²)",
+            "window_surfaces": "Surfaces with windows (sun enters at once)",
+            "opaque_surfaces": "Outer walls and roof surfaces (sun passes through with a delay)"
           }
         }
       },
@@ -154,6 +166,25 @@
       "options": {
         "absolute": "Absolute (spread over the TRV range)",
         "relative": "Relative (above the TRV's own reading)"
+      }
+    },
+    "roof_orientation": {
+      "options": {
+        "none": "None / flat",
+        "east_west": "East and west",
+        "north_south": "North and south"
+      }
+    },
+    "surface": {
+      "options": {
+        "north": "North facade",
+        "east": "East facade",
+        "south": "South facade",
+        "west": "West facade",
+        "roof_north": "North roof",
+        "roof_east": "East roof",
+        "roof_south": "South roof",
+        "roof_west": "West roof"
       }
     }
   },
@@ -291,6 +322,33 @@
       },
       "min_flow_reserve": {
         "name": "Flow reserve minimum"
+      },
+      "irradiance_north": {
+        "name": "Irradiance North facade"
+      },
+      "irradiance_east": {
+        "name": "Irradiance East facade"
+      },
+      "irradiance_south": {
+        "name": "Irradiance South facade"
+      },
+      "irradiance_west": {
+        "name": "Irradiance West facade"
+      },
+      "irradiance_roof_north": {
+        "name": "Irradiance North roof"
+      },
+      "irradiance_roof_east": {
+        "name": "Irradiance East roof"
+      },
+      "irradiance_roof_south": {
+        "name": "Irradiance South roof"
+      },
+      "irradiance_roof_west": {
+        "name": "Irradiance West roof"
+      },
+      "additional_heat": {
+        "name": "Additional heat"
       }
     }
   },
@@ -301,7 +359,7 @@
     },
     "recalibrate": {
       "name": "Recalibrate",
-      "description": "Set the learned UA and capacity factors of one or more rooms. A factor left out stays unchanged; pass 1.0 to reset it. Admin only.",
+      "description": "Set the learned UA and capacity factors of one or more rooms, or reset their learned gains. A factor left out stays unchanged; pass 1.0 to reset it. Admin only.",
       "fields": {
         "ua_factor": {
           "name": "UA factor",
@@ -310,6 +368,10 @@
         "capacity_factor": {
           "name": "Capacity factor",
           "description": "Learned thermal-capacity factor. 1.0 resets it to the design value."
+        },
+        "reset_gains": {
+          "name": "Reset gains",
+          "description": "Forget the learned steady gain, gain profile and sun terms of the room and learn them anew."
         }
       }
     }

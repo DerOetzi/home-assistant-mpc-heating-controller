@@ -61,8 +61,13 @@ activate boost. Once active, the only way out is **Unblock** in the header — t
 again does nothing, so you can't accidentally toggle back to automatic mode with a second
 tap on the same spot.
 
-**Details** (expanded): room sensor, each TRV (current vs. target temperature), and window
-contacts, in whatever order you've set — tap any row to open its more-info dialog.
+**Details** (expanded): room sensor, each TRV (current vs. target temperature, plus the
+valve opening it reports, e.g. "21.1 °C → 22 °C · 34 %"), window
+contacts, and the room's additional heat (`sensor.<room>_additional_heat`: steady gain, day
+profile and sun, see the MPC guide's "Gains and sun"), in whatever order you've set — tap any
+row to open its more-info dialog. The additional heat shows what the model may use; while
+terms are still being learned, their unconfirmed total follows in brackets, e.g.
+"0 W (learning: 85 W)".
 
 **Heating control** (expanded): a Comfort/Eco/Frost-protection mode switcher (always
 tappable, independent of Boost/Unblock), a comfort-temperature slider, an eco-offset
@@ -80,7 +85,7 @@ Open the card's editor (dashboard edit mode → the card → the pencil/settings
   or pointed at a different entity, since it's the room's own reading. Add any other sensor
   via the entity picker at the bottom — those are fully yours: rename, re-icon, reorder, or
   remove freely.
-- **Details** — the room sensor, each TRV, and each window contact are seeded from the
+- **Details** — the room sensor, each TRV, each window contact, and the additional heat are seeded from the
   device automatically; the eye icon hides one without deleting it (they always reflect the
   room's actual hardware, so there's nothing meaningful to delete). Anything you add via the
   entity picker is a normal, fully editable/removable row.

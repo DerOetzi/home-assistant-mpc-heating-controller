@@ -67,6 +67,11 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   on (e.g. an extra heater in that room). The heat-loss factor comes from a heat balance
   over each usable night stretch (four to eight hours) of the requested heating power, the capacity factor from replaying 30-minute
   windows with that power. See [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
+- **Gains and sun (learning only, not yet used by the control)** — over several nights a
+  regression separates a steady gain from the heat-loss factor; every hour a second one
+  learns a day profile (8 blocks of 3 hours, workdays and other days apart) and the sun on
+  the room's windows, walls and roof surfaces, with irradiance from Open-Meteo. Shown in
+  `sensor.<room>_additional_heat`. See [docs/mpc-guide.md](docs/mpc-guide.md#gains-and-sun).
 - **Custom Lovelace card** (`custom:heating-controller-card`) — a single card per room
   showing room temperature, configurable header sensors (humidity, CO₂, PM2.5, …), mode
   control, comfort/eco setpoints, boost, room-specific comfort conditions, and a detail
@@ -103,6 +108,12 @@ once per house. It holds everything that applies to the whole house:
    (used to size the emitter curves), demand-control hysteresis/hold-time/max-step tuning,
    surplus gate, sensor age, the stationary range that decides which factor a measurement
    window trains, target band and TRV target mode.
+3. **Sun and workdays** — how the house is turned (the bearing of its north facade, e.g.
+   −15° for a house turned 15° west), which way the roof surfaces face and their pitch, and
+   an optional workday entity (on = workday; without it Monday to Friday). For the surfaces
+   the rooms pick, the hub fetches hourly irradiance from
+   [Open-Meteo](https://open-meteo.com/): **this sends the latitude and longitude of your
+   Home Assistant to api.open-meteo.com.** No room with surfaces, no request.
 
 **Reconfigure** on the hub changes these; all rooms reload.
 
@@ -118,7 +129,9 @@ Then **Add room** on the hub, once per room:
 4. **Boost, PV boost and lead room** — boost enable/offset, PV-boost enable/offset, and
    whether the room is a lead room for the heating limit and/or the flow temperature.
 5. **Room design** — design indoor temperature, room heat load, room area and construction
-   class (the base heat capacity).
+   class (the base heat capacity), and the building surfaces whose sun reaches the room:
+   facades with windows, and outer walls or roof surfaces without (a wall with windows
+   counts in both).
 
 **Reconfigure** on a room re-runs steps 2–5 pre-filled (the name stays: the room's
 learning files are keyed by it). Deleting a room removes its entities and its learning
@@ -136,6 +149,9 @@ The hub's device *Heizung* reports the lead rooms:
 - *Flow reserve hold* / *Flow reserve minimum* — heating curve minus the two flows above,
   only with a heating curve entity; unavailable while the flow is 0 (all lead rooms in
   their surplus buffer).
+- *Irradiance &lt;surface&gt;* — sun on each surface some room uses (W/m², diagnostic),
+  with the next 24 hours as attribute `forecast`; unavailable when the last fetch is more
+  than three hours old.
 
 ## Supported devices
 
@@ -212,9 +228,9 @@ rows) are configured entirely through the editor's sortable lists — see
   [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
 - The card doesn't care about entity IDs — rename any of a room's entities freely, the card
   keeps working.
-- After updating the integration (HACS or manual), do a hard browser reload (Ctrl+F5) once
-  so the updated Lovelace card is picked up — a normal refresh can serve a cached, outdated
-  version.
+- After updating the integration (HACS or manual) and restarting Home Assistant, a normal
+  browser reload picks up the updated Lovelace card: its URL carries a hash of the card's
+  files, so a changed card is never served from the browser cache.
 
 ## Development
 

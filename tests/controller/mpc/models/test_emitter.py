@@ -34,9 +34,10 @@ def _expected_power_per_meter(radiator_type, height_mm):
     clamped_height_mm = min(
         max(height_mm, MIN_RADIATOR_HEIGHT_MM), MAX_RADIATOR_HEIGHT_MM
     )
-    return PANEL_RADIATOR_REFERENCE_POWER_W_PER_METER[radiator_type] * (
-        clamped_height_mm / REFERENCE_HEIGHT_MM
-    ) ** HEIGHT_SCALING_EXPONENT
+    return (
+        PANEL_RADIATOR_REFERENCE_POWER_W_PER_METER[radiator_type]
+        * (clamped_height_mm / REFERENCE_HEIGHT_MM) ** HEIGHT_SCALING_EXPONENT
+    )
 
 
 def _available_power_at_design_delta(radiator_type, width_mm, height_mm):
@@ -68,14 +69,22 @@ def test_available_power_increases_with_lower_room_temperature():
 
 def test_target_temperature_at_zero_demand_is_min_target():
     model = make_model(
-        [TrvConfig(name="trv1", min_target_temperature_c=6, max_target_temperature_c=28)]
+        [
+            TrvConfig(
+                name="trv1", min_target_temperature_c=6, max_target_temperature_c=28
+            )
+        ]
     )
     assert model.calculate_target_temperatures(0) == [6]
 
 
 def test_target_temperature_at_full_demand_is_max_target():
     model = make_model(
-        [TrvConfig(name="trv1", min_target_temperature_c=6, max_target_temperature_c=28)]
+        [
+            TrvConfig(
+                name="trv1", min_target_temperature_c=6, max_target_temperature_c=28
+            )
+        ]
     )
     assert model.calculate_target_temperatures(100) == [28]
 
@@ -97,7 +106,13 @@ def test_two_trvs_split_demand_by_distribution_weight():
 
 
 def test_towel_radiator_uses_nominal_power_w():
-    model = make_model([TrvConfig(name="towel", emitter_type=HeatEmitterType.TOWEL, nominal_power_w=600)])
+    model = make_model(
+        [
+            TrvConfig(
+                name="towel", emitter_type=HeatEmitterType.TOWEL, nominal_power_w=600
+            )
+        ]
+    )
     power = model.calculate_available_heating_power_w(20, flow_temperature_c=55)
     assert power > 0
 
@@ -175,7 +190,9 @@ def test_recommended_flow_does_not_depend_on_the_heat_load():
 
 def test_panel_radiator_at_reference_height_matches_the_table_value():
     power = _available_power_at_design_delta(PanelRadiatorType.TYPE_10, 1000, 600)
-    assert power == PANEL_RADIATOR_REFERENCE_POWER_W_PER_METER[PanelRadiatorType.TYPE_10]
+    assert (
+        power == PANEL_RADIATOR_REFERENCE_POWER_W_PER_METER[PanelRadiatorType.TYPE_10]
+    )
 
 
 @pytest.mark.parametrize("height_mm", [300, 450, 900])
@@ -190,7 +207,8 @@ def test_panel_radiator_height_scaling_follows_the_power_law(height_mm):
 def test_panel_radiator_height_below_minimum_is_clamped():
     power = _available_power_at_design_delta(PanelRadiatorType.TYPE_22, 1000, 50)
     expected = round_to_step(
-        _expected_power_per_meter(PanelRadiatorType.TYPE_22, MIN_RADIATOR_HEIGHT_MM), 0.01
+        _expected_power_per_meter(PanelRadiatorType.TYPE_22, MIN_RADIATOR_HEIGHT_MM),
+        0.01,
     )
     assert power == expected
 
@@ -198,7 +216,8 @@ def test_panel_radiator_height_below_minimum_is_clamped():
 def test_panel_radiator_height_above_maximum_is_clamped():
     power = _available_power_at_design_delta(PanelRadiatorType.TYPE_22, 1000, 3000)
     expected = round_to_step(
-        _expected_power_per_meter(PanelRadiatorType.TYPE_22, MAX_RADIATOR_HEIGHT_MM), 0.01
+        _expected_power_per_meter(PanelRadiatorType.TYPE_22, MAX_RADIATOR_HEIGHT_MM),
+        0.01,
     )
     assert power == expected
 

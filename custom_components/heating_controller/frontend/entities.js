@@ -1,6 +1,13 @@
 // Resolving a heating_controller device into the entities the card renders.
 
-import { DOMAIN, ROLES, ROOM_SENSOR_KEY, ROOM_TEMP_KEY, DEVICE_CLASS_ICONS } from "./const.js";
+import {
+  DOMAIN,
+  ROLES,
+  ROOM_SENSOR_KEY,
+  ROOM_TEMP_KEY,
+  ADDITIONAL_HEAT_KEY,
+  DEVICE_CLASS_ICONS,
+} from "./const.js";
 import { num, localeOf } from "./format.js";
 import { t } from "./translations.js";
 
@@ -76,18 +83,26 @@ export const managedDetailRows = (hass, roles) => {
 
   const trvTemps = roomAttrs.trv_temperatures ?? {};
   const trvTargets = roles.demand?.attributes?.trv_target_temps ?? {};
+  // The valve opening each TRV reports (pi_heating_demand), when known.
+  const trvValves = roles.demand?.attributes?.trv_valve_positions ?? {};
   for (const [entityId, temp] of Object.entries(trvTemps)) {
     const stateObj = hass.states[entityId];
     const target = trvTargets[entityId];
+    const valve = trvValves[entityId];
+    const locale = localeOf(hass);
+    let value =
+      target != null
+        ? `${num(temp, 1, locale)} °C → ${num(target, 1, locale)} °C`
+        : `${num(temp, 1, locale)} °C`;
+    if (valve != null && Number.isFinite(Number(valve))) {
+      value += ` · ${num(valve, 0, locale)} %`;
+    }
     rows.push({
       key: `trv:${entityId}`,
       entity: entityId,
       name: stateObj?.attributes?.friendly_name || entityId,
       icon: "mdi:radiator",
-      value:
-        target != null
-          ? `${num(temp, 1, localeOf(hass))} °C → ${num(target, 1, localeOf(hass))} °C`
-          : `${num(temp, 1, localeOf(hass))} °C`,
+      value,
     });
   }
 
@@ -104,5 +119,33 @@ export const managedDetailRows = (hass, roles) => {
       value: t(hass, open ? "window_open" : "window_closed"),
     });
   }
+
+  const additionalHeat = additionalHeatRow(hass, roles.additionalHeat);
+  if (additionalHeat) rows.push(additionalHeat);
   return rows;
+};
+
+// The state counts only the terms the model may use; while some are still
+// being learned, their sum (ungated_w) is shown alongside, so the row says
+// something before the first term is determined.
+const additionalHeatRow = (hass, stateObj) => {
+  if (!stateObj) return null;
+  const used = Number(stateObj.state);
+  if (!Number.isFinite(used)) return null;
+  const locale = localeOf(hass);
+  const value = `${num(used, 0, locale)} W`;
+  const ungated = Number(stateObj.attributes?.ungated_w);
+  const learning = Number.isFinite(ungated) && Math.round(ungated) !== Math.round(used);
+  return {
+    key: ADDITIONAL_HEAT_KEY,
+    entity: stateObj.entity_id,
+    name: t(hass, "row_additional_heat"),
+    icon: "mdi:white-balance-sunny",
+    value: learning
+      ? t(hass, "row_additional_heat_learning", {
+          value,
+          ungated: `${num(ungated, 0, locale)} W`,
+        })
+      : value,
+  };
 };

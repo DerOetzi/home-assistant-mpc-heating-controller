@@ -472,8 +472,12 @@ def test_surplus_gate_waits_out_the_hold_time_before_closing():
     controller = make_controller(flow_gate_config=FlowGateConfig(hold_time_s=900.0))
     feed_coasting_room(controller)
 
-    assert controller.compute(target_temperature_c=23.0).result.flow_gate_closed is False
-    assert controller.compute(target_temperature_c=23.0).result.flow_gate_closed is False
+    assert (
+        controller.compute(target_temperature_c=23.0).result.flow_gate_closed is False
+    )
+    assert (
+        controller.compute(target_temperature_c=23.0).result.flow_gate_closed is False
+    )
 
 
 def test_surplus_gate_state_is_separate_per_compute_path():
@@ -913,7 +917,6 @@ def test_balance_does_not_move_anything_but_the_factor():
     assert after.radiator_power_w == before.radiator_power_w
 
 
-
 def _charge(controller, clock, flows_c, room_temp_c=20.5):
     result = None
     for flow_c in flows_c:
@@ -1311,9 +1314,7 @@ def test_a_trv_with_a_curve_gets_the_offset_for_the_opening(
     # TRV reading 20.3 °C: the nearest 0.5 K step to reading + offset, at
     # least the first step above reading + 0.1 K.
     offset_c = curve.offset_c(result.demand_pct)
-    assert result.trv_targets[0] == max(
-        20.5, round((20.3 + offset_c) / 0.5) * 0.5
-    )
+    assert result.trv_targets[0] == max(20.5, round((20.3 + offset_c) / 0.5) * 0.5)
 
 
 @pytest.mark.parametrize(
@@ -1335,8 +1336,11 @@ def test_a_trv_without_seed_or_learned_curve_keeps_the_weighted_mapping(
 
     assert controller.valve_characteristics() == [None]
     assert result.demand_pct > 0
-    assert result.trv_targets == controller._emitter_model.calculate_target_temperatures(
-        result.demand_pct, TrvSetpointMode.RELATIVE, [20.3]
+    assert (
+        result.trv_targets
+        == controller._emitter_model.calculate_target_temperatures(
+            result.demand_pct, TrvSetpointMode.RELATIVE, [20.3]
+        )
     )
 
 
@@ -1411,3 +1415,91 @@ def test_smoothing_never_stops_below_the_threshold(
 
     assert not [pct for pct in outputs if 0 < pct < threshold_pct]
     assert outputs[-1] == pytest.approx(final_pct)
+
+
+def _restarted_controller():
+    """Cold room after a restart, its TRV reporting its valve opening."""
+    controller = RoomMpcController(
+        thermal_config=RoomThermalConfig(
+            room_heat_load_w=1200,
+            room_area_m2=108,
+            construction=Construction.VERY_LIGHT,
+        ),
+        trvs=[TrvConfig(name="trv1", valve_position_configured=True)],
+        rate_limit_config=MpcRateLimitConfig(
+            demand_hysteresis_pct=0, hold_time_s=0, max_demand_step_pct=20
+        ),
+        max_sensor_age_s=1800,
+        room_sensor_configured=False,
+        target_band_c=0.0,
+    )
+    controller.set_room_sensor_temperature(10.0)
+    controller.set_outdoor_temperature(-15.0)
+    controller.set_flow_temperature(45.0)
+    return controller
+
+
+def test_ramp_starts_from_the_reported_valve_opening(monkeypatch):
+    _Clock(monkeypatch)
+    controller = _restarted_controller()
+    controller.set_valve_position(0, 92.0)
+
+    first = controller.compute(target_temperature_c=25.0)
+
+    # Not 20 %: the TRV is still open from before the restart.
+    assert first.result.demand_pct == 100
+
+
+def test_ramp_steps_down_from_the_reported_opening(monkeypatch):
+    _Clock(monkeypatch)
+    controller = _restarted_controller()
+    controller.set_room_sensor_temperature(30.0)
+    controller.set_valve_position(0, 80.0)
+
+    first = controller.compute(target_temperature_c=21.0)
+
+    # Too warm: the planner wants 0 %, the ramp leaves 80 % only by one step.
+    assert first.result.demand_pct == pytest.approx(60)
+
+
+def test_a_late_valve_report_still_seeds_the_ramp(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _restarted_controller()
+
+    first = controller.compute(target_temperature_c=25.0)
+    clock.advance(30)
+    controller.set_valve_position(0, 92.0)
+    second = controller.compute(target_temperature_c=25.0)
+
+    assert first.result.demand_pct == 20
+    # Seeded at 92 %, then the step 30 s allow: 20 % * 30 / 300.
+    assert second.result.demand_pct == pytest.approx(92 + 2)
+
+
+def test_seed_only_once_after_setup(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _restarted_controller()
+    controller.set_room_sensor_temperature(30.0)
+    controller.set_valve_position(0, 80.0)
+    controller.compute(target_temperature_c=21.0)
+
+    clock.advance(60)
+    controller.set_valve_position(0, 100.0)
+    later = controller.compute(target_temperature_c=21.0)
+
+    # The ramp goes on from 60 %, the new report does not reset it.
+    assert later.result.demand_pct < 60
+
+
+def test_without_a_valve_report_the_ramp_starts_at_zero(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _restarted_controller()
+
+    first = controller.compute(target_temperature_c=25.0)
+    clock.advance(11 * 60)
+    controller.set_valve_position(0, 92.0)
+    later = controller.compute(target_temperature_c=25.0)
+
+    assert first.result.demand_pct == 20
+    # The window has passed: the report no longer seeds, the ramp steps on.
+    assert later.result.demand_pct == 40

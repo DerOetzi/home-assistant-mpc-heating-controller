@@ -53,7 +53,11 @@ def _add_rooms(hass: HomeAssistant, hass_storage: dict) -> None:
             "version": 1,
             "minor_version": 1,
             "key": _store_key(room),
-            "data": {"room_name": room["title"], "ua_factor": 0.5, "capacity_factor": 1.0},
+            "data": {
+                "room_name": room["title"],
+                "ua_factor": 0.5,
+                "capacity_factor": 1.0,
+            },
         }
 
 
@@ -80,8 +84,7 @@ async def test_rooms_become_subentries_of_one_hub(
         room["entry_id"]: room["title"] for room in ROOMS
     }
     assert all(
-        sub.subentry_type == SUBENTRY_TYPE_ROOM
-        and sub.unique_id == slugify(sub.title)
+        sub.subentry_type == SUBENTRY_TYPE_ROOM and sub.unique_id == slugify(sub.title)
         for sub in hub.subentries.values()
     )
 
@@ -156,7 +159,9 @@ async def test_rooms_keep_their_own_settings(
         "Schlafzimmer",
     }
     assert [
-        title for title, data in rooms.items() if not data["use_house_comfort_conditions"]
+        title
+        for title, data in rooms.items()
+        if not data["use_house_comfort_conditions"]
     ] == ["Flur EG"]
     assert {
         title: data["learning_block_entity"]

@@ -84,7 +84,9 @@ async def test_reports_a_radiator_that_stays_cold(hass: HomeAssistant) -> None:
     assert state.state == "off"
     assert state.attributes["trv_entities"] == []
 
-    coordinator = hass.data[DOMAIN][hass.config_entries.async_entries(DOMAIN)[0].entry_id]
+    coordinator = hass.data[DOMAIN][
+        hass.config_entries.async_entries(DOMAIN)[0].entry_id
+    ]
     coordinator.mpc._radiator_monitors[0].not_heating = True
     coordinator._notify_listeners()
     await hass.async_block_till_done()

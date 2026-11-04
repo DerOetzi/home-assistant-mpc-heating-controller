@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from math import ceil
 
@@ -11,6 +11,7 @@ from .learner import LearnerPrediction, RoomMpcModelLearner
 from .math_helper import clamp
 from .models.capacity import ThermalCapacityModel
 from .models.emitter import HeatEmitterModel, below_activation
+from .models.gains import RoomGainModel, SunSource
 from .models.loss import RoomLossModel
 from .models.valve import ValveCharacteristic
 from .observer import ObserverEstimate, RoomStateObserver, step_radiator_power_w
@@ -55,6 +56,9 @@ MPC_SIMULATION_CONVERGENCE_POWER_W = 1.0
 # within seconds; the allowed step scales with the time since the last call.
 # Fixed, not the poll interval: the option is labelled "per 5 minutes".
 DEMAND_STEP_REFERENCE_S = 5 * 60
+# After setup the demand ramp starts from the openings the TRVs report, if
+# one arrives within this window (they report seconds after a restart).
+DEMAND_SEED_WINDOW_S = 10 * 60
 
 
 @dataclass
@@ -166,14 +170,21 @@ class RoomMpcController:
         self._live_flow_gate = _SurplusFlowGate(gate_config)
         self._preview_flow_gate = _SurplusFlowGate(gate_config)
 
-        self._sensors = RoomMpcSensors(
-            trvs, max_sensor_age_s, room_sensor_configured
-        )
+        self._sensors = RoomMpcSensors(trvs, max_sensor_age_s, room_sensor_configured)
         self._emitter_model = HeatEmitterModel(thermal_config, trvs)
         self._loss_model = RoomLossModel(thermal_config)
         self._capacity_model = ThermalCapacityModel(thermal_config)
+        self._gain_model = RoomGainModel(
+            thermal_config.room_heat_load_w,
+            self._loss_model.base_ua_w_per_k,
+            window_surfaces=thermal_config.window_surfaces,
+            opaque_surfaces=thermal_config.opaque_surfaces,
+        )
         self._learner = RoomMpcModelLearner(
-            self._loss_model, self._capacity_model, target_band_c=self._target_band_c
+            self._loss_model,
+            self._capacity_model,
+            target_band_c=self._target_band_c,
+            gain_model=self._gain_model,
         )
         self._observer = RoomStateObserver(
             self._emitter_model, self._loss_model, self._capacity_model
@@ -201,6 +212,9 @@ class RoomMpcController:
         self._last_output_demand_pct = 0.0
         self._last_demand_update_ts = 0.0
         self._last_rate_limit_ts: float | None = None
+        # Until when the ramp may still start from the reported valve
+        # openings; None before the first smoothed computation.
+        self._demand_seed_until_ts: float | None = None
         self._outdoor_temperature_missing = False
 
     def destroy(self) -> None:
@@ -209,6 +223,10 @@ class RoomMpcController:
     @property
     def learned_ua_factor(self) -> float:
         return self._loss_model.learned_ua_factor
+
+    @property
+    def gain_model(self) -> RoomGainModel:
+        return self._gain_model
 
     @property
     def learned_capacity_factor(self) -> float:
@@ -300,8 +318,7 @@ class RoomMpcController:
         """Whether any TRV finished a sample since the last call."""
         # Collected first: any() would stop early and leave flags unconsumed.
         changed = [
-            learner.consume_changed()
-            for learner in self._valve_curve_learners.values()
+            learner.consume_changed() for learner in self._valve_curve_learners.values()
         ]
         return any(changed)
 
@@ -369,8 +386,7 @@ class RoomMpcController:
         if apply_side_effects:
             for monitor, opening_pct, trv_temperature_c, output_fraction in zip(
                 self._radiator_monitors,
-                mpc_input.valve_positions_pct
-                or [None] * len(self._radiator_monitors),
+                mpc_input.valve_positions_pct or [None] * len(self._radiator_monitors),
                 mpc_input.trv_temperatures,
                 self._emitter_model.full_output_fractions(
                     mpc_input.flow_temp_c, mpc_input.room_temp_c
@@ -431,11 +447,13 @@ class RoomMpcController:
 
         # The TRVs are thermostats: a small demand can open a valve fully. Where
         # they report their opening, that is what the radiators get.
-        measured_heating_power_w = self._emitter_model.calculate_measured_heating_power_w(
-            mpc_input.room_temp_c,
-            mpc_input.flow_temp_c,
-            mpc_input.valve_positions_pct,
-            stabilized_demand_pct,
+        measured_heating_power_w = (
+            self._emitter_model.calculate_measured_heating_power_w(
+                mpc_input.room_temp_c,
+                mpc_input.flow_temp_c,
+                mpc_input.valve_positions_pct,
+                stabilized_demand_pct,
+            )
         )
         reported_openings_pct = [
             opening for opening in mpc_input.valve_positions_pct if opening is not None
@@ -446,7 +464,9 @@ class RoomMpcController:
             else stabilized_demand_pct
         )
 
-        flow_gate = self._live_flow_gate if apply_side_effects else self._preview_flow_gate
+        flow_gate = (
+            self._live_flow_gate if apply_side_effects else self._preview_flow_gate
+        )
         flow_gate_closed = flow_gate.update(
             surplus_c=mpc_input.room_temp_c - mpc_input.target_temp_c,
             demand_pct=stabilized_demand_pct,
@@ -539,7 +559,9 @@ class RoomMpcController:
                 and opening_pct is not None,
             )
 
-    def _calculate_hold_flow_temperature_c(self, mpc_input: RoomMpcInput) -> float | None:
+    def _calculate_hold_flow_temperature_c(
+        self, mpc_input: RoomMpcInput
+    ) -> float | None:
         """Flow needed to hold the setpoint -- ungated, weather-driven only."""
         hold_power_w = max(
             0.0,
@@ -751,6 +773,10 @@ class RoomMpcController:
         output is 0 until the stepped target reaches it.
         """
         config = self._rate_limit_config
+        if self._demand_seed_until_ts is None:
+            self._demand_seed_until_ts = mpc_input.now_ts + DEMAND_SEED_WINDOW_S
+        if mpc_input.now_ts <= self._demand_seed_until_ts:
+            self._seed_demand_from_valves(mpc_input)
         if below_activation(self._last_output_demand_pct, activation_pct):
             # Output while the threshold was lower: the TRVs shut on it now,
             # so hysteresis and hold time must not keep it.
@@ -761,8 +787,7 @@ class RoomMpcController:
             elapsed_fraction = 1.0
         else:
             elapsed_fraction = clamp(
-                (mpc_input.now_ts - self._last_rate_limit_ts)
-                / DEMAND_STEP_REFERENCE_S,
+                (mpc_input.now_ts - self._last_rate_limit_ts) / DEMAND_STEP_REFERENCE_S,
                 0.0,
                 1.0,
             )
@@ -798,6 +823,27 @@ class RoomMpcController:
 
         return self._last_output_demand_pct
 
+    def _seed_demand_from_valves(self, mpc_input: RoomMpcInput) -> None:
+        """Start the ramp where the valves stand, not at zero.
+
+        After a restart the TRVs still hold the previous target and report
+        their opening. Ramping up from 0 wrote them a low target first and
+        shut a radiator that had been fully open for ~20 minutes. The TRVs
+        often report only some seconds after the first computation, so the
+        seed waits for the first reported opening, at most
+        DEMAND_SEED_WINDOW_S; without one the ramp starts at 0 as before.
+        """
+        openings = [
+            opening for opening in mpc_input.valve_positions_pct if opening is not None
+        ]
+        if not openings:
+            return
+        seed_pct = clamp(sum(openings) / len(openings), 0.0, 100.0)
+        self._target_demand_pct = seed_pct
+        self._last_output_demand_pct = seed_pct
+        # Seeded once; the ramp takes over from here.
+        self._demand_seed_until_ts = float("-inf")
+
     def _reset_demand_rate_limiting(
         self, mpc_input: RoomMpcInput, demand_pct: float
     ) -> float:
@@ -830,6 +876,13 @@ class RoomMpcController:
 
     def run_learning_cycle(self) -> None:
         self._learner.run_learning_cycle()
+
+    def set_gain_context(
+        self,
+        profile_index_at: Callable[[float], int],
+        sun_source: Callable[[], SunSource | None],
+    ) -> None:
+        self._learner.set_gain_context(profile_index_at, sun_source)
 
     def consume_persisted_learning_factors(self) -> LearningFactors | None:
         return self._learner.consume_persisted_learning_factors()

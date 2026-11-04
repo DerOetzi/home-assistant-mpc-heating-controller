@@ -69,6 +69,7 @@ stands:
 | `last_mean_room_c` | Same for the room temperature. |
 | `last_mean_flow_c` | Same for the flow temperature, over the samples that had one; `null` if none did. |
 | `last_mean_heating_w` | Mean radiator heat the balance assumed over that stretch (hot-water charges count as zero). |
+| `learned_gain_w`, `gain_sigma_w`, `gain_fit_points`, `gain_determined`, `regression_ua_factor` | Night regression of steady gain and heat-loss factor, see [Gains and sun](#gains-and-sun). |
 
 **`sensor.<room>_capacity_learning_status`** — what the last 30-minute replay did with the
 capacity factor:
@@ -131,6 +132,8 @@ for, whatever the model believes the losses are.
   [Hot-water charges](#hot-water-charges)) count as no heating. Each
   stretch is used once. Steady gains during the window (people, appliances,
   neighbouring rooms) end up in the factor — that is what the room needs in operation.
+  Each balanced stretch is also a point for the night regression that separates a steady
+  gain from the factor over several nights, see [Gains and sun](#gains-and-sun).
   Two checks keep measurement artefacts out: a stretch where the heat stored in or
   released by the room exceeds half of the requested heat depends more on the capacity
   than on the losses and is discarded, and so is a target above 2. A target below 0.15
@@ -182,11 +185,76 @@ target:
 data:
   ua_factor: 1.0
   capacity_factor: 1.0
+  reset_gains: true
 ```
 
 A factor that is left out stays as it is, so a reset needs an explicit `1.0`; at least one
-value is required. The call discards the measurement window in progress, because its
-prediction was made with the old factors.
+value (or `reset_gains`) is required. The call discards the measurement window in progress,
+because its prediction was made with the old factors. `reset_gains: true` forgets the
+learned steady gain, day profile and sun terms (see [Gains and sun](#gains-and-sun)).
+
+## Gains and sun
+
+Heat the radiators do not supply — people, cooking, appliances, neighbouring rooms, the sun —
+is learned on two levels. **At this stage it is only learned and shown; the control, the
+hold and the minimum flow temperature do not use it yet.** Both levels use recursive least
+squares with forgetting, bounds and damping of outliers (after
+[Thermocast](https://github.com/drumtorben/thermocast)).
+
+**Night: steady gain.** Every balanced heat-loss stretch is a point: the mean room-outdoor
+difference and the net radiator heat (heat minus what the room stored). Over several nights
+with different temperature differences, `net heat = UA × difference − G` separates a steady
+gain `G` from the heat-loss factor — one night alone cannot. About 20 nights of memory; `G`
+stays within half the design heat load. `G` counts as **determined** from three points on,
+once its standard deviation is below a tenth of the design heat load. Points with the same
+temperature difference never determine it. Shown on the UA learning status:
+`learned_gain_w`, `gain_sigma_w`, `gain_fit_points`, `gain_determined` and
+`regression_ua_factor` (the regression's own heat-loss factor, diagnostics only — the factor
+the control uses still comes from the single-night step).
+
+**Hourly: day profile and sun.** Every full clock hour gives the heat the model with the
+heat-loss factor and the determined `G` does not explain: what the room stored (from a
+straight line through the hour), minus the radiator heat, plus the loss, minus `G`. A second
+regression splits it into
+
+- a **day profile**: 8 blocks of 3 hours (00–03, 03–06, …), workdays and other days apart —
+  16 values. It is relative to the night: night blocks come out near zero, a bedroom whose
+  sleepers raise the night's `G` comes out below zero by day;
+- **sun through windows**: per facade with windows, the hour's irradiance on that facade
+  times a learned coefficient (heat in W at 1000 W/m²; it takes in window area, glazing,
+  blinds and shading);
+- **sun through walls and roof surfaces**: per outer wall or roof surface, the irradiance
+  through a first-order lag of 3 hours times a learned coefficient.
+
+About 10 days of memory. Sun coefficients cannot go below zero. A profile value counts as
+determined once its standard deviation is below a tenth of the design heat load, a sun
+coefficient once its standard deviation is below half its value. Sun and profile are told
+apart by cloudy days; a stretch of clear days leaves the sun coefficients undetermined but
+the sum right.
+
+An hour is not learned (attribute `last_hour_outcome`) while learning is paused, the
+outdoor or flow temperature is missing or heating is unavailable (`paused`), a window is open
+(`window_open`) or was just closed (`suppressed`), the room sensor stands in for TRVs, a valve
+opening is missing, a TRV adapts, a radiator stays cold or all valves were saturated, with a
+gap over 20 minutes (`gap`), when the hour is not covered to within 10 minutes of both edges
+— a restart within the hour — (`too_short`), or by day without a fresh sun series
+(`sun_missing`).
+
+**Irradiance.** The hub fetches global tilted irradiance for every surface some room uses
+from Open-Meteo once an hour (the past day and two days ahead). This sends the location of
+Home Assistant to api.open-meteo.com. A series older than three hours counts as missing: no
+sun terms are learned by day then, and none is estimated. Surfaces: four facades from the
+house's rotation (the bearing of its north facade) plus two roof surfaces with the roof's
+pitch. Each surface's sensor (*Irradiance …*, W/m²) shows the current value and the next 24
+hours as attribute `forecast`.
+
+**Shown.** `sensor.<room>_additional_heat` (German install: `sensor.<raum>_zusatzwarme`) is
+the gain the model would count now — determined terms only. Attributes: `steady_gain_w`,
+`profile_now_w`, `sun_now_w`, `ungated_w` (all terms, determined or not),
+`gain_profile_workday_w` and `gain_profile_other_days_w` (8 values each), `profile_determined`,
+`sun_coefficients_w`, `sun_determined`, `hour_samples`, `residual_rms_w` (spread of the
+hourly residual), `last_hour`, `last_hour_outcome`. The state of both regressions survives
+restarts; changing a room's surfaces starts its hourly level anew.
 
 ## Sizing a room correctly
 
@@ -245,7 +313,9 @@ new one, since every write wakes the TRV. **Absolute** spreads the target over t
 range (18 °C up to its maximum) by demand; there even a few percent of demand ask for 20 °C
 or more and the valve opens almost fully. A TRV without a reading falls back to absolute.
 The mode is set on the hub for all rooms; the attribute `trv_setpoint_writes` of the
-target valve opening sensor counts the target writes per TRV since setup.
+target valve opening sensor counts the target writes per TRV since setup, and its attribute
+`trv_valve_positions` lists the opening each TRV reports right now (`pi_heating_demand`,
+`null` without a valve-position entity).
 
 Every write wakes the TRV, so a valve switches between shut and open sparingly: a shut
 valve opens from 10 % target opening on, an open one stays open down to 5 %, and a TRV switches
@@ -412,6 +482,11 @@ heating power from chattering cycle to cycle:
   jumping straight there. The cap scales with the time since the previous calculation, so
   several calculations within seconds (state changes arrive in bursts) allow only a
   proportionally small step in total; the first calculation after a start allows the full step.
+  After a start (HA restart, integration reload) the steps begin at the valve opening the
+  TRVs report — their mean, if the room has several — not at 0: the TRVs still hold the
+  previous target, and ramping up from 0 would first write a low target and shut a radiator
+  that was open. A report that arrives within 10 minutes of the start still seeds the ramp;
+  without one it starts at 0.
 
 The smoothed demand never stops between 0 and the valve's open threshold (10 % while a TRV
 of the room is shut, 5 % while all are open, see [TRV target mode](#trv-target-mode)): the

@@ -23,7 +23,9 @@ class ThermalCapacityModel:
     def predict_temperature_change_c(
         self, net_heating_power_w: float, duration_seconds: float
     ) -> float:
-        return (net_heating_power_w * duration_seconds) / self.effective_capacity_j_per_k
+        return (
+            net_heating_power_w * duration_seconds
+        ) / self.effective_capacity_j_per_k
 
     @property
     def learned_capacity_factor(self) -> float:

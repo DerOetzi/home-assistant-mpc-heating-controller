@@ -481,8 +481,7 @@ async def test_min_flow_reports_normal_mode_demand_while_forced_frost(
     assert coordinator.normal_min_flow_temperature_c is not None
     assert coordinator.normal_min_flow_temperature_c > 0
     assert (
-        coordinator.base_temperature_c
-        == ENTRY_DATA["frost_protection_temperature_c"]
+        coordinator.base_temperature_c == ENTRY_DATA["frost_protection_temperature_c"]
     )
     assert coordinator.trv_active is False
     assert coordinator.flow_supply_status == FlowSupplyStatus.SOURCE_INACTIVE
@@ -646,9 +645,7 @@ async def test_trv_active_switch_turned_off_when_unavailable(
     assert coordinator.trv_active is False
     off_calls = [call for call in switch_calls if call.service == "turn_off"]
     assert off_calls
-    assert off_calls[-1].data["entity_id"] == [
-        "switch.heizung_wohnzimmer_trv_active"
-    ]
+    assert off_calls[-1].data["entity_id"] == ["switch.heizung_wohnzimmer_trv_active"]
 
     coordinator.async_unload()
 
@@ -766,9 +763,7 @@ async def test_trv_active_switch_already_in_state_is_not_rewritten(
 
     on_calls = [call for call in switch_calls if call.service == "turn_on"]
     assert on_calls
-    assert on_calls[-1].data["entity_id"] == [
-        "switch.heizung_wohnzimmer_trv_active"
-    ]
+    assert on_calls[-1].data["entity_id"] == ["switch.heizung_wohnzimmer_trv_active"]
 
     coordinator.async_unload()
 
@@ -1126,7 +1121,9 @@ async def test_sun_condition_needs_two_hours_after_sunset_and_ends_at_sunrise(
 
     day = date(2026, 12, 1)
     sunset = get_astral_event_date(hass, SUN_EVENT_SUNSET, day)
-    next_sunrise = get_astral_event_date(hass, SUN_EVENT_SUNRISE, day + timedelta(days=1))
+    next_sunrise = get_astral_event_date(
+        hass, SUN_EVENT_SUNRISE, day + timedelta(days=1)
+    )
 
     def met(moment: datetime) -> bool:
         return coordinator.is_sun_condition_met(moment.timestamp())
@@ -1313,6 +1310,7 @@ async def test_valve_position_feeds_the_measured_heating_power(
     result = coordinator.last_result
     assert result.input.valve_positions_pct == [90.0]
     assert result.input.valve_position_missing is False
+    assert coordinator.trv_valve_positions == {"climate.heizung_wohnzimmer": 90.0}
     # 90 % opening gives nearly the full available power, whatever the demand.
     assert result.measured_heating_power_w > 0.9 * result.available_heating_power_w
 
@@ -1331,6 +1329,7 @@ async def test_unavailable_valve_position_is_reported_missing(
     coordinator = await _setup_coordinator(hass, trvs=[_trv_with_valve()])
 
     assert coordinator.last_result.input.valve_position_missing is True
+    assert coordinator.trv_valve_positions == {"climate.heizung_wohnzimmer": None}
 
     coordinator.async_unload()
 
@@ -1344,6 +1343,7 @@ async def test_without_valve_position_the_demand_stands_in(
     result = coordinator.last_result
     assert result.input.valve_positions_pct == [None]
     assert result.input.valve_position_missing is False
+    assert coordinator.trv_valve_positions == {"climate.heizung_wohnzimmer": None}
     assert result.measured_heating_power_w == pytest.approx(
         result.requested_heating_power_w, abs=0.05
     )
@@ -1458,7 +1458,10 @@ async def test_a_trv_switch_goes_through_after_15_minutes(
     hass.states.async_set(
         "climate.heizung_wohnzimmer",
         "heat",
-        {"current_temperature": 18.0, "temperature": coordinator.last_result.trv_targets[0]},
+        {
+            "current_temperature": 18.0,
+            "temperature": coordinator.last_result.trv_targets[0],
+        },
     )
     await hass.async_block_till_done()
     opened = coordinator.trv_setpoint_writes["climate.heizung_wohnzimmer"]
@@ -1557,9 +1560,7 @@ async def test_renaming_a_trv_entity_reloads_the_room(
 ) -> None:
     _seed_entities(hass)
     reloads: list[str] = []
-    monkeypatch.setattr(
-        hass.config_entries, "async_schedule_reload", reloads.append
-    )
+    monkeypatch.setattr(hass.config_entries, "async_schedule_reload", reloads.append)
     coordinator = await _setup_coordinator(hass)
 
     er.async_get(hass).async_update_entity(
@@ -1659,8 +1660,9 @@ async def test_outdoor_temperature_arriving_after_startup_needs_no_fallback(
 
     assert coordinator.outdoor_fallback_active is False
     assert coordinator.last_result is not None
-    assert calls and calls[-1].data["temperature"] == (
-        coordinator.last_result.trv_targets[0]
+    assert (
+        calls
+        and calls[-1].data["temperature"] == (coordinator.last_result.trv_targets[0])
     )
 
     coordinator.async_unload()
@@ -1775,8 +1777,9 @@ async def test_the_mpc_runs_once_the_heat_source_reports(
     assert coordinator.current_heat_mode == HeatMode.COMFORT
     assert coordinator.last_result is not None
     assert climate_calls
-    assert climate_calls[-1].data["temperature"] == (
-        coordinator.last_result.trv_targets[0]
+    assert (
+        climate_calls[-1].data["temperature"]
+        == (coordinator.last_result.trv_targets[0])
     )
     assert all(call.service == "turn_on" for call in switch_calls)
 

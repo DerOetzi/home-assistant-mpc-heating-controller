@@ -93,17 +93,13 @@ class HeatingStateController:
         if mode is HeatMode.ECO:
             return self._comfort_temperature_c + self._eco_temperature_offset_c
         if mode is HeatMode.BOOST:
-            return (
-                self._comfort_temperature_c
-                + self._config.boost_temperature_offset_c
-            )
+            return self._comfort_temperature_c + self._config.boost_temperature_offset_c
         return self._config.frost_protection_temperature_c
 
     def effective_target_temperature(self, base_target_temperature_c: float) -> float:
         if self._config.pv_boost_enabled and self._pv_boost:
             return (
-                base_target_temperature_c
-                + self._config.pv_boost_temperature_offset_c
+                base_target_temperature_c + self._config.pv_boost_temperature_offset_c
             )
         return base_target_temperature_c
 

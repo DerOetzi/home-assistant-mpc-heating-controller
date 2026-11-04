@@ -24,6 +24,8 @@ export const TRANSLATIONS = {
     window_open: "Open",
     window_closed: "Closed",
     row_min_flow: "Minimum flow temperature",
+    row_additional_heat: "Additional heat",
+    row_additional_heat_learning: "{value} (learning: {ungated})",
 
     // Card — minimum flow supply status
     supply_no_requirement: "No requirement",
@@ -101,6 +103,8 @@ export const TRANSLATIONS = {
     window_open: "Offen",
     window_closed: "Geschlossen",
     row_min_flow: "Mindestvorlauftemperatur",
+    row_additional_heat: "Zusatzwärme",
+    row_additional_heat_learning: "{value} (lernt: {ungated})",
 
     supply_no_requirement: "Keine Anforderung",
     supply_surplus: "Zehrt von gespeicherter Wärme",

@@ -27,7 +27,9 @@ def test_offset_is_the_smallest_reaching_the_opening():
 
 
 def test_offset_of_a_flat_stretch_is_its_start():
-    flat = ValveCharacteristic(points=((0.5, 20.0), (1.0, 50.0), (2.0, 50.0), (3.0, 100.0)))
+    flat = ValveCharacteristic(
+        points=((0.5, 20.0), (1.0, 50.0), (2.0, 50.0), (3.0, 100.0))
+    )
 
     assert flat.offset_c(50.0) == pytest.approx(1.0)
 
