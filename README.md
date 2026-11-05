@@ -155,6 +155,29 @@ effective*), in setpoint mode a number on the device. *Write flow* starts off: t
 *Actuator target* but writes nothing until switched on. See
 [Flow control](docs/mpc-guide.md#flow-control).
 
+Optionally **Add hot water control** on the hub, once: the integration then sets the
+water heater's target, runs the legionella cycle and the circulation pump.
+
+1. **Sources** — water heater, tank temperature, grid export, battery state of charge and
+   discharge (each optional: without it its gate is off), and whether legionella
+   protection and the circulation pump are handled too.
+2. **Modes and times** — PV surplus thresholds (lower, stable upper, release), battery
+   and tank gates, outdoor limits, minimum time between mode changes, manual hold, boost
+   limit, night setback, charge window, forced charge and the heater's reheat hysteresis.
+3. **Legionella protection** (if chosen) — weekdays, start, optional fallback start,
+   retry window, PV forecast condition, outlet and circulation-return thresholds, hold
+   time, verification timeout.
+4. **Circulation pump** (if chosen) — pump switch, return and outlet sensors, draw
+   detection, external continuous-run requests, gates, peak windows, thresholds, run
+   and pause times, release of a continuous run.
+
+The device *Warmwasser* holds the targets of each phase as numbers (normal, surplus,
+boost, night, charge window, legionella), a mode select (automatic, or normal/surplus by
+hand for the manual hold time), a boost switch, *Hot water target* and *Hot water phase*,
+*Hot water charging* (rooms treat it as a pause), and — when chosen — legionella status,
+a *failed* problem sensor, a start button, the circulation's continuous-run switch and
+its reason. See [Hot water](docs/mpc-guide.md#hot-water).
+
 **Reconfigure** on a room re-runs steps 2–5 pre-filled (the name stays: the room's
 learning files are keyed by it). Deleting a room removes its entities and its learning
 files.

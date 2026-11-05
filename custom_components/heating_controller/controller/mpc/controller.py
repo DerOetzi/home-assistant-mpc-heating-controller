@@ -191,6 +191,9 @@ class RoomMpcController:
         )
         self._heat_available = True
         self._hot_water = HotWaterChargeDetector()
+        # A charge the hot water control saw (tank rising, own target write);
+        # adds to the detection on the flow.
+        self._external_hot_water_charge = False
         self._radiator_monitors = [RadiatorDeliveryMonitor() for _ in trvs]
         self._trv_names = [trv.name for trv in trvs]
         # By TRV name; only a TRV that reports its valve opening can learn
@@ -347,6 +350,9 @@ class RoomMpcController:
     def set_flow_temperature(self, value: float | None) -> None:
         self._sensors.set_flow_temperature(value)
 
+    def set_external_hot_water_charge(self, charging: bool) -> None:
+        self._external_hot_water_charge = charging
+
     def set_flow_threshold_c(self, flow_threshold_c: float) -> None:
         self._emitter_model.set_flow_threshold_c(flow_threshold_c)
 
@@ -381,7 +387,7 @@ class RoomMpcController:
             self._hot_water.update(
                 mpc_input.now_ts, mpc_input.flow_temp_c, self._heat_available
             )
-        if self._hot_water.charging:
+        if self._hot_water.charging or self._external_hot_water_charge:
             # The radiators get no water; the valves keep the demand of the
             # heating flow they get back once the charge is done.
             mpc_input.hot_water_charge = True

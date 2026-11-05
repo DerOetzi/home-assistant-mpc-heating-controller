@@ -161,6 +161,104 @@
       "error": {
         "invalid_limits": "The lowest value must be below the highest and the step above 0."
       }
+    },
+    "hot_water": {
+      "initiate_flow": {
+        "user": "Add hot water control"
+      },
+      "entry_type": "Hot water control",
+      "abort": {
+        "already_configured": "The hub already has a hot water control.",
+        "reconfigure_successful": "Settings saved; the hub reloads."
+      },
+      "step": {
+        "sources": {
+          "title": "Hot water sources",
+          "data": {
+            "water_heater_entity": "Water heater",
+            "tank_temperature_entity": "Tank temperature (optional, else the water heater's)",
+            "grid_export_entity": "Grid export in W (optional, positive = export; without it no surplus mode)",
+            "battery_soc_entity": "Battery state of charge (optional)",
+            "battery_discharge_entity": "Battery discharge power in W (optional)",
+            "legionella_enabled": "Legionella protection",
+            "circulation_enabled": "Circulation pump"
+          }
+        },
+        "modes": {
+          "title": "Modes and times",
+          "data": {
+            "grid_lower_w": "Surplus: grid export above (W)",
+            "grid_upper_w": "Surplus between seasons: stable grid export above (W)",
+            "grid_release_w": "Surplus ends below (W)",
+            "grid_stable_min": "Grid export stable for (min)",
+            "battery_soc_min": "Battery state of charge above (%)",
+            "discharge_max_w": "Battery discharge below (W)",
+            "discharge_stable_min": "Battery discharge stable for (min)",
+            "outdoor_lower_c": "Outdoor above, with stable export (°C)",
+            "outdoor_upper_c": "Outdoor above, summer (°C)",
+            "tank_gate_c": "Tank above (°C)",
+            "min_hold_min": "Minimum time between mode changes (min)",
+            "manual_hold_min": "Manual mode holds for (min)",
+            "boost_max_h": "Boost at most (h)",
+            "reheat_hysteresis_k": "Water heater reheat hysteresis (K)",
+            "max_setpoint_c": "Highest target (°C)",
+            "night_enabled": "Night setback",
+            "night_start": "Night from",
+            "night_end": "Night until",
+            "window_enabled": "Charge window",
+            "window_start": "Charge window from",
+            "window_end": "Charge window until",
+            "forced_charge": "Forced charge (target at least tank + hysteresis + 1)"
+          }
+        },
+        "legionella": {
+          "title": "Legionella protection",
+          "data": {
+            "legionella_weekdays": "Weekdays",
+            "legionella_start": "Start",
+            "legionella_fallback": "Fallback start (regardless of forecast, optional)",
+            "legionella_retry_min": "Retry window (min)",
+            "forecast_entity": "PV forecast (optional)",
+            "forecast_above": "Start when the forecast is above the threshold (off: below)",
+            "forecast_threshold": "Forecast threshold",
+            "outlet_entity": "Outlet temperature (optional, else the tank)",
+            "outlet_threshold_c": "Outlet at least (°C)",
+            "return_entity": "Circulation return (optional)",
+            "return_threshold_c": "Return at least (°C)",
+            "legionella_hold_min": "Return held for (min)",
+            "legionella_timeout_min": "Verification at most (min)"
+          }
+        },
+        "circulation": {
+          "title": "Circulation pump",
+          "data": {
+            "pump_entity": "Pump switch",
+            "circ_return_entity": "Circulation return temperature",
+            "circ_outlet_entity": "Outlet temperature (optional)",
+            "draw_entities": "Draw detection (binary sensors)",
+            "continuous_entities": "Continuous run requests (external)",
+            "blocked_states": "Water heater states that block the pump",
+            "presence_entity": "Presence (optional)",
+            "daymode_entity": "Day mode (optional)",
+            "peak1_start": "Peak 1 from",
+            "peak1_end": "Peak 1 until",
+            "peak2_start": "Peak 2 from",
+            "peak2_end": "Peak 2 until",
+            "peak_start_below_c": "Start below in a peak (°C)",
+            "offpeak_start_below_c": "Start below off-peak (°C)",
+            "stop_delta_k": "Stop at outlet minus (K)",
+            "stop_temperature_c": "Stop at (°C, without outlet sensor)",
+            "max_run_min": "Run at most (min)",
+            "min_pause_min": "Pause at least (min)",
+            "fallback_on_min": "Without return value: on for (min)",
+            "fallback_off_min": "Without return value: off for (min)",
+            "draw_overrides_gates": "Draws start the pump despite presence/day mode",
+            "release_enabled": "Release continuous run when the loop is hot",
+            "release_temperature_c": "Release at return (°C)",
+            "release_min": "Release after (min)"
+          }
+        }
+      }
     }
   },
   "selector": {
@@ -227,6 +325,17 @@
         "offset": "Offset on the heat source's own heating curve",
         "setpoint": "Flow setpoint"
       }
+    },
+    "weekday": {
+      "options": {
+        "mon": "Monday",
+        "tue": "Tuesday",
+        "wed": "Wednesday",
+        "thu": "Thursday",
+        "fri": "Friday",
+        "sat": "Saturday",
+        "sun": "Sunday"
+      }
     }
   },
   "entity": {
@@ -238,6 +347,14 @@
           "eco": "Eco",
           "boost": "Boost",
           "frost_protection": "Frost protection"
+        }
+      },
+      "hot_water_mode": {
+        "name": "Hot water mode",
+        "state": {
+          "auto": "Automatic",
+          "normal": "Normal",
+          "surplus": "Surplus"
         }
       }
     },
@@ -262,11 +379,20 @@
       },
       "heating_season_switch_off": {
         "name": "Heating season: switch off"
+      },
+      "hot_water_charging": {
+        "name": "Hot water charging"
+      },
+      "legionella_failed": {
+        "name": "Legionella protection failed"
       }
     },
     "button": {
       "heating_unblock": {
         "name": "Unblock"
+      },
+      "legionella_start": {
+        "name": "Start legionella protection"
       }
     },
     "number": {
@@ -317,6 +443,24 @@
       },
       "flow_threshold": {
         "name": "Flow threshold"
+      },
+      "hot_water_normal": {
+        "name": "Hot water normal"
+      },
+      "hot_water_surplus": {
+        "name": "Hot water surplus"
+      },
+      "hot_water_boost": {
+        "name": "Hot water boost"
+      },
+      "hot_water_night": {
+        "name": "Hot water night"
+      },
+      "hot_water_window": {
+        "name": "Hot water charge window"
+      },
+      "hot_water_legionella": {
+        "name": "Hot water legionella"
       }
     },
     "sensor": {
@@ -468,11 +612,55 @@
       },
       "flow_threshold": {
         "name": "Flow threshold effective"
+      },
+      "hot_water_target": {
+        "name": "Hot water target"
+      },
+      "hot_water_phase": {
+        "name": "Hot water phase",
+        "state": {
+          "legionella": "Legionella",
+          "boost": "Boost",
+          "surplus": "Surplus",
+          "charge_window": "Charge window",
+          "night": "Night",
+          "normal": "Normal"
+        }
+      },
+      "legionella_status": {
+        "name": "Legionella protection",
+        "state": {
+          "idle": "Idle",
+          "waiting": "Waiting for target",
+          "running": "Running",
+          "done": "Done",
+          "failed": "Failed"
+        }
+      },
+      "circulation_reason": {
+        "name": "Circulation reason",
+        "state": {
+          "continuous": "Continuous run",
+          "blocked": "Blocked",
+          "gates_closed": "Nobody home / night",
+          "fallback": "Interval (no return value)",
+          "hot": "Loop hot",
+          "max_run": "Maximum run time",
+          "cooled": "Loop cooled down",
+          "draw": "Draw",
+          "idle": "Waiting"
+        }
       }
     },
     "switch": {
       "flow_write": {
         "name": "Write flow"
+      },
+      "hot_water_boost": {
+        "name": "Hot water boost"
+      },
+      "circulation_continuous": {
+        "name": "Circulation continuous run"
       }
     }
   },

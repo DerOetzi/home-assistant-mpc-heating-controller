@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import voluptuous as vol
@@ -91,6 +92,7 @@ from .const import (
     DOMAIN,
     FACADES,
     FLOW_TITLE,
+    HOT_WATER_TITLE,
     HUB_TITLE,
     MAX_STATIONARY_RANGE_C,
     MAX_TARGET_BAND_C,
@@ -99,6 +101,7 @@ from .const import (
     MIN_TARGET_BAND_C,
     STATIONARY_RANGE_STEP_C,
     SUBENTRY_TYPE_FLOW,
+    SUBENTRY_TYPE_HOT_WATER,
     SUBENTRY_TYPE_ROOM,
     TARGET_BAND_STEP_C,
     Construction,
@@ -110,6 +113,7 @@ from .const import (
     TrvSetpointMode,
 )
 from .control.flow import ActuatorMode
+from .hot_water_device import HOT_WATER_DEFAULTS, WEEKDAYS
 from .migration import HUB_VERSION
 from .profiles import (
     DeviceProfile,
@@ -335,6 +339,7 @@ class HeatingControllerConfigFlow(ConfigFlow, domain=DOMAIN):
         return {
             SUBENTRY_TYPE_ROOM: RoomSubentryFlow,
             SUBENTRY_TYPE_FLOW: FlowSubentryFlow,
+            SUBENTRY_TYPE_HOT_WATER: HotWaterSubentryFlow,
         }
 
     async def async_step_user(
@@ -886,3 +891,252 @@ class FlowSubentryFlow(ConfigSubentryFlow):
                     title=FLOW_TITLE, data=self._data, unique_id=SUBENTRY_TYPE_FLOW
                 )
         return self.async_show_form(step_id="limits", data_schema=schema, errors=errors)
+
+
+# --- Hot water ---------------------------------------------------------------
+
+
+def _hw_number(key: str, defaults: dict[str, Any]) -> tuple[vol.Required, Any]:
+    box = selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=-10000, max=100000, step="any", mode=selector.NumberSelectorMode.BOX
+        )
+    )
+    return vol.Required(key, default=defaults[key]), vol.All(box, vol.Coerce(float))
+
+
+def _hw_time(key: str, defaults: dict[str, Any]) -> tuple[vol.Required, Any]:
+    return vol.Required(key, default=defaults[key]), selector.TimeSelector()
+
+
+def _hw_bool(key: str, defaults: dict[str, Any]) -> tuple[vol.Required, Any]:
+    return vol.Required(key, default=defaults[key]), selector.BooleanSelector()
+
+
+def _hw_entity(
+    key: str, defaults: dict[str, Any], domain: str | list[str], required: bool = False
+) -> tuple[vol.Marker, Any]:
+    marker = (
+        _marker(vol.Required, key, defaults) if required else _optional(key, defaults)
+    )
+    return marker, selector.EntitySelector(selector.EntitySelectorConfig(domain=domain))
+
+
+def _hw_entities(
+    key: str, defaults: dict[str, Any], domain: str | list[str]
+) -> tuple[vol.Optional, Any]:
+    return vol.Optional(key, default=defaults.get(key) or []), selector.EntitySelector(
+        selector.EntitySelectorConfig(domain=domain, multiple=True)
+    )
+
+
+def _schema(*fields: tuple[vol.Marker, Any]) -> vol.Schema:
+    return vol.Schema(dict(fields))
+
+
+def _hw_sources_schema(d: dict[str, Any]) -> vol.Schema:
+    return _schema(
+        _hw_entity("water_heater_entity", d, "water_heater", required=True),
+        _hw_entity("tank_temperature_entity", d, "sensor"),
+        _hw_entity("grid_export_entity", d, "sensor"),
+        _hw_entity("battery_soc_entity", d, "sensor"),
+        _hw_entity("battery_discharge_entity", d, "sensor"),
+        _hw_bool("legionella_enabled", d),
+        _hw_bool("circulation_enabled", d),
+    )
+
+
+def _hw_modes_schema(d: dict[str, Any]) -> vol.Schema:
+    numbers = (
+        "grid_lower_w",
+        "grid_upper_w",
+        "grid_release_w",
+        "grid_stable_min",
+        "battery_soc_min",
+        "discharge_max_w",
+        "discharge_stable_min",
+        "outdoor_lower_c",
+        "outdoor_upper_c",
+        "tank_gate_c",
+        "min_hold_min",
+        "manual_hold_min",
+        "boost_max_h",
+        "reheat_hysteresis_k",
+        "max_setpoint_c",
+    )
+    return _schema(
+        *(_hw_number(key, d) for key in numbers),
+        _hw_bool("night_enabled", d),
+        _hw_time("night_start", d),
+        _hw_time("night_end", d),
+        _hw_bool("window_enabled", d),
+        _hw_time("window_start", d),
+        _hw_time("window_end", d),
+        _hw_bool("forced_charge", d),
+    )
+
+
+def _hw_legionella_schema(d: dict[str, Any]) -> vol.Schema:
+    return _schema(
+        (
+            vol.Required("legionella_weekdays", default=d["legionella_weekdays"]),
+            selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=list(WEEKDAYS),
+                    multiple=True,
+                    translation_key="weekday",
+                )
+            ),
+        ),
+        _hw_time("legionella_start", d),
+        (
+            _optional("legionella_fallback", d),
+            selector.TimeSelector(),
+        ),
+        _hw_number("legionella_retry_min", d),
+        _hw_entity("forecast_entity", d, "sensor"),
+        _hw_bool("forecast_above", d),
+        _hw_number("forecast_threshold", d),
+        _hw_entity("outlet_entity", d, "sensor"),
+        _hw_number("outlet_threshold_c", d),
+        _hw_entity("return_entity", d, "sensor"),
+        _hw_number("return_threshold_c", d),
+        _hw_number("legionella_hold_min", d),
+        _hw_number("legionella_timeout_min", d),
+    )
+
+
+def _hw_circulation_schema(d: dict[str, Any]) -> vol.Schema:
+    numbers = (
+        "peak_start_below_c",
+        "offpeak_start_below_c",
+        "stop_delta_k",
+        "stop_temperature_c",
+        "max_run_min",
+        "min_pause_min",
+        "fallback_on_min",
+        "fallback_off_min",
+        "release_temperature_c",
+        "release_min",
+    )
+    return _schema(
+        _hw_entity("pump_entity", d, "switch", required=True),
+        _hw_entity("circ_return_entity", d, "sensor", required=True),
+        _hw_entity("circ_outlet_entity", d, "sensor"),
+        _hw_entities("draw_entities", d, "binary_sensor"),
+        _hw_entities("continuous_entities", d, ["input_boolean", "switch"]),
+        (
+            vol.Required("blocked_states", default=d["blocked_states"]),
+            selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=["off", "eco", "heat_pump", "performance"],
+                    multiple=True,
+                    custom_value=True,
+                )
+            ),
+        ),
+        _hw_entity("presence_entity", d, _BOOLEAN_SIGNAL_DOMAINS),
+        _hw_entity("daymode_entity", d, _BOOLEAN_SIGNAL_DOMAINS),
+        _hw_time("peak1_start", d),
+        _hw_time("peak1_end", d),
+        _hw_time("peak2_start", d),
+        _hw_time("peak2_end", d),
+        *(_hw_number(key, d) for key in numbers),
+        _hw_bool("draw_overrides_gates", d),
+        _hw_bool("release_enabled", d),
+    )
+
+
+class HotWaterSubentryFlow(ConfigSubentryFlow):
+    """Hot water target, legionella cycle and circulation; one per hub."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, Any] = {}
+        self._reconfiguring = False
+
+    def _defaults(self) -> dict[str, Any]:
+        return {**HOT_WATER_DEFAULTS, **self._data}
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        if any(
+            subentry.subentry_type == SUBENTRY_TYPE_HOT_WATER
+            for subentry in self._get_entry().subentries.values()
+        ):
+            return self.async_abort(reason="already_configured")
+        return await self.async_step_sources(user_input)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        self._reconfiguring = True
+        self._data = dict(self._get_reconfigure_subentry().data)
+        return await self.async_step_sources()
+
+    async def _step(
+        self,
+        step_id: str,
+        schema: vol.Schema,
+        user_input: dict[str, Any] | None,
+        next_step: Callable[[], Any],
+    ) -> SubentryFlowResult:
+        if user_input is not None:
+            _merge(self._data, schema, user_input)
+            return await next_step()
+        return self.async_show_form(step_id=step_id, data_schema=schema)
+
+    async def async_step_sources(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        return await self._step(
+            "sources",
+            _hw_sources_schema(self._defaults()),
+            user_input,
+            self.async_step_modes,
+        )
+
+    async def async_step_modes(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        return await self._step(
+            "modes", _hw_modes_schema(self._defaults()), user_input, self._after_modes
+        )
+
+    async def _after_modes(self) -> SubentryFlowResult:
+        if self._data.get("legionella_enabled"):
+            return await self.async_step_legionella()
+        return await self._after_legionella()
+
+    async def async_step_legionella(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        return await self._step(
+            "legionella",
+            _hw_legionella_schema(self._defaults()),
+            user_input,
+            self._after_legionella,
+        )
+
+    async def _after_legionella(self) -> SubentryFlowResult:
+        if self._data.get("circulation_enabled"):
+            return await self.async_step_circulation()
+        return self._finish()
+
+    async def async_step_circulation(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        schema = _hw_circulation_schema(self._defaults())
+        if user_input is not None:
+            _merge(self._data, schema, user_input)
+            return self._finish()
+        return self.async_show_form(step_id="circulation", data_schema=schema)
+
+    def _finish(self) -> SubentryFlowResult:
+        if self._reconfiguring:
+            return self.async_update_and_abort(
+                self._get_entry(), self._get_reconfigure_subentry(), data=self._data
+            )
+        return self.async_create_entry(
+            title=HOT_WATER_TITLE, data=self._data, unique_id=SUBENTRY_TYPE_HOT_WATER
+        )

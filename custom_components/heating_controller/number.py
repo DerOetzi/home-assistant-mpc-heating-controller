@@ -25,10 +25,13 @@ from .entity import (
     FlowEntity,
     HeatingControllerEntity,
     HeatingHubEntity,
+    HotWaterEntity,
     async_add_flow_entities,
+    async_add_hot_water_entities,
     async_add_room_entities,
 )
 from .flow_device import FlowDevice
+from .hot_water_device import HOT_WATER_NUMBER_DEFAULTS, HotWaterDevice
 from .hub import HeatingHub
 
 
@@ -69,6 +72,46 @@ async def async_setup_entry(
             if spec.key != "threshold" or flow.mode is ActuatorMode.SETPOINT
         ],
     )
+
+    async_add_hot_water_entities(
+        entry,
+        async_add_entities,
+        lambda hot_water: [
+            HotWaterTemperatureNumber(hot_water, key)
+            for key in HOT_WATER_NUMBER_DEFAULTS
+            if key != "legionella" or hot_water.legionella_enabled
+        ],
+    )
+
+
+class HotWaterTemperatureNumber(HotWaterEntity, RestoreNumber):
+    """A hot water target of one phase."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_device_class = NumberDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_native_min_value = 30.0
+    _attr_native_max_value = 70.0
+    _attr_native_step = 1.0
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, hot_water: HotWaterDevice, key: str) -> None:
+        super().__init__(hot_water, f"hot_water_{key}")
+        self._key = key
+        self._attr_translation_key = f"hot_water_{key}"
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._hot_water.set_number(self._key, last_data.native_value)
+
+    @property
+    def native_value(self) -> float:
+        return self._hot_water.numbers[self._key]
+
+    async def async_set_native_value(self, value: float) -> None:
+        self._hot_water.set_number(self._key, value)
 
 
 @dataclass(frozen=True)

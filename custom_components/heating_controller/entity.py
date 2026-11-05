@@ -9,6 +9,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from .const import DOMAIN, HUB_TITLE
 from .coordinator import HeatingRoomCoordinator
 from .flow_device import FlowDevice
+from .hot_water_device import HotWaterDevice
 from .hub import HeatingHub
 
 
@@ -106,4 +107,41 @@ def async_add_flow_entities(
     if hub.flow is not None:
         async_add_entities(
             list(build(hub.flow)), config_subentry_id=hub.flow.subentry_id
+        )
+
+
+class HotWaterEntity(Entity):
+    """An entity of the hot water device; ids hang on its subentry id."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    def __init__(self, hot_water: HotWaterDevice, unique_id_suffix: str) -> None:
+        self._hot_water = hot_water
+        self._attr_unique_id = f"{hot_water.subentry_id}_{unique_id_suffix}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, hot_water.subentry_id)},
+            name=hot_water.title,
+            manufacturer="Heating Controller",
+        )
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(
+            self._hot_water.async_add_listener(self._handle_hot_water_update)
+        )
+
+    def _handle_hot_water_update(self) -> None:
+        self.async_write_ha_state()
+
+
+def async_add_hot_water_entities(
+    entry: ConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+    build: Callable[[HotWaterDevice], Iterable[Entity]],
+) -> None:
+    """Add the hot water device's entities to its subentry, if there is one."""
+    hub: HeatingHub = entry.runtime_data
+    if hub.hot_water is not None:
+        async_add_entities(
+            list(build(hub.hot_water)), config_subentry_id=hub.hot_water.subentry_id
         )

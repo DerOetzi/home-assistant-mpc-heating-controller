@@ -55,6 +55,7 @@ from .control.heating_season import HeatingSeason
 from .control.write_budget import WriteBudget, WritePriority
 from .coordinator import HeatingRoomCoordinator
 from .flow_device import FlowDevice
+from .hot_water_device import HotWaterDevice
 from .irradiance import IrradianceProvider, SurfaceGeometry, building_surfaces
 from .store import HubStore
 
@@ -119,6 +120,7 @@ class HeatingHub:
             CONF_OUTDOOR_TEMPERATURE_ENTITY
         )
         self.flow: FlowDevice | None = None
+        self.hot_water: HotWaterDevice | None = None
 
     def add_room(self, coordinator: HeatingRoomCoordinator) -> None:
         self.rooms[coordinator.room_id] = coordinator
@@ -178,6 +180,8 @@ class HeatingHub:
         self._tick(time.time())
 
     def async_unload(self) -> None:
+        if self.hot_water is not None:
+            self.hot_water.async_unload()
         if self.irradiance is not None:
             self.irradiance.async_stop()
         for unsub in self._unsub:
@@ -187,6 +191,8 @@ class HeatingHub:
     async def async_flush(self) -> None:
         """Write the hub's state now, e.g. before an unload."""
         await self._store.async_save(self._export())
+        if self.hot_water is not None:
+            await self.hot_water.async_flush()
 
     def _export(self) -> dict[str, Any]:
         return {
@@ -207,6 +213,8 @@ class HeatingHub:
             self.flow_seen_ts = now_ts
         self.season.update(self.heating_demand, now_ts, self.season_hold_threshold_h)
         self._store.async_delay_save(self._export, HUB_SAVE_DELAY_S)
+        if self.hot_water is not None:
+            self.hass.async_create_task(self.hot_water.async_evaluate())
         if self.flow is not None:
             self.hass.async_create_task(self.flow.async_evaluate())
 
@@ -217,6 +225,12 @@ class HeatingHub:
         self.flow = flow
         for room in self.rooms.values():
             room.flow_threshold_provider = lambda: flow.threshold_c
+
+    def set_hot_water(self, hot_water: HotWaterDevice) -> None:
+        """Rooms take the charges the hot water device sees."""
+        self.hot_water = hot_water
+        for room in self.rooms.values():
+            room.hot_water_charge_provider = lambda: hot_water.charging
 
     @property
     def outdoor_temperature_c(self) -> float | None:

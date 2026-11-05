@@ -247,6 +247,8 @@ class HeatingRoomCoordinator:
         )
         # Set by the hub when a flow device owns the threshold.
         self.flow_threshold_provider: Callable[[], float] | None = None
+        # Set by the hub when a hot water device sees the charges.
+        self.hot_water_charge_provider: Callable[[], bool] | None = None
         self._learning_block_entity: str | None = self.data.get(
             CONF_LEARNING_BLOCK_ENTITY
         )
@@ -854,6 +856,8 @@ class HeatingRoomCoordinator:
 
     async def _async_recompute(self) -> None:
         self.mpc.set_flow_threshold_c(self.flow_threshold_c)
+        if self.hot_water_charge_provider is not None:
+            self.mpc.set_external_hot_water_charge(self.hot_water_charge_provider())
         desired_mode = self.state.desired_automatic_heat_mode(self.blocked)
         self.state.set_active_heat_mode(desired_mode)
 

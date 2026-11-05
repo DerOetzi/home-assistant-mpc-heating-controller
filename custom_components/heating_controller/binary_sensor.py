@@ -14,7 +14,14 @@ from homeassistant.util import dt as dt_util
 
 from .const import CONF_WINDOW_CONTACT_ENTITIES
 from .coordinator import HeatingRoomCoordinator
-from .entity import HeatingControllerEntity, HeatingHubEntity, async_add_room_entities
+from .entity import (
+    HeatingControllerEntity,
+    HeatingHubEntity,
+    HotWaterEntity,
+    async_add_hot_water_entities,
+    async_add_room_entities,
+)
+from .hot_water_device import HotWaterDevice
 from .hub import HeatingHub
 
 
@@ -31,6 +38,18 @@ async def async_setup_entry(
             HeatingSeasonSwitchOnBinarySensor(hub),
             HeatingSeasonSwitchOffBinarySensor(hub),
         ]
+    )
+    async_add_hot_water_entities(
+        entry,
+        async_add_entities,
+        lambda hot_water: (
+            [HotWaterChargingBinarySensor(hot_water)]
+            + (
+                [LegionellaFailedBinarySensor(hot_water)]
+                if hot_water.legionella_enabled
+                else []
+            )
+        ),
     )
     async_add_room_entities(
         entry,
@@ -68,6 +87,48 @@ class LeadHeatingDemandBinarySensor(HeatingHubEntity, BinarySensorEntity):
             "flow_threshold_c": self._hub.flow_threshold_c,
             "rooms": lead.rooms,
         }
+
+
+class HotWaterChargingBinarySensor(HotWaterEntity, BinarySensorEntity):
+    """On while a hot water charge runs (tank rising or just announced)."""
+
+    _attr_translation_key = "hot_water_charging"
+    _attr_device_class = BinarySensorDeviceClass.HEAT
+
+    def __init__(self, hot_water: HotWaterDevice) -> None:
+        super().__init__(hot_water, "hot_water_charging")
+
+    @property
+    def is_on(self) -> bool:
+        return self._hot_water.charging
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        started = self._hot_water.detector.started_ts
+        return {
+            "started": None
+            if started is None
+            else dt_util.as_local(dt_util.utc_from_timestamp(started)).isoformat()
+        }
+
+
+class LegionellaFailedBinarySensor(HotWaterEntity, BinarySensorEntity):
+    """On after a failed legionella cycle until the next successful one."""
+
+    _attr_translation_key = "legionella_failed"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+
+    def __init__(self, hot_water: HotWaterDevice) -> None:
+        super().__init__(hot_water, "legionella_failed")
+
+    @property
+    def is_on(self) -> bool:
+        return self._hot_water.legionella.failed
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        failure = self._hot_water.legionella.cycle.failure
+        return {"failure": None if failure is None else failure.value}
 
 
 class HeatSourceReachableBinarySensor(HeatingHubEntity, BinarySensorEntity):

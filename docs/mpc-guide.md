@@ -675,6 +675,57 @@ It moves with every write: lowering the offset lowers the threshold. During a cl
 the last reported offset holds. In setpoint mode the threshold is a number on the device
 and also the lowest target.
 
+## Hot water
+
+With a hot water sub-entry the integration owns the water heater's target.
+
+**Target**, every minute, first match wins:
+
+| Phase | When | Target |
+|---|---|---|
+| Legionella | cycle waiting or running | legionella number |
+| Boost | boost switch on (off after the boost limit and on restart) | boost number |
+| Surplus | surplus mode | surplus number |
+| Charge window | inside the window | window number |
+| Night | inside the night | night number |
+| Normal | otherwise | normal number |
+
+Surplus mode needs grid export above the lower threshold (or, once in surplus, above the
+release threshold), battery and tank gates, and either outdoor above the summer limit or
+export above the upper threshold stable for its time with outdoor above the lower limit.
+Mode changes wait for the minimum hold time; a mode chosen by hand holds for the manual
+hold time, then automatic takes over.
+
+**Forced charge**: a heater that reheats only below target minus its hysteresis would not
+start for a target just above the tank. Legionella, boost, surplus and the charge window
+therefore ask at least tank + hysteresis + 1 (capped at the highest target), and keep a
+target already above their own so it does not climb with the tank.
+
+The target is written only when it differs from the heater's. A cloud shows it with its
+next poll, so the same value is not sent again for 15 minutes. Surplus switching is a
+normal write the budget may drop; all other targets are required writes.
+
+**Charge detection**: the heat source's cloud has no "hot water active" signal. A charge
+counts as running from a write that puts the target above tank + hysteresis (15 min), and
+while the tank rose at least 1 K between polls in the last 15 minutes. Rooms treat it like
+the flow-based detection: no heating power during the charge.
+
+**Legionella cycle**: on the scheduled weekdays it starts at the start time when the PV
+forecast condition holds, else at the fallback time regardless. It is skipped when the
+outlet is already within 3 K of its threshold, or a cycle started that day. Once the
+heater reports the target it runs: outlet at least its threshold, circulation return at
+least its threshold for the hold time (restarting when it drops). Done when both hold;
+failed after the verification timeout, or when it could not start before the last retry
+window ended. A cycle survives a restart. The circulation gets a continuous-run request
+when it starts and loses it when it fails.
+
+**Circulation**: evaluated on every change of its sensors and every 15 seconds, by the
+rules of the thermostatic blueprint: continuous run (released once the return held the
+release temperature for the release time), blocked heater states and presence/day-mode
+gates, a fixed interval without return value, stop when hot or after the maximum run,
+start after the minimum pause when the loop cooled below the peak or off-peak threshold
+or on a draw.
+
 ## How the minimum flow temperature is computed
 
 The minimum flow temperature is the larger of two requirements:

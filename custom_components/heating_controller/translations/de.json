@@ -161,6 +161,104 @@
       "error": {
         "invalid_limits": "Kleinster Wert muss unter dem größten liegen, Schritt über 0."
       }
+    },
+    "hot_water": {
+      "initiate_flow": {
+        "user": "Warmwassersteuerung hinzufügen"
+      },
+      "entry_type": "Warmwassersteuerung",
+      "abort": {
+        "already_configured": "Der Hub hat schon eine Warmwassersteuerung.",
+        "reconfigure_successful": "Gespeichert; der Hub lädt neu."
+      },
+      "step": {
+        "sources": {
+          "title": "Warmwasser-Quellen",
+          "data": {
+            "water_heater_entity": "Warmwasserbereiter",
+            "tank_temperature_entity": "Speichertemperatur (optional, sonst die des Warmwasserbereiters)",
+            "grid_export_entity": "Netzeinspeisung in W (optional, positiv = Einspeisung; ohne kein Überschussmodus)",
+            "battery_soc_entity": "Batterie-Ladestand (optional)",
+            "battery_discharge_entity": "Batterie-Entladeleistung in W (optional)",
+            "legionella_enabled": "Legionellenschutz",
+            "circulation_enabled": "Zirkulationspumpe"
+          }
+        },
+        "modes": {
+          "title": "Modi und Zeiten",
+          "data": {
+            "grid_lower_w": "Überschuss: Einspeisung über (W)",
+            "grid_upper_w": "Überschuss Übergangszeit: stabile Einspeisung über (W)",
+            "grid_release_w": "Überschuss endet unter (W)",
+            "grid_stable_min": "Einspeisung stabil für (min)",
+            "battery_soc_min": "Batterie-Ladestand über (%)",
+            "discharge_max_w": "Batterie-Entladung unter (W)",
+            "discharge_stable_min": "Batterie-Entladung stabil für (min)",
+            "outdoor_lower_c": "Außen über, mit stabiler Einspeisung (°C)",
+            "outdoor_upper_c": "Außen über, Sommer (°C)",
+            "tank_gate_c": "Speicher über (°C)",
+            "min_hold_min": "Mindestzeit zwischen Moduswechseln (min)",
+            "manual_hold_min": "Handmodus gilt für (min)",
+            "boost_max_h": "Boost höchstens (h)",
+            "reheat_hysteresis_k": "Nachlade-Hysterese des Warmwasserbereiters (K)",
+            "max_setpoint_c": "Höchster Sollwert (°C)",
+            "night_enabled": "Nachtabsenkung",
+            "night_start": "Nacht ab",
+            "night_end": "Nacht bis",
+            "window_enabled": "Ladefenster",
+            "window_start": "Ladefenster ab",
+            "window_end": "Ladefenster bis",
+            "forced_charge": "Zwangsladung (Soll mindestens Speicher + Hysterese + 1)"
+          }
+        },
+        "legionella": {
+          "title": "Legionellenschutz",
+          "data": {
+            "legionella_weekdays": "Wochentage",
+            "legionella_start": "Start",
+            "legionella_fallback": "Rückfall-Start (ohne Prognose-Bedingung, optional)",
+            "legionella_retry_min": "Wiederholungsfenster (min)",
+            "forecast_entity": "PV-Prognose (optional)",
+            "forecast_above": "Start bei Prognose über Schwelle (aus: unter)",
+            "forecast_threshold": "Prognose-Schwelle",
+            "outlet_entity": "Austrittstemperatur (optional, sonst Speicher)",
+            "outlet_threshold_c": "Austritt mindestens (°C)",
+            "return_entity": "Zirkulationsrücklauf (optional)",
+            "return_threshold_c": "Rücklauf mindestens (°C)",
+            "legionella_hold_min": "Rücklauf gehalten für (min)",
+            "legionella_timeout_min": "Prüfung höchstens (min)"
+          }
+        },
+        "circulation": {
+          "title": "Zirkulationspumpe",
+          "data": {
+            "pump_entity": "Pumpenschalter",
+            "circ_return_entity": "Zirkulationsrücklauf",
+            "circ_outlet_entity": "Austrittstemperatur (optional)",
+            "draw_entities": "Zapferkennung (Binärsensoren)",
+            "continuous_entities": "Dauerlauf-Anforderungen (extern)",
+            "blocked_states": "Zustände des Warmwasserbereiters, die die Pumpe sperren",
+            "presence_entity": "Anwesenheit (optional)",
+            "daymode_entity": "Tagmodus (optional)",
+            "peak1_start": "Spitze 1 ab",
+            "peak1_end": "Spitze 1 bis",
+            "peak2_start": "Spitze 2 ab",
+            "peak2_end": "Spitze 2 bis",
+            "peak_start_below_c": "Start unter, in Spitze (°C)",
+            "offpeak_start_below_c": "Start unter, außerhalb (°C)",
+            "stop_delta_k": "Stopp bei Austritt minus (K)",
+            "stop_temperature_c": "Stopp bei (°C, ohne Austrittsfühler)",
+            "max_run_min": "Laufzeit höchstens (min)",
+            "min_pause_min": "Pause mindestens (min)",
+            "fallback_on_min": "Ohne Rücklaufwert: an für (min)",
+            "fallback_off_min": "Ohne Rücklaufwert: aus für (min)",
+            "draw_overrides_gates": "Zapfung startet Pumpe trotz Anwesenheit/Tagmodus",
+            "release_enabled": "Dauerlauf freigeben, wenn Kreis heiß",
+            "release_temperature_c": "Freigabe bei Rücklauf (°C)",
+            "release_min": "Freigabe nach (min)"
+          }
+        }
+      }
     }
   },
   "selector": {
@@ -227,6 +325,17 @@
         "offset": "Offset auf die geräteeigene Heizkurve",
         "setpoint": "Vorlauf-Sollwert"
       }
+    },
+    "weekday": {
+      "options": {
+        "mon": "Montag",
+        "tue": "Dienstag",
+        "wed": "Mittwoch",
+        "thu": "Donnerstag",
+        "fri": "Freitag",
+        "sat": "Samstag",
+        "sun": "Sonntag"
+      }
     }
   },
   "entity": {
@@ -238,6 +347,14 @@
           "eco": "Absenk",
           "boost": "Boost",
           "frost_protection": "Frostschutz"
+        }
+      },
+      "hot_water_mode": {
+        "name": "Warmwasser-Modus",
+        "state": {
+          "auto": "Automatik",
+          "normal": "Normal",
+          "surplus": "Überschuss"
         }
       }
     },
@@ -262,11 +379,20 @@
       },
       "heating_season_switch_off": {
         "name": "Heizsaison: ausschalten"
+      },
+      "hot_water_charging": {
+        "name": "Warmwasser-Ladung"
+      },
+      "legionella_failed": {
+        "name": "Legionellenschutz fehlgeschlagen"
       }
     },
     "button": {
       "heating_unblock": {
         "name": "Entblocken"
+      },
+      "legionella_start": {
+        "name": "Legionellenschutz starten"
       }
     },
     "number": {
@@ -317,6 +443,24 @@
       },
       "flow_threshold": {
         "name": "Vorlaufschwelle"
+      },
+      "hot_water_normal": {
+        "name": "Warmwasser Normal"
+      },
+      "hot_water_surplus": {
+        "name": "Warmwasser Überschuss"
+      },
+      "hot_water_boost": {
+        "name": "Warmwasser Boost"
+      },
+      "hot_water_night": {
+        "name": "Warmwasser Nacht"
+      },
+      "hot_water_window": {
+        "name": "Warmwasser Ladefenster"
+      },
+      "hot_water_legionella": {
+        "name": "Warmwasser Legionellenschutz"
       }
     },
     "sensor": {
@@ -468,11 +612,55 @@
       },
       "flow_threshold": {
         "name": "Vorlaufschwelle effektiv"
+      },
+      "hot_water_target": {
+        "name": "Warmwasser Soll"
+      },
+      "hot_water_phase": {
+        "name": "Warmwasser aktiver Modus",
+        "state": {
+          "legionella": "Legionellenschutz",
+          "boost": "Boost",
+          "surplus": "Überschuss",
+          "charge_window": "Ladefenster",
+          "night": "Nacht",
+          "normal": "Normal"
+        }
+      },
+      "legionella_status": {
+        "name": "Legionellenschutz",
+        "state": {
+          "idle": "Bereit",
+          "waiting": "Wartet auf Sollwert",
+          "running": "Läuft",
+          "done": "Erledigt",
+          "failed": "Fehlgeschlagen"
+        }
+      },
+      "circulation_reason": {
+        "name": "Zirkulation Grund",
+        "state": {
+          "continuous": "Dauerlauf",
+          "blocked": "Gesperrt",
+          "gates_closed": "Niemand da / Nacht",
+          "fallback": "Takt (kein Rücklaufwert)",
+          "hot": "Kreis heiß",
+          "max_run": "Maximale Laufzeit",
+          "cooled": "Kreis abgekühlt",
+          "draw": "Zapfung",
+          "idle": "Wartet"
+        }
       }
     },
     "switch": {
       "flow_write": {
         "name": "Vorlauf schreiben"
+      },
+      "hot_water_boost": {
+        "name": "Warmwasser Boost"
+      },
+      "circulation_continuous": {
+        "name": "Zirkulation Dauerlauf"
       }
     }
   },

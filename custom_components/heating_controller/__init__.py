@@ -30,6 +30,7 @@ from .const import (
     SERVICE_RECALIBRATE,
     SERVICE_UNBLOCK,
     SUBENTRY_TYPE_FLOW,
+    SUBENTRY_TYPE_HOT_WATER,
     SUBENTRY_TYPE_ROOM,
 )
 from .controller.mpc.models.capacity import (
@@ -39,6 +40,7 @@ from .controller.mpc.models.capacity import (
 from .controller.mpc.models.loss import MAX_LEARNED_UA_FACTOR, MIN_LEARNED_UA_FACTOR
 from .coordinator import HeatingRoomCoordinator
 from .flow_device import FlowDevice
+from .hot_water_device import HotWaterDevice
 from .hub import HeatingHub
 from .migration import HUB_VERSION, async_migrate_rooms_to_hub
 from .profiles import (
@@ -119,6 +121,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingConfigEntry) -> b
     for subentry in entry.subentries.values():
         if subentry.subentry_type == SUBENTRY_TYPE_FLOW:
             hub.set_flow(FlowDevice(hass, hub, subentry))
+        elif subentry.subentry_type == SUBENTRY_TYPE_HOT_WATER:
+            hot_water = HotWaterDevice(hass, hub, subentry)
+            await hot_water.async_setup()
+            hub.set_hot_water(hot_water)
     await hub.async_setup()
     entry.runtime_data = hub
 

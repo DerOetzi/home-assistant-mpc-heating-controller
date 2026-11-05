@@ -61,6 +61,9 @@ SUBENTRY_TYPE_ROOM = "room"
 # The heat source's flow actuator, at most one per hub.
 SUBENTRY_TYPE_FLOW = "flow"
 FLOW_TITLE = "Vorlauf"
+# Hot water: target, legionella cycle and circulation, at most one per hub.
+SUBENTRY_TYPE_HOT_WATER = "hot_water"
+HOT_WATER_TITLE = "Warmwasser"
 CONF_ACTUATOR_MODE = "actuator_mode"
 CONF_ACTUATOR_ENTITY = "actuator_entity"
 CONF_ACTUATOR_MIN = "actuator_min"
