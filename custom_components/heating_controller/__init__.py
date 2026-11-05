@@ -22,6 +22,7 @@ from . import frontend
 from .const import (
     ATTR_CAPACITY_FACTOR,
     ATTR_RESET_GAINS,
+    ATTR_RESET_VALVE_CURVES,
     ATTR_UA_FACTOR,
     CONF_ROOM_NAME,
     CONF_TRVS,
@@ -71,9 +72,12 @@ RECALIBRATE_SCHEMA = vol.All(
                 ),
             ),
             vol.Optional(ATTR_RESET_GAINS): cv.boolean,
+            vol.Optional(ATTR_RESET_VALVE_CURVES): cv.boolean,
         }
     ),
-    cv.has_at_least_one_key(ATTR_UA_FACTOR, ATTR_CAPACITY_FACTOR, ATTR_RESET_GAINS),
+    cv.has_at_least_one_key(
+        ATTR_UA_FACTOR, ATTR_CAPACITY_FACTOR, ATTR_RESET_GAINS, ATTR_RESET_VALVE_CURVES
+    ),
 )
 
 PLATFORMS = [
@@ -228,6 +232,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 call.data.get(ATTR_UA_FACTOR),
                 call.data.get(ATTR_CAPACITY_FACTOR),
                 call.data.get(ATTR_RESET_GAINS, False),
+                call.data.get(ATTR_RESET_VALVE_CURVES, False),
             )
 
     hass.services.async_register(DOMAIN, SERVICE_UNBLOCK, async_handle_unblock)

@@ -33,6 +33,7 @@ ROLE_CLIMATE = "climate"
 ROLE_VALVE_POSITION = "valve_position"
 ROLE_HEAT_AVAILABLE = "heat_available"
 ROLE_ADAPTATION_STATUS = "adaptation_status"
+ROLE_MOUNTED_MODE = "mounted_mode"
 
 _ENTITY_SCHEMA = vol.Schema(
     {
@@ -40,7 +41,7 @@ _ENTITY_SCHEMA = vol.Schema(
         vol.Optional("unique_id_suffix"): str,
     }
 )
-_BUSY_SCHEMA = vol.All(
+_STATUS_MATCH_SCHEMA = vol.All(
     vol.Schema(
         {
             vol.Optional("states", default=[]): [vol.Coerce(str)],
@@ -52,7 +53,7 @@ _BUSY_SCHEMA = vol.All(
         vol.Schema(
             {vol.Required("attributes"): vol.Length(min=1)}, extra=vol.ALLOW_EXTRA
         ),
-        msg="busy needs states or attributes",
+        msg="a status match needs states or attributes",
     ),
 )
 
@@ -110,8 +111,13 @@ PROFILE_SCHEMA = vol.Schema(
             vol.Optional(ROLE_VALVE_POSITION): _ENTITY_SCHEMA,
             vol.Optional(ROLE_HEAT_AVAILABLE): _ENTITY_SCHEMA,
             vol.Optional(ROLE_ADAPTATION_STATUS): _ENTITY_SCHEMA.extend(
-                {vol.Required("busy"): _BUSY_SCHEMA}
+                {
+                    vol.Required("busy"): _STATUS_MATCH_SCHEMA,
+                    vol.Optional("ready"): _STATUS_MATCH_SCHEMA,
+                }
             ),
+            # A binary sensor that is on while the TRV is in mounting mode.
+            vol.Optional(ROLE_MOUNTED_MODE): _ENTITY_SCHEMA,
         },
         # [[offset °C, opening %], ...]: where the valve curve each TRV learns
         # starts from. Optional; without it a TRV learns from scratch.
@@ -141,8 +147,8 @@ class EntityMatch:
 
 
 @dataclass(frozen=True)
-class AdaptationBusy:
-    """The adaptation status that means a run is going on."""
+class StatusMatch:
+    """Adaptation statuses that mean one thing: a run going on, or calibrated."""
 
     states: frozenset[str] = frozenset()
     attributes: Mapping[str, Any] = field(default_factory=dict)
@@ -170,7 +176,8 @@ class DeviceProfile:
     max_target_temperature_c: float
     target_temperature_step_c: float
     entities: Mapping[str, EntityMatch]
-    adaptation_busy: AdaptationBusy | None = None
+    adaptation_busy: StatusMatch | None = None
+    adaptation_ready: StatusMatch | None = None
     valve_characteristic_seed: ValveCharacteristic | None = None
 
     def matches_device(self, device: dr.DeviceEntry, integrations: set[str]) -> bool:
@@ -194,7 +201,9 @@ class TrvBinding:
     valve_position_entity: str | None = None
     heat_available_entity: str | None = None
     adaptation_status_entity: str | None = None
-    adaptation_busy: AdaptationBusy | None = None
+    adaptation_busy: StatusMatch | None = None
+    adaptation_ready: StatusMatch | None = None
+    mounted_mode_entity: str | None = None
     valve_characteristic_seed: ValveCharacteristic | None = None
 
     @property
@@ -206,9 +215,16 @@ class TrvBinding:
                 self.valve_position_entity,
                 self.heat_available_entity,
                 self.adaptation_status_entity,
+                self.mounted_mode_entity,
             )
             if entity_id
         ]
+
+
+def _status_match(config: dict[str, Any]) -> StatusMatch:
+    return StatusMatch(
+        states=frozenset(config["states"]), attributes=dict(config["attributes"])
+    )
 
 
 def _profile_from_config(key: str, config: dict[str, Any]) -> DeviceProfile:
@@ -231,12 +247,10 @@ def _profile_from_config(key: str, config: dict[str, Any]) -> DeviceProfile:
             )
             for role, match in entities.items()
         },
-        adaptation_busy=(
-            AdaptationBusy(
-                states=frozenset(adaptation["busy"]["states"]),
-                attributes=dict(adaptation["busy"]["attributes"]),
-            )
-            if adaptation
+        adaptation_busy=_status_match(adaptation["busy"]) if adaptation else None,
+        adaptation_ready=(
+            _status_match(adaptation["ready"])
+            if adaptation and "ready" in adaptation
             else None
         ),
         valve_characteristic_seed=config.get("valve_characteristic_seed"),
@@ -362,5 +376,9 @@ def resolve_trv(
         adaptation_busy=(
             profile.adaptation_busy if ROLE_ADAPTATION_STATUS in entity_ids else None
         ),
+        adaptation_ready=(
+            profile.adaptation_ready if ROLE_ADAPTATION_STATUS in entity_ids else None
+        ),
+        mounted_mode_entity=entity_ids.get(ROLE_MOUNTED_MODE),
         valve_characteristic_seed=profile.valve_characteristic_seed,
     )

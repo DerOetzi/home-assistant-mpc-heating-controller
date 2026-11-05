@@ -329,6 +329,10 @@ class RoomMpcController:
             for name, learner in self._valve_curve_learners.items()
         }
 
+    def reset_valve_curves(self) -> None:
+        for learner in self._valve_curve_learners.values():
+            learner.reset()
+
     def restore_valve_curves(self, data: Mapping[str, dict]) -> None:
         for name, learner in self._valve_curve_learners.items():
             if isinstance(data.get(name), dict):

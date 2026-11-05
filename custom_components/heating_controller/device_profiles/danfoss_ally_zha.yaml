@@ -29,6 +29,12 @@ entities:
     busy:
       attributes:
         In_progress: true
+    ready:
+      attributes:
+        Valve_characteristic_found: true
+  mounted_mode:
+    domain: binary_sensor
+    unique_id_suffix: -mounted_mode_active
 # Diagnose 10/2026 (scale factor 1), nur Startwert, je TRV wird gelernt.
 # [setpoint minus TRV reading in °C, valve opening in %]
 valve_characteristic_seed:

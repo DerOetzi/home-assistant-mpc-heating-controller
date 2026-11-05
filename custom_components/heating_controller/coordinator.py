@@ -216,6 +216,9 @@ class HeatingRoomCoordinator:
         self._adaptation_status_entities: list[str] = [
             trv.adaptation_status_entity for trv in trvs if trv.adaptation_status_entity
         ]
+        self._mounted_mode_entities: list[str] = [
+            trv.mounted_mode_entity for trv in trvs if trv.mounted_mode_entity
+        ]
         self.room_comfort_condition_entities: list[str] = list(
             self.data.get(CONF_ROOM_COMFORT_CONDITION_ENTITIES, [])
         )
@@ -444,6 +447,7 @@ class HeatingRoomCoordinator:
             entity_id for entity_id in self._valve_position_entities if entity_id
         )
         tracked_entities.extend(self._adaptation_status_entities)
+        tracked_entities.extend(self._mounted_mode_entities)
         tracked_entities.extend(self._comfort_condition_entities)
         tracked_entities.extend(self.data.get(CONF_WINDOW_CONTACT_ENTITIES, []))
         tracked_entities.append(self.data[CONF_PV_BOOST_ENTITY])
@@ -622,6 +626,23 @@ class HeatingRoomCoordinator:
             self._adaptation_since[trv.climate_entity] = -ADAPTATION_MAX_HOLD_S
         return False
 
+    def _trv_uncalibrated(self, trv: TrvBinding) -> bool:
+        """Whether the TRV is mounting or its valve is not calibrated.
+
+        Its valve then follows the mounting or the TRV's own search, not the
+        setpoint, so the room learns nothing. Unlike a running adaptation
+        this does not stop writes: a TRV left uncalibrated still has to heat.
+        """
+        if trv.mounted_mode_entity is not None:
+            mounted = self.hass.states.get(trv.mounted_mode_entity)
+            if mounted is not None and mounted.state == STATE_ON:
+                return True
+        if trv.adaptation_ready is None or trv.adaptation_status_entity is None:
+            return False
+        return not trv.adaptation_ready.matches(
+            self.hass.states.get(trv.adaptation_status_entity)
+        )
+
     async def _async_apply_trv_active_switches(self, active: bool) -> None:
         desired_state = STATE_ON if active else STATE_OFF
         now_ts = time.time()
@@ -759,6 +780,7 @@ class HeatingRoomCoordinator:
         ua_factor: float | None,
         capacity_factor: float | None,
         reset_gains: bool = False,
+        reset_valve_curves: bool = False,
     ) -> None:
         """Set the factors; one left out keeps its learned value."""
         if reset_gains:
@@ -766,9 +788,15 @@ class HeatingRoomCoordinator:
             await self.gain_store.async_save(self.mpc.gain_model.export())
             self.mpc.gain_model.consume_changed()
             _LOGGER.info("Reset learned gains for room %s", self.room_name)
-            if ua_factor is None and capacity_factor is None:
-                self._notify_listeners()
-                return
+        if reset_valve_curves:
+            self.mpc.reset_valve_curves()
+            # Replaces a pending delayed write, which would read the same.
+            self._valve_curve_save_due_ts = None
+            await self.valve_curve_store.async_save(self.mpc.export_valve_curves())
+            _LOGGER.info("Reset learned valve curves for room %s", self.room_name)
+        if ua_factor is None and capacity_factor is None:
+            self._notify_listeners()
+            return
         factors = LearningFactors(
             ua_factor=self.mpc.learned_ua_factor if ua_factor is None else ua_factor,
             capacity_factor=(
@@ -828,7 +856,10 @@ class HeatingRoomCoordinator:
         now_ts = time.time()
         self._update_learning_paused(now_ts)
         self.mpc.set_trv_adapting(
-            any(self._adaptation_running(trv, now_ts) for trv in self._trvs)
+            any(
+                self._adaptation_running(trv, now_ts) or self._trv_uncalibrated(trv)
+                for trv in self._trvs
+            )
         )
         self.trv_active = self._compute_trv_active()
         heat_source_pending = self._heat_source_pending()

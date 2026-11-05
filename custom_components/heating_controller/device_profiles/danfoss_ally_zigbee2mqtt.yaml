@@ -30,6 +30,14 @@ entities:
       states:
         - in_progress
         - lost_in_progress
+    # Calibrated: anything else ("none" after mounting, "lost") leaves the
+    # valve uncalibrated, and the room learns nothing from it.
+    ready:
+      states:
+        - found
+  mounted_mode:
+    domain: binary_sensor
+    unique_id_suffix: _mounted_mode_active_zigbee2mqtt
 # Diagnose 10/2026 (scale factor 1), nur Startwert, je TRV wird gelernt.
 # [setpoint minus TRV reading in °C, valve opening in %]
 valve_characteristic_seed:

@@ -1084,7 +1084,7 @@ def _feed_trvs(controller, targets_c, openings_pct, report_targets=True):
 def _valve_curve_cycles(
     controller, clock, offsets_c, openings_pct, times=3, report_targets=True, **compute
 ):
-    """Per cycle: another setpoint, then offsets_c, read 700 s later.
+    """Per cycle: another setpoint, then offsets_c, read 10 and 15 min later.
 
     Returns every compute result, so two runs can be compared step by step.
     """
@@ -1093,7 +1093,8 @@ def _valve_curve_cycles(
     for _ in range(times):
         for targets_c, reported_pct, wait_s in (
             ([5.0] * count, [0.0] * count, 300),
-            ([20.0 + offset for offset in offsets_c], [0.0] * count, 700),
+            ([20.0 + offset for offset in offsets_c], [0.0] * count, 600),
+            ([20.0 + offset for offset in offsets_c], openings_pct, 300),
             ([20.0 + offset for offset in offsets_c], openings_pct, 300),
         ):
             _feed_trvs(controller, targets_c, reported_pct, report_targets)

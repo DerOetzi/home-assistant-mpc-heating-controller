@@ -21,7 +21,7 @@ from heating_controller.coordinator import (
     HeatingRoomCoordinator,
 )
 from heating_controller.migration import HUB_VERSION
-from heating_controller.profiles import AdaptationBusy, TrvBinding
+from heating_controller.profiles import StatusMatch, TrvBinding
 from homeassistant.const import (
     EVENT_HOMEASSISTANT_FINAL_WRITE,
     SUN_EVENT_SUNRISE,
@@ -1480,8 +1480,51 @@ ADAPTATION_ENTITY = "sensor.heizung_wohnzimmer_adaptation_run_status"
 def _trvs_with_adaptation() -> list[TrvBinding]:
     return _trvs(
         adaptation_status_entity=ADAPTATION_ENTITY,
-        adaptation_busy=AdaptationBusy(states=frozenset({"in_progress"})),
+        adaptation_busy=StatusMatch(states=frozenset({"in_progress"})),
     )
+
+
+MOUNTED_ENTITY = "binary_sensor.heizung_wohnzimmer_mounted_mode_active"
+
+
+def _trvs_with_calibration() -> list[TrvBinding]:
+    return _trvs(
+        adaptation_status_entity=ADAPTATION_ENTITY,
+        adaptation_busy=StatusMatch(states=frozenset({"in_progress"})),
+        adaptation_ready=StatusMatch(states=frozenset({"found"})),
+        mounted_mode_entity=MOUNTED_ENTITY,
+    )
+
+
+@pytest.mark.parametrize(
+    ("adaptation", "mounted"),
+    [
+        pytest.param("none", "off", id="not_calibrated"),
+        pytest.param("lost", "off", id="calibration_lost"),
+        pytest.param("unavailable", "off", id="status_unavailable"),
+        pytest.param("found", "on", id="mounting"),
+    ],
+)
+async def test_an_uncalibrated_trv_stops_learning_but_not_writes(
+    hass: HomeAssistant, adaptation: str, mounted: str
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set(ADAPTATION_ENTITY, adaptation)
+    hass.states.async_set(MOUNTED_ENTITY, mounted)
+    coordinator = await _setup_coordinator(hass, trvs=_trvs_with_calibration())
+    await hass.async_block_till_done()
+
+    assert coordinator.last_result.input.trv_adapting is True
+    assert coordinator.trv_setpoint_writes["climate.heizung_wohnzimmer"] == 1
+
+    # Calibrated and mounted: the room learns again.
+    hass.states.async_set(ADAPTATION_ENTITY, "found")
+    hass.states.async_set(MOUNTED_ENTITY, "off")
+    await hass.async_block_till_done()
+
+    assert coordinator.last_result.input.trv_adapting is False
+
+    coordinator.async_unload()
 
 
 async def test_nothing_is_written_to_a_trv_while_it_adapts(
@@ -1900,6 +1943,8 @@ async def _learn_one_valve_sample(
     await hass.async_block_till_done()
     await _poll(hass, freezer, 5)
     await _poll(hass, freezer, 5.5)
+    # The valve stood still for 5 minutes: the ramp has ended.
+    await _poll(hass, freezer, 5)
     return coordinator, entry
 
 
@@ -1933,6 +1978,34 @@ async def test_valve_curve_samples_survive_a_restart(
         == bins
     )
     after_restart.async_unload()
+
+
+async def test_recalibrate_resets_the_valve_curves_and_keeps_the_factors(
+    hass: HomeAssistant, freezer, hass_storage
+) -> None:
+    coordinator, entry = await _learn_one_valve_sample(hass, freezer)
+    ua_factor = coordinator.mpc.learned_ua_factor
+
+    await coordinator.async_recalibrate(None, None, reset_valve_curves=True)
+
+    learner = coordinator.mpc.valve_curve_learners["climate.heizung_wohnzimmer"]
+    assert learner.bins() == []
+    assert (
+        hass_storage[_valve_curve_storage_key(entry)]["data"]["trvs"][
+            "climate.heizung_wohnzimmer"
+        ]["samples"]
+        == []
+    )
+    assert coordinator.mpc.learned_ua_factor == ua_factor
+    # The delayed write planned for the sample does not bring it back.
+    await _poll(hass, freezer, 11)
+    assert (
+        hass_storage[_valve_curve_storage_key(entry)]["data"]["trvs"][
+            "climate.heizung_wohnzimmer"
+        ]["samples"]
+        == []
+    )
+    coordinator.async_unload()
 
 
 async def test_a_pending_valve_curve_write_is_flushed_on_shutdown(

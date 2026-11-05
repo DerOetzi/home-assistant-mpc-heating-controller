@@ -192,6 +192,28 @@ async def test_recalibrate_resets_gains_and_keeps_the_factors(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_recalibrate_accepts_a_valve_curve_reset_alone(
+    hass: HomeAssistant, hass_admin_user: MockUser, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = await _setup_room(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    resets: list[bool] = []
+    monkeypatch.setattr(
+        coordinator.mpc, "reset_valve_curves", lambda: resets.append(True)
+    )
+
+    await hass.services.async_call(
+        DOMAIN,
+        "recalibrate",
+        {"entity_id": "button.wohnzimmer_unblock", "reset_valve_curves": True},
+        blocking=True,
+        context=Context(user_id=hass_admin_user.id),
+    )
+
+    assert resets == [True]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_recalibrate_rejects_disturbance(
     hass: HomeAssistant, hass_admin_user: MockUser
 ) -> None:
@@ -336,6 +358,7 @@ async def test_unload_flushes_the_valve_curve_and_removal_leaves_no_file(
     await hass.async_block_till_done()
     await _poll(hass, freezer, 5)
     await _poll(hass, freezer, 5.5)
+    await _poll(hass, freezer, 5)
     key = f"{DOMAIN}_wohnzimmer_{entry.entry_id}_valve_curve"
     assert key not in hass_storage
 

@@ -359,7 +359,7 @@
     },
     "recalibrate": {
       "name": "Recalibrate",
-      "description": "Set the learned UA and capacity factors of one or more rooms, or reset their learned gains. A factor left out stays unchanged; pass 1.0 to reset it. Admin only.",
+      "description": "Set the learned UA and capacity factors of one or more rooms, or reset their learned gains or valve curves. A factor left out stays unchanged; pass 1.0 to reset it. Admin only.",
       "fields": {
         "ua_factor": {
           "name": "UA factor",
@@ -372,6 +372,10 @@
         "reset_gains": {
           "name": "Reset gains",
           "description": "Forget the learned steady gain, gain profile and sun terms of the room and learn them anew."
+        },
+        "reset_valve_curves": {
+          "name": "Reset valve curves",
+          "description": "Forget the samples of the valve curve each TRV of the room learned (setpoint offset to opening); the profile's starting value applies until new samples come in."
         }
       }
     }

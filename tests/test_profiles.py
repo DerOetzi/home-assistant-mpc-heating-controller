@@ -1,7 +1,7 @@
 import pytest
 import voluptuous as vol
 from heating_controller.profiles import (
-    AdaptationBusy,
+    StatusMatch,
     TrvResolveError,
     async_get_profiles,
     device_selector_filters,
@@ -19,6 +19,7 @@ ALL_Z2M_PROPERTIES = (
     ("sensor", "pi_heating_demand", "_pi_heating_demand"),
     ("switch", "switch_heat_available", "_heat_available"),
     ("sensor", "adaptation_run_status", "_adaptation_run_status"),
+    ("binary_sensor", "mounted_mode_active", "_mounted_mode_active"),
 )
 
 
@@ -60,6 +61,12 @@ async def test_a_zigbee2mqtt_ally_binds_all_its_entities(hass: HomeAssistant) ->
         trv.adaptation_status_entity
         == "sensor.heizung_wohnzimmer_adaptation_run_status"
     )
+    assert (
+        trv.mounted_mode_entity
+        == "binary_sensor.heizung_wohnzimmer_mounted_mode_active"
+    )
+    assert trv.adaptation_ready.matches(State("sensor.a", "found"))
+    assert not trv.adaptation_ready.matches(State("sensor.a", "none"))
     assert trv.emitter == TRV_EMITTER
     assert (trv.min_target_temperature_c, trv.target_temperature_step_c) == (5.0, 0.5)
 
@@ -85,6 +92,8 @@ async def test_a_missing_optional_entity_is_left_out(hass: HomeAssistant) -> Non
     assert trv.heat_available_entity is None
     assert trv.adaptation_status_entity is None
     assert trv.adaptation_busy is None
+    assert trv.adaptation_ready is None
+    assert trv.mounted_mode_entity is None
 
 
 async def test_a_zha_ally_binds_by_its_unique_ids(hass: HomeAssistant) -> None:
@@ -104,6 +113,7 @@ async def test_a_zha_ally_binds_by_its_unique_ids(hass: HomeAssistant) -> None:
         ("switch", "00:01-1-513-heat_available", "heizung_bad_heat"),
         ("sensor", "00:01-1-513-adaptation_run_status", "heizung_bad_adaptation"),
         ("sensor", "00:01-1-513-load_estimate", "heizung_bad_load"),
+        ("binary_sensor", "00:01-1-513-mounted_mode_active", "heizung_bad_mounted"),
     ):
         registry.async_get_or_create(
             domain,
@@ -123,6 +133,10 @@ async def test_a_zha_ally_binds_by_its_unique_ids(hass: HomeAssistant) -> None:
     assert trv.adaptation_busy.matches(
         State("sensor.heizung_bad_adaptation", "something", {"In_progress": True})
     )
+    assert trv.adaptation_ready.matches(
+        State("sensor.a", "something", {"Valve_characteristic_found": True})
+    )
+    assert trv.mounted_mode_entity == "binary_sensor.heizung_bad_mounted"
 
 
 @pytest.mark.parametrize(
@@ -155,9 +169,9 @@ async def test_a_device_without_its_climate_entity_is_refused(
     assert err.value.reason == "climate_missing"
 
 
-def test_adaptation_busy_by_state_or_attribute() -> None:
-    by_state = AdaptationBusy(states=frozenset({"in_progress", "lost_in_progress"}))
-    by_attribute = AdaptationBusy(attributes={"In_progress": True})
+def test_status_match_by_state_or_attribute() -> None:
+    by_state = StatusMatch(states=frozenset({"in_progress", "lost_in_progress"}))
+    by_attribute = StatusMatch(attributes={"In_progress": True})
 
     assert by_state.matches(State("sensor.a", "lost_in_progress"))
     assert not by_state.matches(State("sensor.a", "found"))

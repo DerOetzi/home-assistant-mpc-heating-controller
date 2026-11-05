@@ -60,7 +60,8 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
 - **Persisted learning** — each room's learned `ua_factor`/`capacity_factor` survive
   restarts (`homeassistant.helpers.storage.Store`, one file per room) and are removed
   cleanly if the room is deleted from the hub. The admin-only
-  `heating_controller.recalibrate` service sets or resets them.
+  `heating_controller.recalibrate` service sets or resets them, and also resets a room's
+  learned gains or valve curves.
 - **Learning only when gains are small** — learning pauses while the sun is up and for two
   hours after sunset, while the outdoor temperature is missing or the flow temperature has
   had no reading for over 16 minutes, and while a room's optional *block learning* entity is
@@ -161,7 +162,7 @@ target temperature range and step:
 
 | Device | Integration | Entities used |
 |---|---|---|
-| Danfoss Ally (014G2461) | Zigbee2MQTT | climate, `pi_heating_demand` (valve opening), `heat_available`, `adaptation_run_status` |
+| Danfoss Ally (014G2461) | Zigbee2MQTT | climate, `pi_heating_demand` (valve opening), `heat_available`, `adaptation_run_status`, `mounted_mode_active` |
 | Danfoss Ally (eTRV0100, eTRV0101, eTRV0103) | ZHA | the same; not yet tested on a real device |
 
 Only devices with a profile can be picked. For another model please
@@ -183,7 +184,9 @@ What the controller does with each entity:
   whether opening its valve can help.
 - **Adaptation status** — while the TRV calibrates its valve, nothing is written to it
   (any write aborts the run), for at most three hours and except for forced frost
-  protection; the room does not learn meanwhile.
+  protection; the room does not learn meanwhile. Nor does it learn while the TRV has no
+  calibrated valve (status other than `found`).
+- **Mounted mode** — while the TRV is in mounting mode the room learns nothing.
 
 A profile may give a starting point for that valve curve, optional, at least two points,
 offsets strictly rising and openings never falling:

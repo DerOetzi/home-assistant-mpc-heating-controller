@@ -51,7 +51,7 @@ stands:
 | `implausible_target` | The balance pointed at a factor above 2. |
 | `room_sensor_fallback` | The configured room sensor is stale or unavailable and the TRVs stand in. |
 | `valve_position_missing` | A linked valve position entity is stale or unavailable. |
-| `trv_adapting` | A TRV calibrates its valve and moves it by itself. |
+| `trv_adapting` | A TRV calibrates its valve and moves it by itself, has no calibrated valve (adaptation status other than found, e.g. `none` after mounting or `lost`), or is in mounting mode. |
 | `radiator_not_heating` | A radiator stays cold although its valve reports open, see [Radiator check](#radiator-check). |
 | `outdoor_temperature_missing` | The outdoor temperature is missing and the TRVs hold the target on their own, see [Sensor reliability](#sensor-reliability). The stretch before the outage is balanced; the next one starts once the value is back. |
 | `valve_saturated` | For more than half the stretch every valve was at least 95 % open with the room below its target band. The heat assumed for a full opening is the least certain (a flow-limited radiator gives off less), so the factor is left alone; the target is kept for diagnostics. |
@@ -85,7 +85,7 @@ capacity factor:
 | `suppressed` | A window is open or was just closed (10 min), or the configuration changed. |
 | `room_sensor_fallback` | The window holds samples taken while the TRVs stood in for the room sensor. |
 | `valve_position_missing` | The window holds samples without a reported valve opening. |
-| `trv_adapting` | The window holds samples taken while a TRV calibrated its valve. |
+| `trv_adapting` | The window holds samples taken while a TRV calibrated its valve, was uncalibrated or in mounting mode. |
 | `radiator_not_heating` | The window holds samples taken while a radiator stayed cold. |
 | `outdoor_temperature_missing` | The outdoor temperature is missing. A window that ran across an outage is discarded (`suppressed`). |
 | `paused` | Learning enabled entity off. |
@@ -186,12 +186,17 @@ data:
   ua_factor: 1.0
   capacity_factor: 1.0
   reset_gains: true
+  reset_valve_curves: true
 ```
 
 A factor that is left out stays as it is, so a reset needs an explicit `1.0`; at least one
-value (or `reset_gains`) is required. The call discards the measurement window in progress,
+value (or a reset) is required. The call discards the measurement window in progress,
 because its prediction was made with the old factors. `reset_gains: true` forgets the
 learned steady gain, day profile and sun terms (see [Gains and sun](#gains-and-sun)).
+`reset_valve_curves: true` forgets the samples of every TRV's valve curve in the room, also
+one still open; the profile's starting value applies until new bins fill (see
+[Valve curve](#valve-curve)) — for instance after a change to how samples are taken, a new
+pre-setting or a hydraulic change. The reset is written at once.
 
 ## Gains and sun
 
@@ -335,7 +340,11 @@ adaptation status entity) nothing is written to it, neither target nor heat-avai
 switch: a Danfoss Ally aborts the run on any write. The hold ends with the run, after three
 hours at the latest (a run took about 1 h 50 min), and forced frost protection still goes
 through. As the TRV moves its valve by itself meanwhile, the room learns nothing then (status
-`trv_adapting`).
+`trv_adapting`). The room learns nothing either while a TRV has no calibrated valve — its
+profile's ready status does not match, as a Danfoss Ally reports `none` from mounting until
+its next adaptation run and `lost` after losing the curve — or while it is in mounting mode
+(profile's mounted-mode binary sensor on). Writes go on then: an uncalibrated TRV still has
+to heat.
 
 ## Radiator check
 
@@ -395,10 +404,14 @@ A sample starts whenever the TRV reports a new setpoint: the offset is that setp
 the TRV's reading at that moment. Only a heating offset of the relative mode starts one —
 0.1 to 4.0 K (the largest relative offset of 3 K plus a rounding step, with margin) and a
 setpoint above the TRV's minimum target. An off write (the minimum target, some 15 K below
-the reading), an absolute or eco jump starts none and ends any open sample. It ends at the first controller cycle 10 to 15 minutes
-later with the opening reported then. A sample is dropped if another setpoint comes first,
-if no cycle falls into that window, if the opening is missing, or if at any cycle meanwhile
-the TRV adapted its valve, a hot-water charge ran, a window was open, the radiator check
+the reading), an absolute or eco jump starts none and ends any open sample. A Danfoss
+Ally ramps its valve after a new setpoint, about +10 % every 5 minutes for up to half an
+hour, so the sample waits for the ramp to end: from 10 minutes on the opening is read
+every 5 minutes (a reading up to 30 s early counts), and the first one within 2
+percentage points of the reading before is the sample — at the earliest 15 minutes after
+the setpoint. A sample is dropped if another setpoint comes first, if the valve still
+moves 45 minutes after the setpoint, if the opening is missing, or if at any cycle
+meanwhile the TRV adapted its valve, had no calibrated valve or was in mounting mode, a hot-water charge ran, a window was open, the radiator check
 flagged this radiator, frost protection was forced, or the valve entity reported nothing.
 Preview calculations feed nothing.
 
@@ -424,6 +437,8 @@ attributes name each TRV with a valve entity, with `status` and `bins`
 (`[offset °C, opening %, samples, spread %]`). One delayed write per room bundles the samples
 that finish within 10 minutes; a pending one is written at once when the room unloads
 (reload, removal) and when Home Assistant shuts down, so finished samples survive a restart. A sample still open at the restart is lost.
+`heating_controller.recalibrate` with `reset_valve_curves: true` clears them (see
+[Recalibrating](#recalibrating)).
 
 ## Radiator lag and the room observer
 

@@ -359,7 +359,7 @@
     },
     "recalibrate": {
       "name": "Neu kalibrieren",
-      "description": "Setzt die gelernten UA- und Kapazitätsfaktoren eines oder mehrerer Räume oder setzt deren gelernte Gewinne zurück. Ein weggelassener Faktor bleibt unverändert; 1.0 setzt ihn zurück. Nur für Admins.",
+      "description": "Setzt die gelernten UA- und Kapazitätsfaktoren eines oder mehrerer Räume oder setzt deren gelernte Gewinne bzw. Ventilkennlinien zurück. Ein weggelassener Faktor bleibt unverändert; 1.0 setzt ihn zurück. Nur für Admins.",
       "fields": {
         "ua_factor": {
           "name": "UA-Faktor",
@@ -372,6 +372,10 @@
         "reset_gains": {
           "name": "Gewinne zurücksetzen",
           "description": "Vergisst den gelernten festen Gewinn, das Gewinnprofil und die Sonnenterme des Raums und lernt sie neu."
+        },
+        "reset_valve_curves": {
+          "name": "Ventilkennlinien zurücksetzen",
+          "description": "Vergisst die Proben der Ventilkennlinie (Sollwertabstand → Öffnung), die jeder TRV des Raums gelernt hat; bis neue Proben kommen, gilt der Startwert des Profils."
         }
       }
     }

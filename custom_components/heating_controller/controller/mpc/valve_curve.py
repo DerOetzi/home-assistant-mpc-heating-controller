@@ -24,13 +24,20 @@ from typing import Any, NamedTuple
 from .models.emitter import RELATIVE_MAX_OFFSET_C, RELATIVE_MIN_OFFSET_C
 from .models.valve import ValveCharacteristic
 
-# A sample is the opening this long after the setpoint changed: the Danfoss
-# PI has moved the valve by then, but the room has not yet answered.
-VALVE_CURVE_SETTLE_S = 600
-# Later than this the reading says more about the room than about the
-# setpoint step. compute() runs at least every 5 minutes, so one call always
-# lands between the two.
-VALVE_CURVE_SAMPLE_LATEST_S = 900
+# A Danfoss Ally ramps its valve after a new setpoint, about +10 % every 5
+# minutes, for up to half an hour. A sample is the opening once the ramp has
+# ended: from this long after the setpoint changed the opening is read every
+# check interval, and the first reading within the stable margin of the one
+# before is the sample -- at the earliest one interval later (15 min).
+VALVE_CURVE_SETTLE_S = 10 * 60
+VALVE_CURVE_CHECK_INTERVAL_S = 5 * 60
+# compute() runs every 5 minutes plus extra runs on state changes; a reading
+# this much early still counts as one interval later.
+VALVE_CURVE_CHECK_JITTER_S = 30
+VALVE_CURVE_STABLE_PCT = 2.0
+# A valve still moving this long after the setpoint follows the room, not the
+# setpoint step: the sample is dropped.
+VALVE_CURVE_SAMPLE_LATEST_S = 45 * 60
 # Offsets are grouped into bins this wide; one point per bin.
 VALVE_CURVE_BIN_WIDTH_C = 0.5
 # Each bin keeps the latest samples only, so the curve follows a valve that
@@ -96,6 +103,8 @@ class ValveCurveBin(NamedTuple):
 class _OpenSample:
     started_ts: float
     offset_c: float
+    # The last opening read since the settle time: (timestamp, opening %).
+    reference: tuple[float, float] | None = None
 
 
 def _bin_key(offset_c: float) -> int:
@@ -164,15 +173,29 @@ class ValveCurveLearner:
         if not sample_allowed:
             self._open = None
             return
-        age_s = now_ts - self._open.started_ts
+        sample = self._open
+        age_s = now_ts - sample.started_ts
         if age_s < VALVE_CURVE_SETTLE_S:
             return
-        sample = self._open
-        self._open = None
         if age_s > VALVE_CURVE_SAMPLE_LATEST_S or opening_pct is None:
+            self._open = None
             return
-        self._add_sample(sample.offset_c, opening_pct)
-        self._changed = True
+        reference = sample.reference
+        if reference is not None and (
+            now_ts - reference[0]
+            < VALVE_CURVE_CHECK_INTERVAL_S - VALVE_CURVE_CHECK_JITTER_S
+        ):
+            return
+        if (
+            reference is not None
+            and abs(opening_pct - reference[1]) <= VALVE_CURVE_STABLE_PCT
+        ):
+            self._open = None
+            self._add_sample(sample.offset_c, opening_pct)
+            self._changed = True
+            return
+        # The valve is still moving (or this is the first reading).
+        sample.reference = (now_ts, opening_pct)
 
     def consume_changed(self) -> bool:
         """Whether a sample finished since the last call, so the owner saves."""
@@ -279,6 +302,13 @@ class ValveCurveLearner:
                 for offset_c, opening_pct in self._bins[key]
             ]
         }
+
+    def reset(self) -> None:
+        """Forget every sample, also an open one; the seed stays."""
+        self._bins = {}
+        self._bins_cache = None
+        self._open = None
+        self._changed = False
 
     def restore(self, data: dict[str, Any]) -> None:
         self._bins = {}

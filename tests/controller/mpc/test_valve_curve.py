@@ -40,9 +40,11 @@ class _Trv:
         )
 
     def sample(self, offset_c: float, opening_pct: float, times: int = 1) -> None:
+        """A valve that stood still from 10 to 15 minutes after the setpoint."""
         for _ in range(times):
             self.start(offset_c)
-            self.observe(700, opening_pct)
+            self.observe(600, opening_pct)
+            self.observe(900, opening_pct)
 
 
 def _points(learner: ValveCurveLearner) -> tuple[tuple[float, float], ...]:
@@ -67,13 +69,14 @@ def test_sample_is_taken_after_the_settle_time():
 
 @pytest.mark.parametrize(
     "after_s",
-    [pytest.param(300, id="before_settle"), pytest.param(1000, id="after_latest")],
+    [pytest.param(300, id="before_settle"), pytest.param(2700, id="after_latest")],
 )
 def test_sample_outside_the_window_is_not_taken(after_s):
     trv = _Trv(ValveCurveLearner(None))
 
     trv.start(0.7)
     trv.observe(after_s, 50)
+    trv.observe(after_s + 300, 50)
 
     assert trv.learner.bins() == []
 
@@ -97,7 +100,8 @@ def test_disallowed_moment_drops_the_sample(start_allowed, midway_allowed):
 
     trv.start(0.7, allowed=start_allowed)
     trv.observe(300, 40, allowed=midway_allowed)
-    trv.observe(700, 50)
+    trv.observe(600, 50)
+    trv.observe(900, 50)
 
     assert trv.learner.bins() == []
 
@@ -106,10 +110,56 @@ def test_missing_opening_drops_the_sample():
     trv = _Trv(ValveCurveLearner(None))
 
     trv.start(0.7)
-    trv.observe(700, None)
-    trv.observe(800, 50)
+    trv.observe(600, 50)
+    trv.observe(900, None)
+    trv.observe(1200, 50)
+    trv.observe(1500, 50)
 
     assert trv.learner.bins() == []
+
+
+def test_the_sample_waits_for_the_valve_ramp_to_end():
+    trv = _Trv(ValveCurveLearner(None))
+
+    trv.start(0.7)
+    # +10 % every 5 minutes, then the valve stands at 88 %.
+    for after_s, opening_pct in [(600, 48), (900, 58), (1200, 68), (1500, 78)]:
+        trv.observe(after_s, opening_pct)
+        assert trv.learner.bins() == []
+    trv.observe(1800, 88)
+    assert trv.learner.bins() == []
+    trv.observe(2100, 89)
+
+    [(_, opening_pct, samples, _)] = trv.learner.bins()
+    assert opening_pct == 89
+    assert samples == 1
+
+
+def test_a_valve_still_moving_after_45_minutes_gives_no_sample():
+    trv = _Trv(ValveCurveLearner(None))
+
+    trv.start(0.7)
+    for step in range(8):
+        trv.observe(600 + 300 * step, 20 + 10 * step)
+    trv.observe(2900, 90)
+
+    assert trv.learner.bins() == []
+
+
+def test_readings_between_the_checks_do_not_count():
+    trv = _Trv(ValveCurveLearner(None))
+
+    trv.start(0.7)
+    trv.observe(600, 48)
+    # An extra run a minute later: the valve has not had time to move.
+    trv.observe(660, 48)
+    assert trv.learner.bins() == []
+    # A check up to the jitter early still counts.
+    trv.observe(880, 58)
+    trv.observe(1160, 58)
+
+    [(_, opening_pct, _, _)] = trv.learner.bins()
+    assert opening_pct == 58
 
 
 def test_the_first_reported_target_is_no_change():
@@ -252,6 +302,22 @@ def test_spread_below_five_samples_does_not_scatter():
     assert trv.learner.status is ValveCurveStatus.LEARNING
 
 
+def test_reset_forgets_every_sample_and_keeps_the_seed():
+    trv = _Trv(ValveCurveLearner(DANFOSS_SEED))
+    trv.sample(0.7, 30, times=3)
+    trv.start(1.2)
+    trv.observe(600, 50)
+
+    trv.learner.reset()
+    # The sample open before the reset does not finish.
+    trv.observe(900, 50)
+
+    assert trv.learner.bins() == []
+    assert trv.learner.status is ValveCurveStatus.SEED
+    assert trv.learner.characteristic() == DANFOSS_SEED
+    assert trv.learner.export() == {"samples": []}
+
+
 def test_export_restore_keeps_finished_samples_only():
     trv = _Trv(ValveCurveLearner(DANFOSS_SEED))
     trv.sample(0.7, 30, times=3)
@@ -293,7 +359,9 @@ def test_a_finished_sample_marks_the_curve_changed():
     trv.start(0.7)
     assert trv.learner.consume_changed() is False
 
-    trv.observe(700, 50)
+    trv.observe(600, 50)
+    assert trv.learner.consume_changed() is False
+    trv.observe(900, 50)
     assert trv.learner.consume_changed() is True
     assert trv.learner.consume_changed() is False
 
