@@ -23,7 +23,15 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    async_add_entities([LeadHeatingDemandBinarySensor(entry.runtime_data)])
+    hub: HeatingHub = entry.runtime_data
+    async_add_entities(
+        [
+            LeadHeatingDemandBinarySensor(hub),
+            HeatSourceReachableBinarySensor(hub),
+            HeatingSeasonSwitchOnBinarySensor(hub),
+            HeatingSeasonSwitchOffBinarySensor(hub),
+        ]
+    )
     async_add_room_entities(
         entry,
         async_add_entities,
@@ -60,6 +68,73 @@ class LeadHeatingDemandBinarySensor(HeatingHubEntity, BinarySensorEntity):
             "flow_threshold_c": self._hub.flow_threshold_c,
             "rooms": lead.rooms,
         }
+
+
+class HeatSourceReachableBinarySensor(HeatingHubEntity, BinarySensorEntity):
+    """Off once the measured flow has been missing longer than the hub's gap."""
+
+    _attr_translation_key = "heat_source_reachable"
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, hub: HeatingHub) -> None:
+        super().__init__(hub, "heat_source_reachable")
+
+    @property
+    def is_on(self) -> bool:
+        return self._hub.heat_source_reachable
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "last_flow_value": dt_util.as_local(
+                dt_util.utc_from_timestamp(self._hub.flow_seen_ts)
+            ).isoformat()
+        }
+
+
+class _HeatingSeasonBinarySensor(HeatingHubEntity, BinarySensorEntity):
+    _attr_icon = "mdi:radiator"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        last_ts = self._hub.season.last_demand_ts
+        return {
+            "demand_hours_24h": self._hub.demand_hours_24h,
+            "on_threshold_h": self._hub.season_on_threshold_h,
+            "hold_threshold_h": self._hub.season_hold_threshold_h,
+            "off_after_h": self._hub.season_off_after_h,
+            "last_demand": None
+            if last_ts is None
+            else dt_util.as_local(dt_util.utc_from_timestamp(last_ts)).isoformat(),
+            "heating_on": self._hub.heating_on,
+        }
+
+
+class HeatingSeasonSwitchOnBinarySensor(_HeatingSeasonBinarySensor):
+    """On while the lead rooms ask for heat long enough and heating is off."""
+
+    _attr_translation_key = "heating_season_switch_on"
+
+    def __init__(self, hub: HeatingHub) -> None:
+        super().__init__(hub, "heating_season_switch_on")
+
+    @property
+    def is_on(self) -> bool:
+        return self._hub.season_switch_on_recommended
+
+
+class HeatingSeasonSwitchOffBinarySensor(_HeatingSeasonBinarySensor):
+    """On while heating although the lead rooms have not asked for long."""
+
+    _attr_translation_key = "heating_season_switch_off"
+
+    def __init__(self, hub: HeatingHub) -> None:
+        super().__init__(hub, "heating_season_switch_off")
+
+    @property
+    def is_on(self) -> bool:
+        return self._hub.season_switch_off_recommended
 
 
 class HeatingAutomationBinarySensor(HeatingControllerEntity, BinarySensorEntity):

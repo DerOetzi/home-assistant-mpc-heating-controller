@@ -152,3 +152,24 @@ class GainStore:
 
     async def async_remove(self) -> None:
         await self._store.async_remove()
+
+
+class HubStore:
+    """The hub's own state: write budget and heating season."""
+
+    def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
+        self._store: Store[dict] = Store(
+            hass, STORAGE_VERSION, f"{DOMAIN}_{entry_id}_hub"
+        )
+
+    async def async_load(self) -> dict:
+        return dict(await self._store.async_load() or {})
+
+    async def async_save(self, data: dict) -> None:
+        await self._store.async_save(data)
+
+    def async_delay_save(self, data_func: Callable[[], dict], delay_s: float) -> None:
+        self._store.async_delay_save(data_func, delay_s)
+
+    async def async_remove(self) -> None:
+        await self._store.async_remove()

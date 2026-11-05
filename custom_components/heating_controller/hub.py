@@ -7,32 +7,58 @@ demand and the reserve of the heat pump's curve.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import timedelta
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_interval,
+)
 
 from .const import (
     CONF_BUILDING_ROTATION,
     CONF_FLOW_CURVE_ENTITY,
+    CONF_FLOW_TEMPERATURE_ENTITY,
     CONF_FLOW_THRESHOLD,
     CONF_FLOW_THRESHOLD_ENTITY,
+    CONF_HEAT_SOURCE_CLIMATE_ENTITY,
     CONF_LEAD_FLOW,
     CONF_LEAD_HEATING_LIMIT,
+    CONF_MAX_FLOW_GAP_MIN,
+    CONF_MAX_WRITES_PER_DAY,
     CONF_OPAQUE_SURFACES,
+    CONF_RATE_LIMIT_REMAINING_ENTITY,
+    CONF_RATE_LIMIT_RESERVE,
     CONF_ROOF_ORIENTATION,
     CONF_ROOF_TILT,
     CONF_WINDOW_SURFACES,
     CONF_WORKDAY_ENTITY,
     DEFAULT_FLOW_THRESHOLD_C,
+    DEFAULT_MAX_FLOW_GAP_MIN,
+    DEFAULT_MAX_WRITES_PER_DAY,
+    DEFAULT_RATE_LIMIT_RESERVE,
     DEFAULT_ROOF_TILT_DEG,
+    DEFAULT_SEASON_HOLD_THRESHOLD_H,
+    DEFAULT_SEASON_OFF_AFTER_H,
+    DEFAULT_SEASON_ON_THRESHOLD_H,
+    HEAT_SOURCE_ACTIVE_STATE,
     RoofOrientation,
 )
+from .control.heating_season import HeatingSeason
+from .control.write_budget import WriteBudget, WritePriority
 from .coordinator import HeatingRoomCoordinator
 from .irradiance import IrradianceProvider, SurfaceGeometry, building_surfaces
+from .store import HubStore
+
+HUB_TICK = timedelta(minutes=1)
+HUB_SAVE_DELAY_S = 300
+SEASON_THRESHOLDS = ("on_threshold_h", "hold_threshold_h", "off_after_h")
 
 # Like the min/max helpers the lead figures replace.
 LEAD_ROUND_DIGITS = 1
@@ -60,6 +86,33 @@ class HeatingHub:
         self._unsub: list[Callable[[], None]] = []
         self.workday_entity: str | None = entry.data.get(CONF_WORKDAY_ENTITY)
         self.irradiance: IrradianceProvider | None = None
+        self.rate_limit_remaining_entity: str | None = entry.data.get(
+            CONF_RATE_LIMIT_REMAINING_ENTITY
+        )
+        self.write_budget = WriteBudget(
+            reserve=int(
+                entry.data.get(CONF_RATE_LIMIT_RESERVE, DEFAULT_RATE_LIMIT_RESERVE)
+            ),
+            max_per_day=int(
+                entry.data.get(CONF_MAX_WRITES_PER_DAY, DEFAULT_MAX_WRITES_PER_DAY)
+            ),
+        )
+        self._flow_temperature_entity: str | None = entry.data.get(
+            CONF_FLOW_TEMPERATURE_ENTITY
+        )
+        self._heat_source_entity: str | None = entry.data.get(
+            CONF_HEAT_SOURCE_CLIMATE_ENTITY
+        )
+        self._max_flow_gap_s = (
+            float(entry.data.get(CONF_MAX_FLOW_GAP_MIN, DEFAULT_MAX_FLOW_GAP_MIN)) * 60
+        )
+        # A start counts as a fresh value; the gap runs from here.
+        self.flow_seen_ts = time.time()
+        self.season = HeatingSeason()
+        self.season_on_threshold_h = DEFAULT_SEASON_ON_THRESHOLD_H
+        self.season_hold_threshold_h = DEFAULT_SEASON_HOLD_THRESHOLD_H
+        self.season_off_after_h = DEFAULT_SEASON_OFF_AFTER_H
+        self._store = HubStore(hass, entry.entry_id)
 
     def add_room(self, coordinator: HeatingRoomCoordinator) -> None:
         self.rooms[coordinator.room_id] = coordinator
@@ -85,7 +138,10 @@ class HeatingHub:
             if geometry.surface in used
         ]
 
-    def async_setup(self) -> None:
+    async def async_setup(self) -> None:
+        stored = await self._store.async_load()
+        self.write_budget.restore(stored.get("write_budget", {}))
+        self.season.restore(stored.get("heating_season", {}))
         surfaces = self.used_surfaces()
         if surfaces:
             self.irradiance = IrradianceProvider(
@@ -96,7 +152,12 @@ class HeatingHub:
                 room.set_sun_provider(self.irradiance, self.workday_entity)
         tracked = [
             entity_id
-            for entity_id in (self._flow_threshold_entity, self.flow_curve_entity)
+            for entity_id in (
+                self._flow_threshold_entity,
+                self.flow_curve_entity,
+                self._heat_source_entity,
+                self.rate_limit_remaining_entity,
+            )
             if entity_id
         ]
         if tracked:
@@ -105,6 +166,10 @@ class HeatingHub:
                     self.hass, tracked, self._async_handle_state_change
                 )
             )
+        self._unsub.append(
+            async_track_time_interval(self.hass, self._async_tick, HUB_TICK)
+        )
+        self._tick(time.time())
 
     def async_unload(self) -> None:
         if self.irradiance is not None:
@@ -112,6 +177,91 @@ class HeatingHub:
         for unsub in self._unsub:
             unsub()
         self._unsub = []
+
+    async def async_flush(self) -> None:
+        """Write the hub's state now, e.g. before an unload."""
+        await self._store.async_save(self._export())
+
+    def _export(self) -> dict[str, Any]:
+        return {
+            "write_budget": self.write_budget.export(),
+            "heating_season": self.season.export(),
+        }
+
+    @callback
+    def _async_tick(self, _now: Any) -> None:
+        self._tick(time.time())
+        self._notify_listeners()
+
+    def _tick(self, now_ts: float) -> None:
+        if (
+            self._flow_temperature_entity
+            and self._float_state(self._flow_temperature_entity) is not None
+        ):
+            self.flow_seen_ts = now_ts
+        self.season.update(self.heating_demand, now_ts, self.season_hold_threshold_h)
+        self._store.async_delay_save(self._export, HUB_SAVE_DELAY_S)
+
+    # --- Writes to the heat source -----------------------------------------
+
+    @property
+    def rate_limit_remaining(self) -> int | None:
+        """Calls the heat source's cloud still allows today, if known."""
+        if not self.rate_limit_remaining_entity:
+            return None
+        value = self._float_state(self.rate_limit_remaining_entity)
+        return None if value is None else int(value)
+
+    def request_write(self, priority: WritePriority) -> bool:
+        """Whether a write to the heat source may go out now; counts it."""
+        allowed = self.write_budget.request(
+            priority, self.rate_limit_remaining, time.time()
+        )
+        self._store.async_delay_save(self._export, HUB_SAVE_DELAY_S)
+        self._notify_listeners()
+        return allowed
+
+    # --- Heat source reachable ---------------------------------------------
+
+    @property
+    def heat_source_reachable(self) -> bool:
+        """False once the measured flow has been missing longer than the gap."""
+        return time.time() - self.flow_seen_ts <= self._max_flow_gap_s
+
+    # --- Heating season ----------------------------------------------------
+
+    @property
+    def heating_on(self) -> bool | None:
+        """Whether the heat source heats; None without or with an empty entity."""
+        if not self._heat_source_entity:
+            return None
+        state = self.hass.states.get(self._heat_source_entity)
+        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return None
+        return state.state == HEAT_SOURCE_ACTIVE_STATE
+
+    @property
+    def demand_hours_24h(self) -> float:
+        return round(self.season.hours(time.time()), 2)
+
+    @property
+    def season_switch_on_recommended(self) -> bool:
+        return self.season.switch_on_recommended(
+            time.time(), self.season_on_threshold_h, self.heating_on
+        )
+
+    @property
+    def season_switch_off_recommended(self) -> bool:
+        return self.season.switch_off_recommended(
+            time.time(), self.season_off_after_h, self.heating_on
+        )
+
+    def set_season_threshold(self, name: str, value: float) -> None:
+        """Set one of the season numbers by its short name."""
+        if name not in SEASON_THRESHOLDS:
+            raise ValueError(f"Unknown heating season threshold {name}")
+        setattr(self, f"season_{name}", float(value))
+        self._notify_listeners()
 
     def async_add_listener(
         self, update_callback: Callable[[], None]

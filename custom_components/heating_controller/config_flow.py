@@ -35,7 +35,9 @@ from .const import (
     CONF_LEAD_FLOW,
     CONF_LEAD_HEATING_LIMIT,
     CONF_LEARNING_BLOCK_ENTITY,
+    CONF_MAX_FLOW_GAP_MIN,
     CONF_MAX_SENSOR_AGE,
+    CONF_MAX_WRITES_PER_DAY,
     CONF_MPC_DEMAND_HYSTERESIS_PCT,
     CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT,
     CONF_MPC_HOLD_TIME,
@@ -45,6 +47,8 @@ from .const import (
     CONF_PV_BOOST_ENABLED,
     CONF_PV_BOOST_ENTITY,
     CONF_PV_BOOST_TEMPERATURE_OFFSET,
+    CONF_RATE_LIMIT_REMAINING_ENTITY,
+    CONF_RATE_LIMIT_RESERVE,
     CONF_ROOF_ORIENTATION,
     CONF_ROOF_TILT,
     CONF_ROOM_AREA,
@@ -71,6 +75,9 @@ from .const import (
     DEFAULT_FLOW_GATE_HOLD_TIME_S,
     DEFAULT_FLOW_GATE_OPEN_SURPLUS_C,
     DEFAULT_FLOW_THRESHOLD_C,
+    DEFAULT_MAX_FLOW_GAP_MIN,
+    DEFAULT_MAX_WRITES_PER_DAY,
+    DEFAULT_RATE_LIMIT_RESERVE,
     DEFAULT_ROOF_TILT_DEG,
     DEFAULT_STATIONARY_RANGE_C,
     DEFAULT_TARGET_BAND_C,
@@ -190,8 +197,36 @@ def _hub_sources_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_FROST_PROTECTION_TEMPERATURE,
                 default=defaults.get(CONF_FROST_PROTECTION_TEMPERATURE, 8.0),
             ): vol.Coerce(float),
+            vol.Required(
+                CONF_MAX_FLOW_GAP_MIN,
+                default=defaults.get(CONF_MAX_FLOW_GAP_MIN, DEFAULT_MAX_FLOW_GAP_MIN),
+            ): _whole(5, 240, "min"),
+            _optional(CONF_RATE_LIMIT_REMAINING_ENTITY, defaults): (
+                selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
+            ),
+            vol.Required(
+                CONF_RATE_LIMIT_RESERVE,
+                default=defaults.get(
+                    CONF_RATE_LIMIT_RESERVE, DEFAULT_RATE_LIMIT_RESERVE
+                ),
+            ): _whole(0, 1000),
+            vol.Required(
+                CONF_MAX_WRITES_PER_DAY,
+                default=defaults.get(
+                    CONF_MAX_WRITES_PER_DAY, DEFAULT_MAX_WRITES_PER_DAY
+                ),
+            ): _whole(1, 1000),
         }
     )
+
+
+def _whole(minimum: int, maximum: int, unit: str | None = None) -> vol.All:
+    config = selector.NumberSelectorConfig(
+        min=minimum, max=maximum, step=1, mode=selector.NumberSelectorMode.BOX
+    )
+    if unit is not None:
+        config["unit_of_measurement"] = unit
+    return vol.All(selector.NumberSelector(config), vol.Coerce(int))
 
 
 def _hub_control_schema(defaults: dict[str, Any]) -> vol.Schema:

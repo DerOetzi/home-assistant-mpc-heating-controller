@@ -95,8 +95,30 @@ CONF_WINDOW_SURFACES = "window_surfaces"
 CONF_OPAQUE_SURFACES = "opaque_surfaces"
 DEFAULT_ROOF_TILT_DEG = 45.0
 
+# Writes to the heat source's cloud: an optional entity with the calls left
+# today, the calls kept back for required writes and the integration's own
+# daily maximum.
+CONF_RATE_LIMIT_REMAINING_ENTITY = "rate_limit_remaining_entity"
+CONF_RATE_LIMIT_RESERVE = "rate_limit_reserve"
+CONF_MAX_WRITES_PER_DAY = "max_writes_per_day"
+DEFAULT_RATE_LIMIT_RESERVE = 20
+DEFAULT_MAX_WRITES_PER_DAY = 40
+# The heat source counts as unreachable once its flow value is missing
+# this long.
+CONF_MAX_FLOW_GAP_MIN = "max_flow_gap_min"
+DEFAULT_MAX_FLOW_GAP_MIN = 30
+
+# Heating season recommendations (hub numbers).
+DEFAULT_SEASON_ON_THRESHOLD_H = 6.0
+DEFAULT_SEASON_HOLD_THRESHOLD_H = 2.0
+DEFAULT_SEASON_OFF_AFTER_H = 48.0
+
 # Settings of the whole house, held once by the hub entry.
 HUB_KEYS = (
+    CONF_RATE_LIMIT_REMAINING_ENTITY,
+    CONF_RATE_LIMIT_RESERVE,
+    CONF_MAX_WRITES_PER_DAY,
+    CONF_MAX_FLOW_GAP_MIN,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
     CONF_FLOW_TEMPERATURE_ENTITY,

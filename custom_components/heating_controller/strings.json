@@ -13,7 +13,11 @@
           "flow_curve_entity": "Effective heating curve (optional, for the flow reserve)",
           "pv_boost_entity": "PV boost entity",
           "comfort_condition_entities": "House-wide comfort condition entities",
-          "frost_protection_temperature_c": "Frost protection temperature (°C)"
+          "frost_protection_temperature_c": "Frost protection temperature (°C)",
+          "max_flow_gap_min": "Heat source unreachable after a flow gap of (min)",
+          "rate_limit_remaining_entity": "Cloud calls left today (optional, e.g. Onecta rate limit sensor)",
+          "rate_limit_reserve": "Calls kept for required writes",
+          "max_writes_per_day": "Own writes per day at most"
         }
       },
       "control": {
@@ -212,6 +216,15 @@
       },
       "lead_heating_demand": {
         "name": "Lead rooms heating demand"
+      },
+      "heat_source_reachable": {
+        "name": "Heat source reachable"
+      },
+      "heating_season_switch_on": {
+        "name": "Heating season: switch on"
+      },
+      "heating_season_switch_off": {
+        "name": "Heating season: switch off"
       }
     },
     "button": {
@@ -225,6 +238,15 @@
       },
       "eco_offset": {
         "name": "Eco offset"
+      },
+      "heating_season_on_threshold_h": {
+        "name": "Heating season switch-on threshold"
+      },
+      "heating_season_hold_threshold_h": {
+        "name": "Heating season hold threshold"
+      },
+      "heating_season_off_after_h": {
+        "name": "Heating season switch off after"
       }
     },
     "sensor": {
@@ -349,6 +371,15 @@
       },
       "additional_heat": {
         "name": "Additional heat"
+      },
+      "heating_demand_hours_24h": {
+        "name": "Heating demand last 24 h"
+      },
+      "heating_season_last_demand": {
+        "name": "Heating season last demand"
+      },
+      "write_budget": {
+        "name": "Write budget"
       }
     }
   },

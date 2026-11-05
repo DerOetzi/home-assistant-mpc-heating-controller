@@ -13,7 +13,11 @@
           "flow_curve_entity": "Effektive Heizkurve (optional, für die Vorlauf-Reserve)",
           "pv_boost_entity": "PV-Überschuss-Entity",
           "comfort_condition_entities": "Hausweite Komfort-Bedingungs-Entities",
-          "frost_protection_temperature_c": "Frostschutztemperatur (°C)"
+          "frost_protection_temperature_c": "Frostschutztemperatur (°C)",
+          "max_flow_gap_min": "Wärmeerzeuger nicht erreichbar nach Vorlauflücke von (min)",
+          "rate_limit_remaining_entity": "Verbleibende Cloud-Aufrufe heute (optional, z. B. Onecta-Ratelimit-Sensor)",
+          "rate_limit_reserve": "Reserve für Pflichtschreibvorgänge (Aufrufe)",
+          "max_writes_per_day": "Eigene Schreibvorgänge pro Tag höchstens"
         }
       },
       "control": {
@@ -212,6 +216,15 @@
       },
       "lead_heating_demand": {
         "name": "Heizanforderung Leiträume"
+      },
+      "heat_source_reachable": {
+        "name": "Wärmeerzeuger erreichbar"
+      },
+      "heating_season_switch_on": {
+        "name": "Heizsaison: einschalten"
+      },
+      "heating_season_switch_off": {
+        "name": "Heizsaison: ausschalten"
       }
     },
     "button": {
@@ -225,6 +238,15 @@
       },
       "eco_offset": {
         "name": "Absenk-Offset"
+      },
+      "heating_season_on_threshold_h": {
+        "name": "Heizsaison Einschaltschwelle"
+      },
+      "heating_season_hold_threshold_h": {
+        "name": "Heizsaison Halteschwelle"
+      },
+      "heating_season_off_after_h": {
+        "name": "Heizsaison ausschalten nach"
       }
     },
     "sensor": {
@@ -349,6 +371,15 @@
       },
       "additional_heat": {
         "name": "Zusatzwärme"
+      },
+      "heating_demand_hours_24h": {
+        "name": "Heizanforderung letzte 24 h"
+      },
+      "heating_season_last_demand": {
+        "name": "Heizsaison letzte Anforderung"
+      },
+      "write_budget": {
+        "name": "Schreibbudget"
       }
     }
   },

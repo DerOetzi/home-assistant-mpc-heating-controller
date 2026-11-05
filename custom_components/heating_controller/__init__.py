@@ -47,6 +47,7 @@ from .profiles import (
 from .store import (
     FlowGateStateStore,
     GainStore,
+    HubStore,
     LearningFactorsStore,
     ValveCurveStore,
 )
@@ -109,7 +110,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingConfigEntry) -> b
         if coordinator is not None:
             rooms[subentry.subentry_id] = coordinator
             hub.add_room(coordinator)
-    hub.async_setup()
+    await hub.async_setup()
     entry.runtime_data = hub
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -173,6 +174,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: HeatingConfigEntry) -> 
     if unload_ok:
         hub: HeatingHub = entry.runtime_data
         hub.async_unload()
+        await hub.async_flush()
         for room_id, coordinator in hub.rooms.items():
             hass.data[DOMAIN].pop(room_id, None)
             coordinator.async_unload()
@@ -185,6 +187,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # stores belong to its subentry now and stay.
     if entry.version < HUB_VERSION:
         return
+    await HubStore(hass, entry.entry_id).async_remove()
     for subentry in entry.subentries.values():
         await _async_remove_room_stores(
             hass, subentry.data[CONF_ROOM_NAME], subentry.subentry_id

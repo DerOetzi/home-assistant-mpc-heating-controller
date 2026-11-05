@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -15,6 +16,7 @@ from homeassistant.const import (
     UnitOfIrradiance,
     UnitOfPower,
     UnitOfTemperature,
+    UnitOfTime,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -37,6 +39,9 @@ async def async_setup_entry(
     hub_entities: list[SensorEntity] = [
         LeadHoldFlowTemperatureSensor(hub),
         LeadMinFlowTemperatureSensor(hub),
+        HeatingDemandHoursSensor(hub),
+        HeatingSeasonLastDemandSensor(hub),
+        WriteBudgetSensor(hub),
     ]
     if hub.flow_curve_entity:
         hub_entities += [HoldFlowReserveSensor(hub), MinFlowReserveSensor(hub)]
@@ -111,6 +116,76 @@ class LeadMinFlowTemperatureSensor(_LeadFlowSensor):
 
     def _lead(self) -> LeadValue:
         return self._hub.lead_min_flow
+
+
+class HeatingDemandHoursSensor(HeatingHubEntity, SensorEntity):
+    """Hours of the last 24 h in which the lead rooms' heating demand was on."""
+
+    _attr_translation_key = "heating_demand_hours_24h"
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTime.HOURS
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, hub: HeatingHub) -> None:
+        super().__init__(hub, "heating_demand_hours_24h")
+
+    @property
+    def native_value(self) -> float:
+        return self._hub.demand_hours_24h
+
+
+class HeatingSeasonLastDemandSensor(HeatingHubEntity, SensorEntity):
+    """Last time the 24 h demand was above the hold threshold."""
+
+    _attr_translation_key = "heating_season_last_demand"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, hub: HeatingHub) -> None:
+        super().__init__(hub, "heating_season_last_demand")
+
+    @property
+    def native_value(self) -> datetime | None:
+        last_ts = self._hub.season.last_demand_ts
+        return None if last_ts is None else dt_util.utc_from_timestamp(last_ts)
+
+
+class WriteBudgetSensor(HeatingHubEntity, SensorEntity):
+    """Calls left for writes to the heat source's cloud today.
+
+    With a rate-limit entity its value, otherwise the integration's own daily
+    maximum minus its writes.
+    """
+
+    _attr_translation_key = "write_budget"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:cloud-upload-outline"
+
+    def __init__(self, hub: HeatingHub) -> None:
+        super().__init__(hub, "write_budget")
+
+    @property
+    def native_value(self) -> int | None:
+        remaining = self._hub.rate_limit_remaining
+        if remaining is not None:
+            return remaining
+        if self._hub.rate_limit_remaining_entity:
+            return None
+        used, _dropped = self._hub.write_budget.counts(time.time())
+        return max(0, self._hub.write_budget.max_per_day - used)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        budget = self._hub.write_budget
+        used, dropped = budget.counts(time.time())
+        return {
+            "own_writes_today": used,
+            "dropped_today": dropped,
+            "reserve": budget.reserve,
+            "max_writes_per_day": budget.max_per_day,
+            "source": self._hub.rate_limit_remaining_entity,
+        }
 
 
 class _FlowReserveSensor(HeatingHubEntity, SensorEntity):

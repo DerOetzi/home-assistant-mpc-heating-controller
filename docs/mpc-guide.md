@@ -574,6 +574,11 @@ heat source `climate` entity only supplies the operating state. This lets a temp
 sensor fall back to a calculated value (a heating curve, for instance) while the heat
 source's cloud connection drops out, without the room losing its flow temperature.
 
+The hub's *Heat source reachable* turns off once the flow temperature entity has had no
+number for longer than the hub's flow gap (default 30 min). It is checked every minute, so
+a cloud that repeats the same value still counts as reachable. Learning pauses earlier,
+after 16 min without a value.
+
 While the flow temperature entity is `unavailable` or `unknown` (for instance for a moment
 while its template is reloaded), the room keeps the last flow temperature it reported, so a
 reload does not switch the TRVs off and on. While the heat source entity is `unavailable`
@@ -613,6 +618,22 @@ With an effective heating curve entity on the hub, *Flow reserve hold* and *Flow
 minimum* report the curve minus each value: negative means the curve does not reach what a
 lead room needs. Both values are rounded to 0.1 K; the reserves are unavailable while the
 lead flow is 0 (all lead rooms in their surplus buffer).
+
+### Heating season
+
+The hub sums up how many of the last 24 hours *Lead rooms heating demand* was on. The
+duration, not the moment, decides: a cold morning hour does not start the season, a few
+mild days do not end it.
+
+- **Switch on** is recommended while the 24 h sum is above the switch-on threshold (6 h)
+  and the heat source is not heating.
+- Every minute the sum is above the hold threshold (2 h) stamps *Heating season last
+  demand*. **Switch off** is recommended while the heat source heats and that stamp is
+  older than the switch-off time (48 h).
+
+Both are recommendations; switching the heat pump stays with you or your own automation.
+The demand periods and the stamp survive restarts; the time Home Assistant is down counts
+as no demand.
 
 ## How the minimum flow temperature is computed
 

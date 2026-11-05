@@ -104,7 +104,10 @@ once per house. It holds everything that applies to the whole house:
 1. **Heat pump and house signals** — outdoor temperature sensor, heat source `climate`
    entity (operating state), measured flow temperature sensor, fixed flow threshold and an
    optional threshold entity, optional effective heating curve (for the flow reserve),
-   PV-boost entity, house-wide comfort conditions, frost-protection temperature.
+   PV-boost entity, house-wide comfort conditions, frost-protection temperature, the flow
+   gap after which the heat source counts as unreachable, and the write budget for the heat
+   source's cloud (optional entity with the calls left today, reserve kept for required
+   writes, own writes per day at most).
 2. **Control and design** — design outdoor temperature and system flow/return temperatures
    (used to size the emitter curves), demand-control hysteresis/hold-time/max-step tuning,
    surplus gate, sensor age, the stationary range that decides which factor a measurement
@@ -153,6 +156,20 @@ The hub's device *Heizung* reports the lead rooms:
 - *Irradiance &lt;surface&gt;* — sun on each surface some room uses (W/m², diagnostic),
   with the next 24 hours as attribute `forecast`; unavailable when the last fetch is more
   than three hours old.
+- *Heat source reachable* — off once the measured flow temperature has been missing longer
+  than the configured gap (diagnostic).
+- *Write budget* — cloud calls left today (from the rate-limit entity, else the own daily
+  maximum minus own writes); attributes `own_writes_today`, `dropped_today`. Used by the
+  flow and hot-water control to stay inside the cloud's daily limit.
+- *Heating demand last 24 h* — hours in which *Lead rooms heating demand* was on, kept
+  across restarts (the time HA is down counts as no demand).
+- *Heating season last demand* — last time those hours were above the hold threshold.
+- *Heating season: switch on* / *switch off* — recommendations only, nothing is switched:
+  on while the 24 h demand is above the switch-on threshold and the heat source does not
+  heat; off while it heats and the hours have not been above the hold threshold for the
+  switch-off time. Thresholds are the numbers *Heating season switch-on threshold* (6 h),
+  *hold threshold* (2 h) and *switch off after* (48 h). Point a notification automation at
+  the two binary sensors.
 
 ## Supported devices
 
