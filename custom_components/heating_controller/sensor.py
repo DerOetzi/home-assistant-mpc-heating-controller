@@ -23,10 +23,18 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .const import CapacityOutcome, Surface, UaBalanceOutcome
+from .control.flow import ActuatorMode
 from .controller.mpc.learner import UA_BALANCE_MIN_WINDOW_S
 from .controller.mpc.valve_curve import ValveCurveStatus
 from .coordinator import HeatingRoomCoordinator
-from .entity import HeatingControllerEntity, HeatingHubEntity, async_add_room_entities
+from .entity import (
+    FlowEntity,
+    HeatingControllerEntity,
+    HeatingHubEntity,
+    async_add_flow_entities,
+    async_add_room_entities,
+)
+from .flow_device import FlowDevice
 from .hub import HeatingHub, LeadValue
 
 
@@ -43,8 +51,20 @@ async def async_setup_entry(
         HeatingSeasonLastDemandSensor(hub),
         WriteBudgetSensor(hub),
     ]
-    if hub.flow_curve_entity:
+    if hub.has_flow_curve:
         hub_entities += [HoldFlowReserveSensor(hub), MinFlowReserveSensor(hub)]
+    async_add_flow_entities(
+        entry,
+        async_add_entities,
+        lambda flow: [
+            FlowCurveSensor(flow),
+            FlowActuatorActualSensor(flow),
+            FlowEffectiveCurveSensor(flow),
+            FlowTargetSensor(flow),
+            FlowActuatorTargetSensor(flow),
+            FlowThresholdSensor(flow),
+        ],
+    )
     if hub.irradiance is not None:
         hub_entities += [
             IrradianceSensor(hub, geometry.surface)
@@ -185,6 +205,134 @@ class WriteBudgetSensor(HeatingHubEntity, SensorEntity):
             "reserve": budget.reserve,
             "max_writes_per_day": budget.max_per_day,
             "source": self._hub.rate_limit_remaining_entity,
+        }
+
+
+class _FlowTemperatureSensor(FlowEntity, SensorEntity):
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_suggested_display_precision = 1
+
+
+class FlowCurveSensor(_FlowTemperatureSensor):
+    """The heat source's curve at the current outdoor value, no offset."""
+
+    _attr_translation_key = "flow_curve"
+
+    def __init__(self, flow: FlowDevice) -> None:
+        super().__init__(flow, "flow_curve")
+
+    @property
+    def native_value(self) -> float | None:
+        return self._flow.curve_flow_c
+
+
+class FlowEffectiveCurveSensor(_FlowTemperatureSensor):
+    """What the heat source aims at: curve plus offset, or the setpoint."""
+
+    _attr_translation_key = "flow_effective_curve"
+
+    def __init__(self, flow: FlowDevice) -> None:
+        super().__init__(flow, "flow_effective_curve")
+
+    @property
+    def native_value(self) -> float | None:
+        return self._flow.effective_curve_c
+
+
+class FlowThresholdSensor(_FlowTemperatureSensor):
+    """The lowest useful flow: curve's warm end + offset, or the number."""
+
+    _attr_translation_key = "flow_threshold"
+
+    def __init__(self, flow: FlowDevice) -> None:
+        super().__init__(flow, "flow_threshold_effective")
+
+    @property
+    def native_value(self) -> float:
+        return self._flow.threshold_c
+
+
+class FlowTargetSensor(_FlowTemperatureSensor):
+    """The flow the controller asks for."""
+
+    _attr_translation_key = "flow_target"
+
+    def __init__(self, flow: FlowDevice) -> None:
+        super().__init__(flow, "flow_target")
+
+    @property
+    def native_value(self) -> float | None:
+        decision = self._flow.decision
+        return None if decision is None else decision.target_flow_c
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        decision = self._flow.decision
+        lead = self._flow.hub.lead_min_flow
+        return {
+            "source": None
+            if decision is None or decision.source is None
+            else str(decision.source),
+            "reason": None if decision is None else decision.reason,
+            "lead_min_flow_c": lead.value_c,
+            "room": lead.room,
+            "threshold_c": self._flow.threshold_c,
+        }
+
+
+class FlowActuatorActualSensor(FlowEntity, SensorEntity):
+    """The actuator as the heat source reports it (offset in K or setpoint)."""
+
+    _attr_translation_key = "flow_actuator_actual"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, flow: FlowDevice) -> None:
+        super().__init__(flow, "flow_actuator_actual")
+        self._attr_native_unit_of_measurement = (
+            UnitOfTemperature.KELVIN
+            if flow.mode is ActuatorMode.OFFSET
+            else UnitOfTemperature.CELSIUS
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        return self._flow.actual
+
+
+class FlowActuatorTargetSensor(FlowEntity, SensorEntity):
+    """The actuator value the controller writes, or would write in shadow."""
+
+    _attr_translation_key = "flow_actuator_target"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, flow: FlowDevice) -> None:
+        super().__init__(flow, "flow_actuator_target")
+        self._attr_native_unit_of_measurement = (
+            UnitOfTemperature.KELVIN
+            if flow.mode is ActuatorMode.OFFSET
+            else UnitOfTemperature.CELSIUS
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        decision = self._flow.decision
+        return None if decision is None else decision.value
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        controller = self._flow.controller
+        decision = self._flow.decision
+        return {
+            "writing": self._flow.write_enabled,
+            "pending_write": None if decision is None else decision.write,
+            "last_written": controller.last_written,
+            "last_write": _iso(controller.last_write_ts),
+            "external_change": _iso(controller.external_change_ts),
+            "last_error": self._flow.last_error,
         }
 
 

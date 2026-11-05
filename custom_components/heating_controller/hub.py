@@ -33,6 +33,7 @@ from .const import (
     CONF_MAX_FLOW_GAP_MIN,
     CONF_MAX_WRITES_PER_DAY,
     CONF_OPAQUE_SURFACES,
+    CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_RATE_LIMIT_REMAINING_ENTITY,
     CONF_RATE_LIMIT_RESERVE,
     CONF_ROOF_ORIENTATION,
@@ -53,6 +54,7 @@ from .const import (
 from .control.heating_season import HeatingSeason
 from .control.write_budget import WriteBudget, WritePriority
 from .coordinator import HeatingRoomCoordinator
+from .flow_device import FlowDevice
 from .irradiance import IrradianceProvider, SurfaceGeometry, building_surfaces
 from .store import HubStore
 
@@ -113,6 +115,10 @@ class HeatingHub:
         self.season_hold_threshold_h = DEFAULT_SEASON_HOLD_THRESHOLD_H
         self.season_off_after_h = DEFAULT_SEASON_OFF_AFTER_H
         self._store = HubStore(hass, entry.entry_id)
+        self._outdoor_entity: str | None = entry.data.get(
+            CONF_OUTDOOR_TEMPERATURE_ENTITY
+        )
+        self.flow: FlowDevice | None = None
 
     def add_room(self, coordinator: HeatingRoomCoordinator) -> None:
         self.rooms[coordinator.room_id] = coordinator
@@ -201,6 +207,27 @@ class HeatingHub:
             self.flow_seen_ts = now_ts
         self.season.update(self.heating_demand, now_ts, self.season_hold_threshold_h)
         self._store.async_delay_save(self._export, HUB_SAVE_DELAY_S)
+        if self.flow is not None:
+            self.hass.async_create_task(self.flow.async_evaluate())
+
+    # --- Flow control ------------------------------------------------------
+
+    def set_flow(self, flow: FlowDevice) -> None:
+        """Hand the flow device the actuator; rooms take its threshold."""
+        self.flow = flow
+        for room in self.rooms.values():
+            room.flow_threshold_provider = lambda: flow.threshold_c
+
+    @property
+    def outdoor_temperature_c(self) -> float | None:
+        if not self._outdoor_entity:
+            return None
+        return self._float_state(self._outdoor_entity)
+
+    @property
+    def charge_flow_c(self) -> float | None:
+        """Flow the rooms need around a planned hot-water charge (phase 4)."""
+        return None
 
     # --- Writes to the heat source -----------------------------------------
 
@@ -319,6 +346,8 @@ class HeatingHub:
     @property
     def flow_threshold_c(self) -> float | None:
         """The threshold the demand compares to; None while its entity is empty."""
+        if self.flow is not None:
+            return self.flow.threshold_c
         if self._flow_threshold_entity:
             return self._float_state(self._flow_threshold_entity)
         return self.entry.data.get(CONF_FLOW_THRESHOLD, DEFAULT_FLOW_THRESHOLD_C)
@@ -335,12 +364,25 @@ class HeatingHub:
     def _reserve(self, lead: LeadValue) -> float | None:
         # A lead value of 0 means all lead rooms sit in their surplus buffer;
         # the curve minus 0 would say nothing.
-        if not self.flow_curve_entity or lead.value_c is None or lead.value_c <= 0:
+        if lead.value_c is None or lead.value_c <= 0:
             return None
-        curve_c = self._float_state(self.flow_curve_entity)
+        curve_c = self.effective_curve_c
         if curve_c is None:
             return None
         return round(curve_c - lead.value_c, LEAD_ROUND_DIGITS)
+
+    @property
+    def has_flow_curve(self) -> bool:
+        return self.flow is not None or bool(self.flow_curve_entity)
+
+    @property
+    def effective_curve_c(self) -> float | None:
+        """The flow the heat source aims at, from the flow device or entity."""
+        if self.flow is not None:
+            return self.flow.effective_curve_c
+        if not self.flow_curve_entity:
+            return None
+        return self._float_state(self.flow_curve_entity)
 
     @property
     def hold_flow_reserve(self) -> float | None:

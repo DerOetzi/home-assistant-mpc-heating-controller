@@ -130,6 +130,37 @@
         "climate_missing": "Das Gerät hat keine eindeutige aktive Climate-Entity.",
         "already_configured": "Ein Raum mit diesem Namen existiert bereits."
       }
+    },
+    "flow": {
+      "initiate_flow": {
+        "user": "Vorlaufsteuerung hinzufügen"
+      },
+      "entry_type": "Vorlaufsteuerung",
+      "step": {
+        "actuator": {
+          "title": "Vorlauf-Stellgröße",
+          "data": {
+            "actuator_mode": "Was die Entität stellt",
+            "actuator_entity": "Stellgrößen-Entität (climate, number oder input_number)"
+          }
+        },
+        "limits": {
+          "title": "Grenzen der Stellgröße",
+          "data": {
+            "actuator_min": "Kleinster Wert",
+            "actuator_max": "Größter Wert",
+            "actuator_step": "Schritt",
+            "actuator_fallback": "Rückfallwert (wird geschrieben, wenn Außen- oder Leitwert fehlt)"
+          }
+        }
+      },
+      "abort": {
+        "already_configured": "Der Hub hat schon eine Vorlaufsteuerung.",
+        "reconfigure_successful": "Gespeichert; der Hub lädt neu."
+      },
+      "error": {
+        "invalid_limits": "Kleinster Wert muss unter dem größten liegen, Schritt über 0."
+      }
     }
   },
   "selector": {
@@ -190,6 +221,12 @@
         "roof_south": "Dach Süd",
         "roof_west": "Dach West"
       }
+    },
+    "actuator_mode": {
+      "options": {
+        "offset": "Offset auf die geräteeigene Heizkurve",
+        "setpoint": "Vorlauf-Sollwert"
+      }
     }
   },
   "entity": {
@@ -247,6 +284,39 @@
       },
       "heating_season_off_after_h": {
         "name": "Heizsaison ausschalten nach"
+      },
+      "flow_curve_outdoor_cold": {
+        "name": "Heizkurve Außentemperatur kalt"
+      },
+      "flow_curve_outdoor_warm": {
+        "name": "Heizkurve Außentemperatur warm"
+      },
+      "flow_curve_flow_cold": {
+        "name": "Heizkurve Vorlauftemperatur kalt"
+      },
+      "flow_curve_flow_warm": {
+        "name": "Heizkurve Vorlauftemperatur warm"
+      },
+      "flow_curve_bump": {
+        "name": "Heizkurve Erhöhung um 0 Grad"
+      },
+      "flow_curve_bump_width": {
+        "name": "Heizkurve Erhöhung Steigung"
+      },
+      "flow_margin": {
+        "name": "Vorlauf Marge"
+      },
+      "flow_hysteresis": {
+        "name": "Vorlauf Hysterese"
+      },
+      "flow_hold_time_min": {
+        "name": "Vorlauf Haltezeit"
+      },
+      "flow_charge_raise_max": {
+        "name": "Vorlauf Anhebung Warmwasser max"
+      },
+      "flow_threshold": {
+        "name": "Vorlaufschwelle"
       }
     },
     "sensor": {
@@ -380,6 +450,29 @@
       },
       "write_budget": {
         "name": "Schreibbudget"
+      },
+      "flow_curve": {
+        "name": "Heizkurve Vorlauftemperatur"
+      },
+      "flow_actuator_actual": {
+        "name": "Stellgröße Ist"
+      },
+      "flow_effective_curve": {
+        "name": "Heizkurve Vorlauftemperatur effektiv"
+      },
+      "flow_target": {
+        "name": "Vorlauf Soll"
+      },
+      "flow_actuator_target": {
+        "name": "Stellgröße Soll"
+      },
+      "flow_threshold": {
+        "name": "Vorlaufschwelle effektiv"
+      }
+    },
+    "switch": {
+      "flow_write": {
+        "name": "Vorlauf schreiben"
       }
     }
   },

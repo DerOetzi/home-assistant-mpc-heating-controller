@@ -29,6 +29,8 @@ from .const import (
     DOMAIN,
     SERVICE_RECALIBRATE,
     SERVICE_UNBLOCK,
+    SUBENTRY_TYPE_FLOW,
+    SUBENTRY_TYPE_ROOM,
 )
 from .controller.mpc.models.capacity import (
     MAX_LEARNED_CAPACITY_FACTOR,
@@ -36,6 +38,7 @@ from .controller.mpc.models.capacity import (
 )
 from .controller.mpc.models.loss import MAX_LEARNED_UA_FACTOR, MIN_LEARNED_UA_FACTOR
 from .coordinator import HeatingRoomCoordinator
+from .flow_device import FlowDevice
 from .hub import HeatingHub
 from .migration import HUB_VERSION, async_migrate_rooms_to_hub
 from .profiles import (
@@ -87,6 +90,7 @@ PLATFORMS = [
     Platform.SENSOR,
     Platform.BUTTON,
     Platform.NUMBER,
+    Platform.SWITCH,
 ]
 
 type HeatingConfigEntry = ConfigEntry[HeatingHub]
@@ -106,10 +110,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingConfigEntry) -> b
     hub = HeatingHub(hass, entry)
     rooms: dict[str, HeatingRoomCoordinator] = hass.data.setdefault(DOMAIN, {})
     for subentry in entry.subentries.values():
+        if subentry.subentry_type != SUBENTRY_TYPE_ROOM:
+            continue
         coordinator = await _async_setup_room(hass, entry, subentry, profiles)
         if coordinator is not None:
             rooms[subentry.subentry_id] = coordinator
             hub.add_room(coordinator)
+    for subentry in entry.subentries.values():
+        if subentry.subentry_type == SUBENTRY_TYPE_FLOW:
+            hub.set_flow(FlowDevice(hass, hub, subentry))
     await hub.async_setup()
     entry.runtime_data = hub
 
@@ -189,6 +198,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         return
     await HubStore(hass, entry.entry_id).async_remove()
     for subentry in entry.subentries.values():
+        if subentry.subentry_type != SUBENTRY_TYPE_ROOM:
+            continue
         await _async_remove_room_stores(
             hass, subentry.data[CONF_ROOM_NAME], subentry.subentry_id
         )

@@ -58,6 +58,15 @@ CONF_LEAD_HEATING_LIMIT = "lead_heating_limit"
 CONF_LEAD_FLOW = "lead_flow"
 
 SUBENTRY_TYPE_ROOM = "room"
+# The heat source's flow actuator, at most one per hub.
+SUBENTRY_TYPE_FLOW = "flow"
+FLOW_TITLE = "Vorlauf"
+CONF_ACTUATOR_MODE = "actuator_mode"
+CONF_ACTUATOR_ENTITY = "actuator_entity"
+CONF_ACTUATOR_MIN = "actuator_min"
+CONF_ACTUATOR_MAX = "actuator_max"
+CONF_ACTUATOR_STEP = "actuator_step"
+CONF_ACTUATOR_FALLBACK = "actuator_fallback"
 HUB_TITLE = "Heizung"
 
 CONF_BOOST_ENABLED = "boost_enabled"

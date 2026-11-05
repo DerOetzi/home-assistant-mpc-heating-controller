@@ -130,6 +130,37 @@
         "climate_missing": "The device has no single enabled climate entity.",
         "already_configured": "A room with this name already exists."
       }
+    },
+    "flow": {
+      "initiate_flow": {
+        "user": "Add flow control"
+      },
+      "entry_type": "Flow control",
+      "step": {
+        "actuator": {
+          "title": "Flow actuator",
+          "data": {
+            "actuator_mode": "What the entity sets",
+            "actuator_entity": "Actuator entity (climate, number or input_number)"
+          }
+        },
+        "limits": {
+          "title": "Actuator limits",
+          "data": {
+            "actuator_min": "Lowest value",
+            "actuator_max": "Highest value",
+            "actuator_step": "Step",
+            "actuator_fallback": "Fallback value (written when the outdoor or lead value is missing)"
+          }
+        }
+      },
+      "abort": {
+        "already_configured": "The hub already has a flow control.",
+        "reconfigure_successful": "Settings saved; the hub reloads."
+      },
+      "error": {
+        "invalid_limits": "The lowest value must be below the highest and the step above 0."
+      }
     }
   },
   "selector": {
@@ -190,6 +221,12 @@
         "roof_south": "South roof",
         "roof_west": "West roof"
       }
+    },
+    "actuator_mode": {
+      "options": {
+        "offset": "Offset on the heat source's own heating curve",
+        "setpoint": "Flow setpoint"
+      }
     }
   },
   "entity": {
@@ -247,6 +284,39 @@
       },
       "heating_season_off_after_h": {
         "name": "Heating season switch off after"
+      },
+      "flow_curve_outdoor_cold": {
+        "name": "Heating curve outdoor temperature cold"
+      },
+      "flow_curve_outdoor_warm": {
+        "name": "Heating curve outdoor temperature warm"
+      },
+      "flow_curve_flow_cold": {
+        "name": "Heating curve flow temperature cold"
+      },
+      "flow_curve_flow_warm": {
+        "name": "Heating curve flow temperature warm"
+      },
+      "flow_curve_bump": {
+        "name": "Heating curve raise around 0 °C"
+      },
+      "flow_curve_bump_width": {
+        "name": "Heating curve raise width"
+      },
+      "flow_margin": {
+        "name": "Flow margin"
+      },
+      "flow_hysteresis": {
+        "name": "Flow hysteresis"
+      },
+      "flow_hold_time_min": {
+        "name": "Flow hold time"
+      },
+      "flow_charge_raise_max": {
+        "name": "Flow raise for hot water at most"
+      },
+      "flow_threshold": {
+        "name": "Flow threshold"
       }
     },
     "sensor": {
@@ -380,6 +450,29 @@
       },
       "write_budget": {
         "name": "Write budget"
+      },
+      "flow_curve": {
+        "name": "Heating curve flow temperature"
+      },
+      "flow_actuator_actual": {
+        "name": "Actuator actual"
+      },
+      "flow_effective_curve": {
+        "name": "Heating curve flow temperature effective"
+      },
+      "flow_target": {
+        "name": "Flow target"
+      },
+      "flow_actuator_target": {
+        "name": "Actuator target"
+      },
+      "flow_threshold": {
+        "name": "Flow threshold effective"
+      }
+    },
+    "switch": {
+      "flow_write": {
+        "name": "Write flow"
       }
     }
   },

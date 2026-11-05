@@ -245,6 +245,8 @@ class HeatingRoomCoordinator:
         self._flow_threshold_entity: str | None = self.data.get(
             CONF_FLOW_THRESHOLD_ENTITY
         )
+        # Set by the hub when a flow device owns the threshold.
+        self.flow_threshold_provider: Callable[[], float] | None = None
         self._learning_block_entity: str | None = self.data.get(
             CONF_LEARNING_BLOCK_ENTITY
         )
@@ -840,6 +842,8 @@ class HeatingRoomCoordinator:
         entity, or while it reports nothing usable, the hub's fixed threshold
         keeps the room controllable instead of blocking it.
         """
+        if self.flow_threshold_provider is not None:
+            return self.flow_threshold_provider()
         fixed = self.data.get(CONF_FLOW_THRESHOLD, DEFAULT_FLOW_THRESHOLD_C)
         if not self._flow_threshold_entity:
             return fixed

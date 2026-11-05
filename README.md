@@ -137,6 +137,24 @@ Then **Add room** on the hub, once per room:
    facades with windows, and outer walls or roof surfaces without (a wall with windows
    counts in both).
 
+Optionally **Add flow control** on the hub, once: the integration then sets the heat
+source's flow itself.
+
+1. **Flow actuator** — what the entity sets: an *offset* on the heat source's own
+   weather-compensated curve (e.g. Daikin `climate.*_leaving_water_offset`), or a *flow
+   setpoint*; and the entity (`climate`, `number` or `input_number`).
+2. **Actuator limits** — lowest and highest value and step (pre-filled from the entity),
+   and the fallback value written while the outdoor value or the lead rooms' flow is
+   missing.
+
+The device *Vorlauf* then holds the heating curve as numbers (two points and an optional
+raise around 0 °C, as the heat source has it), margin, hysteresis, hold time, the most a
+hot-water charge may raise the flow. The flow threshold replaces the hub's threshold
+entity: in offset mode the curve's warm end plus the current offset (*Flow threshold
+effective*), in setpoint mode a number on the device. *Write flow* starts off: the device computes and shows *Flow target* and
+*Actuator target* but writes nothing until switched on. See
+[Flow control](docs/mpc-guide.md#flow-control).
+
 **Reconfigure** on a room re-runs steps 2–5 pre-filled (the name stays: the room's
 learning files are keyed by it). Deleting a room removes its entities and its learning
 files.

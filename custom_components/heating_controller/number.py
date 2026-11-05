@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from homeassistant.components.number import (
     NumberDeviceClass,
     NumberMode,
@@ -17,8 +19,16 @@ from .const import (
     DEFAULT_SEASON_OFF_AFTER_H,
     DEFAULT_SEASON_ON_THRESHOLD_H,
 )
+from .control.flow import ActuatorMode
 from .coordinator import HeatingRoomCoordinator
-from .entity import HeatingControllerEntity, HeatingHubEntity, async_add_room_entities
+from .entity import (
+    FlowEntity,
+    HeatingControllerEntity,
+    HeatingHubEntity,
+    async_add_flow_entities,
+    async_add_room_entities,
+)
+from .flow_device import FlowDevice
 from .hub import HeatingHub
 
 
@@ -49,6 +59,72 @@ async def async_setup_entry(
             EcoOffsetNumber(coordinator),
         ],
     )
+    async_add_flow_entities(
+        entry,
+        async_add_entities,
+        lambda flow: [
+            FlowNumber(flow, spec)
+            for spec in FLOW_NUMBERS
+            # In offset mode the threshold follows the curve and the offset.
+            if spec.key != "threshold" or flow.mode is ActuatorMode.SETPOINT
+        ],
+    )
+
+
+@dataclass(frozen=True)
+class FlowNumberSpec:
+    key: str
+    unit: str
+    minimum: float
+    maximum: float
+    step: float
+    temperature: bool = False
+
+
+FLOW_NUMBERS = (
+    FlowNumberSpec("curve_outdoor_cold", UnitOfTemperature.CELSIUS, -30, 10, 0.5, True),
+    FlowNumberSpec("curve_outdoor_warm", UnitOfTemperature.CELSIUS, 0, 30, 0.5, True),
+    FlowNumberSpec("curve_flow_cold", UnitOfTemperature.CELSIUS, 25, 75, 0.5, True),
+    FlowNumberSpec("curve_flow_warm", UnitOfTemperature.CELSIUS, 15, 60, 0.5, True),
+    FlowNumberSpec("curve_bump", UnitOfTemperature.KELVIN, -10, 10, 0.5),
+    FlowNumberSpec("curve_bump_width", UnitOfTemperature.KELVIN, 0, 20, 0.5),
+    FlowNumberSpec("margin", UnitOfTemperature.KELVIN, 0, 10, 0.5),
+    FlowNumberSpec("hysteresis", UnitOfTemperature.KELVIN, 0, 5, 0.1),
+    FlowNumberSpec("hold_time_min", UnitOfTime.MINUTES, 5, 240, 5),
+    FlowNumberSpec("charge_raise_max", UnitOfTemperature.KELVIN, 0, 15, 0.5),
+    FlowNumberSpec("threshold", UnitOfTemperature.CELSIUS, 15, 50, 0.5, True),
+)
+
+
+class FlowNumber(FlowEntity, RestoreNumber):
+    """A setting of the flow device: heating curve, margins, timing."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, flow: FlowDevice, spec: FlowNumberSpec) -> None:
+        super().__init__(flow, f"flow_{spec.key}")
+        self._key = spec.key
+        self._attr_translation_key = f"flow_{spec.key}"
+        self._attr_native_unit_of_measurement = spec.unit
+        self._attr_native_min_value = spec.minimum
+        self._attr_native_max_value = spec.maximum
+        self._attr_native_step = spec.step
+        if spec.temperature:
+            self._attr_device_class = NumberDeviceClass.TEMPERATURE
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data and last_data.native_value is not None:
+            self._flow.set_number(self._key, last_data.native_value)
+
+    @property
+    def native_value(self) -> float:
+        return self._flow.numbers[self._key]
+
+    async def async_set_native_value(self, value: float) -> None:
+        self._flow.set_number(self._key, value)
 
 
 class HeatingSeasonNumber(HeatingHubEntity, RestoreNumber):

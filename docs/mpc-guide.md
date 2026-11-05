@@ -635,6 +635,46 @@ Both are recommendations; switching the heat pump stays with you or your own aut
 The demand periods and the stamp survive restarts; the time Home Assistant is down counts
 as no demand.
 
+## Flow control
+
+With a flow control sub-entry the integration owns the heat source's flow. Every minute it
+works out:
+
+- **Target flow** = *Lead rooms minimum flow temperature* + margin (default 1 K). A planned
+  hot-water charge can raise it further (up to *Flow raise for hot water at most* above
+  that). In setpoint mode never below the flow threshold number. Attribute `source` says
+  which won: `lead`, `charge`, `threshold` or `fallback`.
+- **Actuator value**: in offset mode target minus the heat source's curve at the current
+  outdoor value, in setpoint mode the target itself. Rounded to the step, clamped to the
+  limits.
+
+It writes only when all hold:
+
+- *Write flow* is on (off = shadow: the values show, nothing is written);
+- the new value differs from the reported one by at least the hysteresis;
+- the hold time (default 30 min) has passed since the last write;
+- the hub's write budget allows it.
+
+A cloud reports a write only with its next poll, so until then the old value does not
+count as a change. A value someone else set (app, display) is left alone for one hold
+time, then the control takes over again; attribute `external_change` on *Actuator target*
+says when.
+
+Exceptions to the hold time, written as required writes:
+
+- **Fallback**: outdoor value missing (offset mode) or no lead room with a flow: the
+  fallback value is written once, then kept. No estimate is made.
+- **Back from fallback**, and **entering or leaving a hot-water charge window**: the new
+  value goes out at once.
+
+Nothing is written while the heat source does not heat or is unreachable.
+
+The flow threshold (heating demand, TRV release) is, in offset mode, the curve's warm end
+plus the offset the heat source reports — the lowest flow it delivers with that offset.
+It moves with every write: lowering the offset lowers the threshold. During a cloud gap
+the last reported offset holds. In setpoint mode the threshold is a number on the device
+and also the lowest target.
+
 ## How the minimum flow temperature is computed
 
 The minimum flow temperature is the larger of two requirements:
