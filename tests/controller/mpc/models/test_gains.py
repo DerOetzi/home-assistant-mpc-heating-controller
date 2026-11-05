@@ -74,3 +74,50 @@ def test_reset_forgets():
     model.reset()
     assert model.night_points == 0
     assert model.consume_changed()
+
+
+def _hours(model, profile: int, value_w: float, days: list[int], per_day: int = 3):
+    """Hours of one block; other blocks get a little noise so the residual
+    variance is not zero."""
+    for day in days:
+        for hour in range(per_day):
+            model.add_hour(profile, [], value_w + (5.0 if hour % 2 else -5.0), day)
+            model.add_hour((profile + 1) % 16, [], 0.0, day)
+
+
+def test_profile_block_needs_three_days():
+    """Duschbad 5 Nov: a block counted after one evening and kept the
+    room below setpoint."""
+    model = RoomGainModel(520.0, 16.25)
+    _hours(model, 7, 190.0, [1])
+    assert model.profile_days(7) == 1
+    assert not model.profile_determined(7)
+    assert model.breakdown(7, []).profile_w == 0.0
+
+    _hours(model, 7, 190.0, [2])
+    assert not model.profile_determined(7)
+
+    _hours(model, 7, 190.0, [3])
+    assert model.profile_days(7) == 3
+    assert model.profile_determined(7)
+    assert model.breakdown(7, []).profile_w == pytest.approx(190.0, abs=10)
+
+
+def test_profile_days_survive_restore_and_reset():
+    model = RoomGainModel(520.0, 16.25)
+    _hours(model, 7, 190.0, [1, 2, 3])
+
+    restored = RoomGainModel(520.0, 16.25)
+    restored.restore(model.export())
+    assert restored.profile_days(7) == 3
+    assert restored.profile_determined(7)
+
+    old = model.export()
+    del old["profile_days"]
+    without = RoomGainModel(520.0, 16.25)
+    without.restore(old)
+    assert without.profile_days(7) == 0
+    assert not without.profile_determined(7)
+
+    model.reset()
+    assert model.profile_days(7) == 0

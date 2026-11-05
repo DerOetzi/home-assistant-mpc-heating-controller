@@ -736,6 +736,9 @@ class AdditionalHeatSensor(_DiagnosticSensor):
             "profile_determined": [
                 gains.profile_determined(index) for index in range(len(profile))
             ],
+            "profile_days": [
+                gains.profile_days(index) for index in range(len(profile))
+            ],
             "sun_coefficients_w": {
                 term: round(value, 1)
                 for term, value in gains.sun_coefficients_w().items()

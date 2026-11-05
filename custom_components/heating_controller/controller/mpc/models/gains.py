@@ -33,6 +33,10 @@ GAIN_LIMIT_SHARE = 0.5
 # A gain counts once its standard deviation is below this share of the
 # design heat load.
 GAIN_DETERMINED_SHARE = 0.1
+# A profile block counts only with hours from this many days: one evening
+# with a hot shower must not make the block's gain look known (Duschbad
+# 5 Nov: 191 W from one or two hours, the room fell below setpoint).
+MIN_PROFILE_DAYS = 3
 # Noise floor of the night regression, as share of the design heat load: a
 # few nearly exact points must not make G look known.
 NIGHT_NOISE_FLOOR_SHARE = 0.02
@@ -137,6 +141,9 @@ class RoomGainModel:
             noise_floor_variance=(HOURLY_NOISE_FLOOR_SHARE * self._room_heat_load_w)
             ** 2,
         )
+        # Distinct days (ordinals) with an hour in each profile block; the
+        # most recent MIN_PROFILE_DAYS are enough.
+        self._profile_days: list[list[int]] = [[] for _ in range(PROFILE_SIZE)]
         self.last_hour_outcome: HourOutcome | None = None
         self.last_hour_ts: float | None = None
         self._changed = False
@@ -233,11 +240,16 @@ class RoomGainModel:
         return values
 
     def add_hour(
-        self, profile: int, sun_values: list[float], unexplained_w: float
+        self, profile: int, sun_values: list[float], unexplained_w: float, day: int
     ) -> None:
+        """One balanced hour; day is the local date's ordinal."""
         x = [0.0] * PROFILE_SIZE + list(sun_values)
         x[profile] = 1.0
         self._hourly.update(x, unexplained_w)
+        days = self._profile_days[profile]
+        if day not in days:
+            days.append(day)
+            del days[:-MIN_PROFILE_DAYS]
         self._changed = True
 
     def set_hour_outcome(self, outcome: HourOutcome, hour_ts: float) -> None:
@@ -253,8 +265,14 @@ class RoomGainModel:
         variance = self._hourly.noise_variance
         return variance**0.5 if variance is not None else None
 
+    def profile_days(self, index: int) -> int:
+        return len(self._profile_days[index])
+
     def profile_determined(self, index: int) -> bool:
-        return self._hourly.std(index) < GAIN_DETERMINED_SHARE * self._room_heat_load_w
+        return (
+            len(self._profile_days[index]) >= MIN_PROFILE_DAYS
+            and self._hourly.std(index) < GAIN_DETERMINED_SHARE * self._room_heat_load_w
+        )
 
     def sun_determined(self, term: int) -> bool:
         index = PROFILE_SIZE + term
@@ -299,6 +317,7 @@ class RoomGainModel:
         self._night.reset()
         self._night_started = False
         self._hourly.reset()
+        self._profile_days = [[] for _ in range(PROFILE_SIZE)]
         self.last_hour_outcome = None
         self.last_hour_ts = None
         self._changed = True
@@ -308,6 +327,7 @@ class RoomGainModel:
             "version": GAINS_STORE_VERSION,
             "night": self._night.to_dict() if self._night_started else None,
             "hourly": {"terms": self._signature, **self._hourly.to_dict()},
+            "profile_days": [list(days) for days in self._profile_days],
         }
 
     def restore(self, data: dict) -> None:
@@ -320,3 +340,10 @@ class RoomGainModel:
         # Other surfaces than when it was saved: the hourly level learns anew.
         if isinstance(hourly, dict) and hourly.get("terms") == self._signature:
             self._hourly.restore(hourly)
+            # Stores from before the day count start empty: every block
+            # waits for three days again.
+            days = data.get("profile_days")
+            if isinstance(days, list) and len(days) == PROFILE_SIZE:
+                self._profile_days = [
+                    [int(day) for day in block][-MIN_PROFILE_DAYS:] for block in days
+                ]

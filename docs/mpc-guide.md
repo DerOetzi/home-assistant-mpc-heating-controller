@@ -232,7 +232,9 @@ regression splits it into
   through a first-order lag of 3 hours times a learned coefficient.
 
 About 10 days of memory. Sun coefficients cannot go below zero. A profile value counts as
-determined once its standard deviation is below a tenth of the design heat load, a sun
+determined once it has hours from at least three days and its standard deviation is below a
+tenth of the design heat load (with one evening, a hot shower in a small bathroom made a
+block look known and kept the room below setpoint), a sun
 coefficient once its standard deviation is below half its value. Sun and profile are told
 apart by cloudy days; a stretch of clear days leaves the sun coefficients undetermined but
 the sum right.
@@ -257,6 +259,7 @@ hours as attribute `forecast`.
 the gain the model would count now — determined terms only. Attributes: `steady_gain_w`,
 `profile_now_w`, `sun_now_w`, `ungated_w` (all terms, determined or not),
 `gain_profile_workday_w` and `gain_profile_other_days_w` (8 values each), `profile_determined`,
+`profile_days` (days with hours per block, counted up to three),
 `sun_coefficients_w`, `sun_determined`, `hour_samples`, `residual_rms_w` (spread of the
 hourly residual), `last_hour`, `last_hour_outcome`. The state of both regressions survives
 restarts; changing a room's surfaces starts its hourly level anew.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 from itertools import pairwise
 
 from ...const import (
@@ -428,7 +429,12 @@ class RoomMpcModelLearner:
             (room_ks - outdoor_ks) / duration_s
         )
         unexplained_w = stored_w - heat_j / duration_s + loss_w - gains.steady_gain_w
-        gains.add_hour(self._profile_index_at(mid_ts), sun_values, unexplained_w)
+        gains.add_hour(
+            self._profile_index_at(mid_ts),
+            sun_values,
+            unexplained_w,
+            date.fromtimestamp(mid_ts).toordinal(),
+        )
         return HourOutcome.LEARNED
 
     def _track_degraded_inputs(self, mpc_input: RoomMpcInput) -> None:
