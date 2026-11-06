@@ -133,6 +133,32 @@ temperature is the one currently limiting the system.
   it as a separate card alongside.
 - The card's configuration takes entities, not other cards.
 
+## Heating curve card
+
+`custom:heating-controller-curve-card` belongs to the flow device, not to a room. It
+plots flow temperature over outdoor temperature:
+
+- the heat source's curve, as set in the flow device's curve numbers;
+- each room's comfort hold flow plus the margin — chips under the chart show or hide a
+  room; flow lead rooms (marked with a dot) start visible, the rest hidden, dashed when
+  shown;
+- the recommendation (highest lead room plus margin) as a thin grey line;
+- a trial curve (dashed) with its own cold/warm flow, raise and raise width. "Copy
+  heating curve" resets it; "Ends from rooms" puts its cold and warm ends on the
+  highest hold flow plus margin of all rooms, the lead rooms or the rooms shown.
+  Below, the tightest point of both curves against the recommendation: the smallest
+  reserve inside the curve's range, red when negative.
+
+Tap or hover the chart to read every value at one outdoor temperature; a dotted line
+marks the current one. The trial curve and the visible rooms are kept in the browser
+only; the card writes nothing.
+
+```yaml
+type: custom:heating-controller-curve-card
+entity: sensor.vorlauf_hold_flow_curves   # the flow device's "Hold flow curves" sensor
+title: Heizkurve                          # optional
+```
+
 ## Localization
 
 The card follows Home Assistant's own UI language and currently ships English and German;

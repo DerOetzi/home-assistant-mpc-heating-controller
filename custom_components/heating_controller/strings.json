@@ -608,6 +608,9 @@
       "flow_curve_recommendation_warm": {
         "name": "Heating curve recommendation warm"
       },
+      "hold_flow_curves": {
+        "name": "Hold flow curves"
+      },
       "flow_actuator_actual": {
         "name": "Actuator actual"
       },

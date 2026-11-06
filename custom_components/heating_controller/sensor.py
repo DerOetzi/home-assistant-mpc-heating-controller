@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from datetime import datetime
 from typing import Any
@@ -22,7 +23,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import CapacityOutcome, CurveEnd, Surface, UaBalanceOutcome
+from .const import (
+    CONF_LEAD_FLOW,
+    CapacityOutcome,
+    CurveEnd,
+    Surface,
+    UaBalanceOutcome,
+)
 from .control.circulation import CirculationReason
 from .control.flow import ActuatorMode
 from .control.hot_water import HotWaterPhase
@@ -71,6 +78,7 @@ async def async_setup_entry(
             FlowThresholdSensor(flow),
             FlowCurveRecommendationSensor(flow, CurveEnd.COLD),
             FlowCurveRecommendationSensor(flow, CurveEnd.WARM),
+            FlowHoldCurvesSensor(flow),
         ],
     )
     async_add_hot_water_entities(
@@ -439,6 +447,54 @@ class FlowCurveRecommendationSensor(_FlowTemperatureSensor):
             "rooms": lead.rooms,
             "current_curve_flow_c": current_c,
             "difference_k": None if value is None else round(current_c - value, 1),
+        }
+
+
+class FlowHoldCurvesSensor(_FlowTemperatureSensor):
+    """Every room's comfort hold flow over the curve's outdoor range.
+
+    State: the flow lead rooms' highest hold flow plus margin at the current
+    outdoor value, the curve point they would ask for right now. The curves
+    feed the heating curve card; they change only with the learned UA and
+    are left out of the recorder.
+    """
+
+    _attr_translation_key = "hold_flow_curves"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _unrecorded_attributes = frozenset({"outdoor_c", "rooms"})
+
+    # Outdoor values beyond the curve's ends, so its flat parts show.
+    _EXTEND_K = 2
+
+    def __init__(self, flow: FlowDevice) -> None:
+        super().__init__(flow, "hold_flow_curves")
+
+    @property
+    def native_value(self) -> float | None:
+        outdoor = self._flow.hub.outdoor_temperature_c
+        if outdoor is None:
+            return None
+        values = [
+            value
+            for room in self._flow.hub.rooms.values()
+            if room.data.get(CONF_LEAD_FLOW)
+            and (value := room.comfort_hold_flow_c(outdoor)) is not None
+        ]
+        if not values:
+            return None
+        return round(max(values) + self._flow.numbers["margin"], 1)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        numbers = self._flow.numbers
+        cold = math.floor(numbers["curve_outdoor_cold"]) - self._EXTEND_K
+        warm = math.ceil(numbers["curve_outdoor_warm"]) + self._EXTEND_K
+        outdoor_values = [float(value) for value in range(cold, warm + 1)]
+        return {
+            "outdoor_temperature_c": self._flow.hub.outdoor_temperature_c,
+            "margin_k": numbers["margin"],
+            "outdoor_c": outdoor_values,
+            "rooms": self._flow.hub.hold_flow_curves(outdoor_values),
         }
 
 

@@ -843,3 +843,10 @@ before changing the heat source's curve:
   slightly higher warm end covers that.
 - In offset mode the warm end is also the flow threshold: lowering it moves the heating
   limit with it.
+
+*Hold flow curves* (flow device, diagnostic) carries every room's comfort hold flow over
+the curve's outdoor range, 2 K beyond each end, in whole degrees: attributes `outdoor_c`,
+`rooms` (`name`, `lead`, `flow_c`), `margin_k` and the current `outdoor_temperature_c`.
+Its state is the lead rooms' highest hold flow plus margin at the current outdoor value.
+The curves stay out of the recorder. The heating curve card draws them (see
+[`card-design.md`](card-design.md#heating-curve-card)).

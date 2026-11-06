@@ -608,6 +608,9 @@
       "flow_curve_recommendation_warm": {
         "name": "Heizkurve Empfehlung warm"
       },
+      "hold_flow_curves": {
+        "name": "Haltevorlauf-Kurven"
+      },
       "flow_actuator_actual": {
         "name": "Stellgröße Ist"
       },

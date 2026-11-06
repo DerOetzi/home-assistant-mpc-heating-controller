@@ -268,3 +268,12 @@ async def test_curve_recommendation_from_the_lead_rooms_hold_flow(
     assert recommendation.attributes["difference_k"] == pytest.approx(
         54.0 - float(recommendation.state), abs=0.06
     )
+
+    curves = hass.states.get("sensor.vorlauf_hold_flow_curves")
+    outdoor = curves.attributes["outdoor_c"]
+    assert outdoor[0] == -15.0 and outdoor[-1] == 20.0
+    (room,) = curves.attributes["rooms"]
+    assert room["name"] == "Wohnzimmer" and room["lead"] is True
+    assert len(room["flow_c"]) == len(outdoor)
+    assert room["flow_c"][outdoor.index(-13.0)] == float(cold.state)
+    assert room["flow_c"][outdoor.index(18.0)] == float(warm.state)

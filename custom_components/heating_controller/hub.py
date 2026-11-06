@@ -377,6 +377,17 @@ class HeatingHub:
             CONF_LEAD_FLOW, lambda room: room.hold_flow_at_curve_end_c(end)
         )
 
+    def hold_flow_curves(self, outdoor_values: list[float]) -> list[dict[str, Any]]:
+        """Each room's comfort hold flow over the outdoor values, for the card."""
+        return [
+            {
+                "name": room.room_name,
+                "lead": bool(room.data.get(CONF_LEAD_FLOW)),
+                "flow_c": [room.comfort_hold_flow_c(value) for value in outdoor_values],
+            }
+            for room in self.rooms.values()
+        ]
+
     def _float_state(self, entity_id: str) -> float | None:
         state = self.hass.states.get(entity_id)
         if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):

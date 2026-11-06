@@ -32,6 +32,8 @@ _MODULES = [
     "controls.js",
     "card.js",
     "editor.js",
+    "curve.js",
+    "curve-card.js",
 ]
 
 _IMPORT_RE = re.compile(
@@ -706,3 +708,55 @@ def test_boost_button_has_no_click_handler_when_active(ctx) -> None:
     )
     assert ctx.eval("btn.disabled") is True
     assert ctx.eval("typeof btn._listeners.click") == "undefined"
+
+
+_CURVE = (
+    "{outdoorCold: -13, outdoorWarm: 18, flowCold: 50, flowWarm: 29,"
+    " bump: 2, bumpWidth: 4}"
+)
+
+
+def test_curve_card_follows_the_python_heating_curve(ctx) -> None:
+    """The card draws the heat source's curve itself; it must agree with
+    HeatingCurve.flow_at, flat ends and bump included."""
+    from heating_controller.control.flow import HeatingCurve
+
+    curve = HeatingCurve(
+        outdoor_cold_c=-13,
+        outdoor_warm_c=18,
+        flow_cold_c=50,
+        flow_warm_c=29,
+        bump_k=2,
+        bump_width_k=4,
+    )
+    for outdoor in (-20, -13, -5, -1.5, 0, 1, 2, 7, 18, 25):
+        assert ctx.eval(f"curveFlowAt({_CURVE}, {outdoor})") == curve.flow_at(outdoor)
+
+
+def test_curve_card_recommendation_takes_the_highest_lead_room(ctx) -> None:
+    rooms = (
+        "[{name: 'A', lead: true, flow_c: [40, 30]},"
+        " {name: 'B', lead: true, flow_c: [42, null]},"
+        " {name: 'C', lead: false, flow_c: [50, 35]}]"
+    )
+    assert _json(ctx, f"recommendationSeries({rooms}, 1)") == [43, 31]
+    assert _json(ctx, "recommendationSeries([{name: 'C', lead: false, flow_c: [1]}], 1)") == []
+    # The envelope over any room choice, lead or not, for the trial curve's ends.
+    assert _json(ctx, f"envelopeSeries({rooms}, 1)") == [51, 36]
+    assert _json(ctx, "envelopeSeries([], 1)") == []
+
+
+def test_curve_card_tightest_point_stays_inside_the_curve(ctx) -> None:
+    result = _json(
+        ctx,
+        "tightestPoint([-14, -13, 0, 18], [50, 50, 43, 29], [60, 45, 44, 30],"
+        f" {_CURVE})",
+    )
+    # -14 lies beyond the curve's cold end and does not count.
+    assert result == {"reserve": -1, "outdoor": 0}
+
+
+def test_curve_card_escapes_room_names(ctx) -> None:
+    assert ctx.eval("escapeHtml('<b>\"A&B\"</b>')") == (
+        "&lt;b&gt;&quot;A&amp;B&quot;&lt;/b&gt;"
+    )

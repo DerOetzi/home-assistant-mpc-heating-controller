@@ -85,6 +85,30 @@ export const TRANSLATIONS = {
     card_description:
       "Room control for the Heating Controller — mode, setpoints and minimum " +
       "flow temperature from a single device.",
+
+    // Heating curve card
+    curve_card_name: "Heating curve",
+    curve_card_description:
+      "The heat source's curve, each room's hold flow and a curve to try out.",
+    curve_title: "Heating curve",
+    curve_source: "Heating curve",
+    curve_experiment: "Trial curve",
+    curve_recommendation: "Recommendation",
+    curve_lead_room: "Flow lead room",
+    curve_at_outdoor: "At {value} °C",
+    curve_axis_outdoor: "Outdoor °C",
+    curve_flow_cold: "Flow cold",
+    curve_flow_warm: "Flow warm",
+    curve_bump: "Raise around 0 °C",
+    curve_bump_width: "Raise width",
+    curve_copy_source: "Copy heating curve",
+    curve_copy_recommendation: "Ends from rooms:",
+    curve_rooms_all: "All",
+    curve_rooms_lead: "Lead rooms",
+    curve_rooms_shown: "Shown",
+    curve_tightest: "{curve}: tightest point {reserve} K at {outdoor} °C",
+    curve_error_entity:
+      "Please pick the flow device's \"Hold flow curves\" sensor.",
   },
 
   de: {
@@ -152,6 +176,29 @@ export const TRANSLATIONS = {
     editor_icon_on: "Icon (an)",
     editor_label_off: "Label (aus)",
     editor_icon_off: "Icon (aus)",
+
+    curve_card_name: "Heizkurve",
+    curve_card_description:
+      "Heizkurve der Wärmequelle, Haltevorlauf je Raum und eine Kurve zum Ausprobieren.",
+    curve_title: "Heizkurve",
+    curve_source: "Heizkurve",
+    curve_experiment: "Versuchskurve",
+    curve_recommendation: "Empfehlung",
+    curve_lead_room: "Vorlauf-Leitraum",
+    curve_at_outdoor: "Bei {value} °C",
+    curve_axis_outdoor: "Außentemperatur °C",
+    curve_flow_cold: "Vorlauf kalt",
+    curve_flow_warm: "Vorlauf warm",
+    curve_bump: "Erhöhung um 0 °C",
+    curve_bump_width: "Erhöhung Breite",
+    curve_copy_source: "Von Heizkurve übernehmen",
+    curve_copy_recommendation: "Endpunkte aus Räumen:",
+    curve_rooms_all: "Alle",
+    curve_rooms_lead: "Leiträume",
+    curve_rooms_shown: "Ausgewählte",
+    curve_tightest: "{curve}: knappste Stelle {reserve} K bei {outdoor} °C",
+    curve_error_entity:
+      "Bitte den Sensor „Haltevorlauf-Kurven“ des Vorlauf-Geräts wählen.",
 
     card_name: "Heating Controller",
     card_description:

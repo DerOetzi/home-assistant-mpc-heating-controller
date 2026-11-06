@@ -9,10 +9,12 @@
 import { CARD_TAG, EDITOR_TAG } from "./const.js";
 import { HeatingControllerCard } from "./card.js";
 import { HeatingControllerCardEditor } from "./editor.js";
+import { CURVE_CARD_TAG, HeatingControllerCurveCard } from "./curve-card.js";
 import { TRANSLATIONS } from "./translations.js";
 
 customElements.define(CARD_TAG, HeatingControllerCard);
 customElements.define(EDITOR_TAG, HeatingControllerCardEditor);
+customElements.define(CURVE_CARD_TAG, HeatingControllerCurveCard);
 
 window.customCards = window.customCards ?? [];
 window.customCards.push({
@@ -21,6 +23,14 @@ window.customCards.push({
   // it cannot be localised per user — English is the neutral choice.
   name: TRANSLATIONS.en.card_name,
   description: TRANSLATIONS.en.card_description,
+  preview: true,
+  documentationURL:
+    "https://github.com/DerOetzi/home-assistant-mcp-heating-controller",
+});
+window.customCards.push({
+  type: CURVE_CARD_TAG,
+  name: TRANSLATIONS.en.curve_card_name,
+  description: TRANSLATIONS.en.curve_card_description,
   preview: true,
   documentationURL:
     "https://github.com/DerOetzi/home-assistant-mcp-heating-controller",

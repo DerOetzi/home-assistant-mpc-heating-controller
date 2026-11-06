@@ -281,6 +281,10 @@ id>` in YAML). Optional `header_entities` (e.g. a humidity or CO₂ sensor) and
 rows) are configured entirely through the editor's sortable lists — see
 [`docs/card-design.md`](docs/card-design.md) for the full configuration reference.
 
+With a flow device, `custom:heating-controller-curve-card` (`entity:` its *Hold flow
+curves* sensor) plots the heat source's curve against each room's hold flow and lets you
+try a different curve before setting it on the heat source.
+
 ## Notes
 
 - Each room is a sub-entry of the hub — deleting a room removes only that room's entities and
