@@ -18,14 +18,14 @@ what the fields of the hub and the rooms actually do, see below.
   configured window contact in the room is open or its TRVs report as inactive — you'll see
   "Frost protection enforced" in the card's header, and it clears itself as soon as the
   window closes or the TRVs are active again. No action needed on your part.
-- **PV boost** — if enabled and the configured PV-surplus entity is on, adds a further fixed
+- **PV boost** — if enabled and the hub's PV-surplus switch is on, adds a further fixed
   offset on top of whichever mode is currently active.
 
-**Comfort mode only engages automatically when every configured comfort condition is
-true** — both the house-wide ones and any room-specific ones for that room. A room with no
-comfort-condition entity configured at all simply stays on Eco until you switch it
-manually — the room-specific condition is optional precisely so a room without one doesn't
-need automatic comfort switching at all.
+**Comfort mode only engages automatically when every comfort switch the room follows is
+on** — the hub's comfort switch (unless the room is set not to follow it) and the room's
+own comfort switch, if it has one. The hub's switch restores on, a room's own switch off.
+A room that follows neither stays on Eco until you switch it manually. The card shows only
+a room's own switch in its header; labels, icons or hiding it are set in the card.
 
 ## Reading the learning status
 
@@ -645,16 +645,17 @@ works out:
 
 - **Target flow** = *Lead rooms minimum flow temperature* + margin (default 1 K). A planned
   hot-water charge can raise it further (up to *Flow raise for hot water at most* above
-  that). In setpoint mode never below the flow threshold number. Attribute `source` says
+  that). Never below the flow threshold. Attribute `source` says
   which won: `lead`, `charge`, `threshold` or `fallback`.
 - **Actuator value**: in offset mode target minus the heat source's curve at the current
-  outdoor value, in setpoint mode the target itself. Rounded to the step, clamped to the
-  limits.
+  outdoor value, in setpoint mode the target itself. Rounded up to the step, so the flow
+  never falls below the target and the margin stays whole; clamped to the limits.
 
 It writes only when all hold:
 
 - *Write flow* is on (off = shadow: the values show, nothing is written);
-- the new value differs from the reported one by at least the hysteresis;
+- the unrounded need differs from the reported value by at least the hysteresis (so the
+  margin can shrink by at most the hysteresis before a write);
 - the hold time (default 30 min) has passed since the last write;
 - the hub's write budget allows it.
 
@@ -665,18 +666,20 @@ says when.
 
 Exceptions to the hold time, written as required writes:
 
-- **Fallback**: outdoor value missing (offset mode) or no lead room with a flow: the
-  fallback value is written once, then kept. No estimate is made.
+- **Fallback**: outdoor value missing (offset mode) or no lead room with a flow for
+  5 minutes: the fallback value is written once, then kept. No estimate is made. The
+  5 minutes cover a start or reload, when the rooms have no estimate yet; meanwhile
+  *Actuator target* shows the fallback with reason `fallback_wait` and nothing is
+  written.
 - **Back from fallback**, and **entering or leaving a hot-water charge window**: the new
   value goes out at once.
 
 Nothing is written while the heat source does not heat or is unreachable.
 
-The flow threshold (heating demand, TRV release) is, in offset mode, the curve's warm end
-plus the offset the heat source reports — the lowest flow it delivers with that offset.
-It moves with every write: lowering the offset lowers the threshold. During a cloud gap
-the last reported offset holds. In setpoint mode the threshold is a number on the device
-and also the lowest target.
+The flow threshold (heating demand, TRV release, lowest target) is, in offset mode, the
+curve's warm end without offset. The offset is the control's own output: a threshold
+moving with it would sink with the rooms' demand, and the heating demand would only
+follow the outdoor temperature. In setpoint mode the threshold is a number on the device.
 
 ## Hot water
 
@@ -727,7 +730,9 @@ rules of the thermostatic blueprint: continuous run (released once the return he
 release temperature for the release time), blocked heater states and presence/day-mode
 gates, a fixed interval without return value, stop when hot or after the maximum run,
 start after the minimum pause when the loop cooled below the peak or off-peak threshold
-or on a draw.
+or on a draw. The reason sensor keeps the reason of the last switch while
+the pump stays in that state; *unknown* only after a start or when the pump was switched
+from outside.
 
 ## How the minimum flow temperature is computed
 

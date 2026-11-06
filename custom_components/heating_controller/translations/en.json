@@ -11,8 +11,6 @@
           "flow_threshold_c": "Fixed flow threshold (°C, used without or while the threshold entity is empty)",
           "flow_threshold_entity": "Heat-source flow threshold entity (optional)",
           "flow_curve_entity": "Effective heating curve (optional, for the flow reserve)",
-          "pv_boost_entity": "PV boost entity",
-          "comfort_condition_entities": "House-wide comfort condition entities",
           "frost_protection_temperature_c": "Frost protection temperature (°C)",
           "max_flow_gap_min": "Heat source unreachable after a flow gap of (min)",
           "rate_limit_remaining_entity": "Cloud calls left today (optional, e.g. Onecta rate limit sensor)",
@@ -93,8 +91,8 @@
           "data": {
             "room_sensor_entity": "Room temperature sensor (optional)",
             "window_contact_entities": "Window contacts",
-            "use_house_comfort_conditions": "Apply the house-wide comfort conditions",
-            "room_comfort_condition_entities": "Room-specific comfort condition entities",
+            "use_house_comfort_conditions": "Follow the house comfort switch",
+            "room_comfort_switch": "Own comfort switch",
             "learning_block_entity": "Block learning while on (optional, e.g. an extra heater in the room)"
           }
         },
@@ -150,7 +148,7 @@
             "actuator_min": "Lowest value",
             "actuator_max": "Highest value",
             "actuator_step": "Step",
-            "actuator_fallback": "Fallback value (written when the outdoor or lead value is missing)"
+            "actuator_fallback": "Fallback value (written when the outdoor or lead value is missing for 5 min)"
           }
         }
       },
@@ -644,15 +642,21 @@
           "blocked": "Blocked",
           "gates_closed": "Nobody home / night",
           "fallback": "Interval (no return value)",
-          "hot": "Loop hot",
+          "hot": "Temperature reached",
           "max_run": "Maximum run time",
           "cooled": "Loop cooled down",
           "draw": "Draw",
-          "idle": "Waiting"
+          "idle": "Unknown"
         }
       }
     },
     "switch": {
+      "house_comfort": {
+        "name": "Comfort"
+      },
+      "room_comfort": {
+        "name": "Room comfort"
+      },
       "flow_write": {
         "name": "Write flow"
       },
@@ -661,6 +665,9 @@
       },
       "circulation_continuous": {
         "name": "Circulation continuous run"
+      },
+      "pv_boost": {
+        "name": "PV surplus"
       }
     }
   },

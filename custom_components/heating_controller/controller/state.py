@@ -20,7 +20,10 @@ class HeatingStateConfig:
 class HeatingStateController:
     def __init__(self, config: HeatingStateConfig) -> None:
         self._config = config
-        self._comfort_conditions: dict[str, bool] = {}
+        # The comfort switches this room follows; None = not followed.
+        # Comfort needs every followed switch on, and at least one of them.
+        self._house_comfort: bool | None = None
+        self._room_comfort: bool | None = None
         self._window_states: dict[str, bool] = {}
         self._comfort_temperature_c = DEFAULT_COMFORT_TEMPERATURE_C
         self._eco_temperature_offset_c = DEFAULT_ECO_TEMPERATURE_OFFSET_C
@@ -29,8 +32,19 @@ class HeatingStateController:
         self._window_open = False
         self._active_heat_mode = HeatMode.ECO
 
-    def set_comfort_condition(self, key: str, value: bool) -> None:
-        self._comfort_conditions[key] = value
+    @property
+    def house_comfort(self) -> bool | None:
+        return self._house_comfort
+
+    def set_house_comfort(self, value: bool | None) -> None:
+        self._house_comfort = value
+
+    @property
+    def room_comfort(self) -> bool | None:
+        return self._room_comfort
+
+    def set_room_comfort(self, value: bool | None) -> None:
+        self._room_comfort = value
 
     @property
     def comfort_temperature_c(self) -> float:
@@ -62,9 +76,12 @@ class HeatingStateController:
         return previous, self._window_open
 
     def is_comfort(self) -> bool:
-        if not self._comfort_conditions:
-            return False
-        return all(self._comfort_conditions.values())
+        followed = [
+            value
+            for value in (self._house_comfort, self._room_comfort)
+            if value is not None
+        ]
+        return bool(followed) and all(followed)
 
     def automatic_mode_selection_allowed(self, blocked: bool) -> bool:
         return not blocked and not self._window_open

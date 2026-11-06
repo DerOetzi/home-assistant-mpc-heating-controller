@@ -1,4 +1,5 @@
 from heating_controller.control.flow import (
+    FALLBACK_GRACE_S,
     ActuatorMode,
     FlowControlConfig,
     FlowController,
@@ -23,7 +24,7 @@ def _config(**overrides) -> FlowControlConfig:
         "margin_k": 1.0,
         "hysteresis_k": 0.5,
         "hold_s": 1800.0,
-        "threshold_c": None,
+        "threshold_c": 29.0,
     }
     values.update(overrides)
     return FlowControlConfig(**values)
@@ -65,6 +66,15 @@ def test_offset_brings_curve_to_lead_flow_plus_margin() -> None:
     assert decision.source is FlowSource.LEAD
 
 
+def test_offset_rounds_up_so_the_margin_stays_whole() -> None:
+    controller = FlowController(_config(), T0 - 3600)
+    decision = controller.decide(_inputs(lead_min_flow_c=31.4), CURVE, T0)
+
+    # 31.4 + 1 = 32.4 against curve 37.06 -> -4.66 -> -4, not -5
+    assert decision.value == -4.0
+    assert CURVE.flow_at(8.0) + decision.value >= decision.target_flow_c
+
+
 def test_setpoint_mode_writes_the_flow_itself() -> None:
     controller = FlowController(
         _config(
@@ -92,13 +102,14 @@ def test_setpoint_never_below_threshold() -> None:
     assert decision.value == 29.0
 
 
-def test_offset_mode_has_no_threshold_floor() -> None:
-    controller = FlowController(_config(threshold_c=None), T0 - 3600)
+def test_offset_never_below_threshold() -> None:
+    controller = FlowController(_config(), T0 - 3600)
     decision = controller.decide(_inputs(lead_min_flow_c=0.0), CURVE, T0)
 
-    # Margin 1 K against curve 37.06 -> -36 -> clamped to -10.
-    assert decision.source is FlowSource.LEAD
-    assert decision.value == -10.0
+    # Threshold 29 against curve 37.06 -> -8.06 -> -8, not the -10 limit.
+    assert decision.source is FlowSource.THRESHOLD
+    assert decision.target_flow_c == 29.0
+    assert decision.value == -8.0
 
 
 def test_hold_time_and_hysteresis_keep_writes_rare() -> None:
@@ -136,33 +147,68 @@ def test_external_change_restarts_hold() -> None:
     assert decision.reason == "hold"
 
 
+def _enter_fallback(controller: FlowController, **overrides) -> float:
+    """Missing values from T0 until the grace has passed; returns that time."""
+    controller.decide(_inputs(**overrides), CURVE, T0)
+    return T0 + FALLBACK_GRACE_S
+
+
 def test_fallback_when_lead_value_missing() -> None:
     controller = FlowController(_config(fallback=0.0), T0 - 3600)
-    decision = controller.decide(_inputs(lead_min_flow_c=None, actual=-3.0), CURVE, T0)
+    ts = _enter_fallback(controller, lead_min_flow_c=None, actual=-3.0)
+    decision = controller.decide(_inputs(lead_min_flow_c=None, actual=-3.0), CURVE, ts)
 
     assert decision.source is FlowSource.FALLBACK
     assert decision.write == 0.0
     assert decision.priority == WritePriority.REQUIRED
 
-    controller.written(0.0, -3.0, T0)
+    controller.written(0.0, -3.0, ts)
     again = controller.decide(
-        _inputs(lead_min_flow_c=None, actual=-3.0), CURVE, T0 + 60
+        _inputs(lead_min_flow_c=None, actual=-3.0), CURVE, ts + 60
     )
     assert again.write is None
 
 
 def test_fallback_when_outdoor_missing_in_offset_mode() -> None:
     controller = FlowController(_config(), T0 - 3600)
-    decision = controller.decide(_inputs(outdoor_c=None, actual=2.0), CURVE, T0)
+    ts = _enter_fallback(controller, outdoor_c=None, actual=2.0)
+    decision = controller.decide(_inputs(outdoor_c=None, actual=2.0), CURVE, ts)
     assert decision.source is FlowSource.FALLBACK
     assert decision.write == 0.0
 
 
+def test_fallback_waits_out_a_start() -> None:
+    # Right after a start or reload the rooms have no estimate yet.
+    controller = FlowController(_config(), T0)
+    first = controller.decide(_inputs(lead_min_flow_c=None, actual=2.0), CURVE, T0)
+    assert first.source is FlowSource.FALLBACK
+    assert first.value == 0.0
+    assert first.write is None
+    assert first.reason == "fallback_wait"
+
+    # Lead value arrives within the grace: no urgent write, hold applies.
+    decision = controller.decide(_inputs(actual=2.0), CURVE, T0 + 60)
+    assert decision.write is None
+    assert decision.reason == "hold"
+
+
+def test_fallback_grace_restarts_after_values_return() -> None:
+    controller = FlowController(_config(), T0 - 3600)
+    controller.decide(_inputs(lead_min_flow_c=None, actual=2.0), CURVE, T0)
+    controller.decide(_inputs(actual=2.0), CURVE, T0 + 240)
+    decision = controller.decide(
+        _inputs(lead_min_flow_c=None, actual=2.0), CURVE, T0 + 300
+    )
+    assert decision.write is None
+    assert decision.reason == "fallback_wait"
+
+
 def test_leaving_fallback_is_not_held() -> None:
     controller = FlowController(_config(), T0 - 3600)
-    controller.decide(_inputs(lead_min_flow_c=None, actual=-3.0), CURVE, T0)
-    controller.written(0.0, -3.0, T0)
-    decision = controller.decide(_inputs(actual=0.0), CURVE, T0 + 120)
+    ts = _enter_fallback(controller, lead_min_flow_c=None, actual=-3.0)
+    controller.decide(_inputs(lead_min_flow_c=None, actual=-3.0), CURVE, ts)
+    controller.written(0.0, -3.0, ts)
+    decision = controller.decide(_inputs(actual=0.0), CURVE, ts + 120)
 
     assert decision.write == -3.0
     assert decision.priority == WritePriority.REQUIRED

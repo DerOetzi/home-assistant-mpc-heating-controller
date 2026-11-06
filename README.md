@@ -39,11 +39,11 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   once) clears the override and resumes automatic mode.
 - **Rate-limited demand control** — hysteresis, a configurable hold time, and a maximum
   demand step per 5 minutes keep the requested heating power from chattering.
-- **Window-contact and room-specific comfort conditions** — open windows suspend demand;
-  optional comfort-condition entities (e.g. a desk-plug "home office" signal, a guest
-  switch) gate comfort mode per room, in addition to the shared schedule.
-- **PV-surplus boost** — an optional binary entity raises the comfort setpoint while solar
-  surplus is available.
+- **Window contacts and comfort switches** — open windows suspend demand; the hub's
+  comfort switch (off e.g. on holiday) puts every following room on eco, and a room can get
+  a comfort switch of its own (e.g. a guest room), no helpers needed.
+- **PV-surplus boost** — the hub's PV-surplus switch (by hand or from an automation)
+  raises the setpoint of rooms with PV boost.
 - **Minimum flow temperature per room** — reports the flow temperature this room's emitters
   need to meet current demand, so a shared heat source's setpoint can be driven by whichever
   room actually needs it (see `sensor.<room>_mindestvorlauftemperatur` /
@@ -75,7 +75,7 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   `sensor.<room>_additional_heat`. See [docs/mpc-guide.md](docs/mpc-guide.md#gains-and-sun).
 - **Custom Lovelace card** (`custom:heating-controller-card`) — a single card per room
   showing room temperature, configurable header sensors (humidity, CO₂, PM2.5, …), mode
-  control, comfort/eco setpoints, boost, room-specific comfort conditions, and a detail
+  control, comfort/eco setpoints, boost, the room's own comfort switch, and a detail
   section with per-TRV state, window contacts, and minimum flow temperature — with a visual
   editor, no YAML required. See [`docs/card-design.md`](docs/card-design.md).
 - Fully bilingual UI (English/German), both backend (`strings.json`/`translations/`) and
@@ -104,7 +104,7 @@ once per house. It holds everything that applies to the whole house:
 1. **Heat pump and house signals** — outdoor temperature sensor, heat source `climate`
    entity (operating state), measured flow temperature sensor, fixed flow threshold and an
    optional threshold entity, optional effective heating curve (for the flow reserve),
-   PV-boost entity, house-wide comfort conditions, frost-protection temperature, the flow
+   frost-protection temperature, the flow
    gap after which the heat source counts as unreachable, and the write budget for the heat
    source's cloud (optional entity with the calls left today, reserve kept for required
    writes, own writes per day at most).
@@ -128,8 +128,8 @@ Then **Add room** on the hub, once per room:
    (depending on emitter type) panel radiator type/dimensions or nominal power. The
    device's profile supplies everything else, see [Supported devices](#supported-devices).
 3. **Sensors and signals** — optional room temperature sensor, window contacts, whether the
-   house-wide comfort conditions apply, room-specific comfort conditions, optional entity
-   that blocks learning while on.
+   room follows the hub's comfort switch, whether it gets a comfort switch of its own,
+   optional entity that blocks learning while on.
 4. **Boost, PV boost and lead room** — boost enable/offset, PV-boost enable/offset, and
    whether the room is a lead room for the heating limit and/or the flow temperature.
 5. **Room design** — design indoor temperature, room heat load, room area and construction
@@ -144,14 +144,14 @@ source's flow itself.
    weather-compensated curve (e.g. Daikin `climate.*_leaving_water_offset`), or a *flow
    setpoint*; and the entity (`climate`, `number` or `input_number`).
 2. **Actuator limits** — lowest and highest value and step (pre-filled from the entity),
-   and the fallback value written while the outdoor value or the lead rooms' flow is
-   missing.
+   and the fallback value written once the outdoor value or the lead rooms' flow has been
+   missing for 5 minutes.
 
 The device *Vorlauf* then holds the heating curve as numbers (two points and an optional
 raise around 0 °C, as the heat source has it), margin, hysteresis, hold time, the most a
 hot-water charge may raise the flow. The flow threshold replaces the hub's threshold
-entity: in offset mode the curve's warm end plus the current offset (*Flow threshold
-effective*), in setpoint mode a number on the device. *Write flow* starts off: the device computes and shows *Flow target* and
+entity: in offset mode the curve's warm end (*Flow threshold effective*), in setpoint mode
+a number on the device. The target never drops below it. *Write flow* starts off: the device computes and shows *Flow target* and
 *Actuator target* but writes nothing until switched on. See
 [Flow control](docs/mpc-guide.md#flow-control).
 

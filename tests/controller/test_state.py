@@ -14,18 +14,25 @@ def test_is_comfort_false_when_no_conditions_recorded():
     assert controller.is_comfort() is False
 
 
-def test_is_comfort_true_when_all_conditions_true():
+def test_is_comfort_true_when_all_followed_switches_on():
     controller = make_controller()
-    controller.set_comfort_condition("global_release", True)
-    controller.set_comfort_condition("guest_present", True)
+    controller.set_house_comfort(True)
+    controller.set_room_comfort(True)
     assert controller.is_comfort() is True
 
 
-def test_is_comfort_false_when_any_condition_false():
+def test_is_comfort_false_when_any_followed_switch_off():
     controller = make_controller()
-    controller.set_comfort_condition("global_release", True)
-    controller.set_comfort_condition("guest_present", False)
+    controller.set_house_comfort(True)
+    controller.set_room_comfort(False)
     assert controller.is_comfort() is False
+
+
+def test_room_switch_alone_releases_comfort():
+    # A room that does not follow the house (Flur) only has its own switch.
+    controller = make_controller()
+    controller.set_room_comfort(True)
+    assert controller.is_comfort() is True
 
 
 def test_room_without_comfort_conditions_stays_in_eco():
@@ -40,17 +47,17 @@ def test_room_without_comfort_conditions_stays_in_eco():
 
 def test_desired_automatic_heat_mode_follows_comfort_condition():
     controller = make_controller()
-    controller.set_comfort_condition("global_release", True)
+    controller.set_house_comfort(True)
     assert controller.desired_automatic_heat_mode(blocked=False) == HeatMode.COMFORT
 
-    controller.set_comfort_condition("global_release", False)
+    controller.set_house_comfort(False)
     assert controller.desired_automatic_heat_mode(blocked=False) == HeatMode.ECO
 
 
 def test_desired_automatic_heat_mode_keeps_current_when_not_allowed():
     controller = make_controller()
     controller.set_active_heat_mode(HeatMode.BOOST)
-    controller.set_comfort_condition("global_release", True)
+    controller.set_house_comfort(True)
 
     controller.update_window_state("a", True)
     assert controller.desired_automatic_heat_mode(blocked=False) == HeatMode.BOOST

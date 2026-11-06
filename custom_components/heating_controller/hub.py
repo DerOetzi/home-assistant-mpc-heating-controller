@@ -121,6 +121,10 @@ class HeatingHub:
         )
         self.flow: FlowDevice | None = None
         self.hot_water: HotWaterDevice | None = None
+        # The house-wide comfort switch; off e.g. on holiday.
+        self.comfort_on = True
+        # PV surplus; set by hand or by an automation.
+        self.pv_boost_on = False
 
     def add_room(self, coordinator: HeatingRoomCoordinator) -> None:
         self.rooms[coordinator.room_id] = coordinator
@@ -296,6 +300,20 @@ class HeatingHub:
         return self.season.switch_off_recommended(
             time.time(), self.season_off_after_h, self.heating_on
         )
+
+    async def async_set_comfort(self, value: bool) -> None:
+        """Switch house-wide comfort; rooms that follow it recompute."""
+        self.comfort_on = value
+        for room in self.rooms.values():
+            await room.async_set_house_comfort(value)
+        self._notify_listeners()
+
+    async def async_set_pv_boost(self, value: bool) -> None:
+        """Switch the PV surplus; every room recomputes."""
+        self.pv_boost_on = value
+        for room in self.rooms.values():
+            await room.async_set_pv_boost(value)
+        self._notify_listeners()
 
     def set_season_threshold(self, name: str, value: float) -> None:
         """Set one of the season numbers by its short name."""

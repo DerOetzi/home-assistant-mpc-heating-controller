@@ -9,10 +9,11 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_WINDOW_CONTACT_ENTITIES
+from .const import CONF_WINDOW_CONTACT_ENTITIES, DOMAIN
 from .coordinator import HeatingRoomCoordinator
 from .entity import (
     HeatingControllerEntity,
@@ -216,10 +217,17 @@ class HeatingAutomationBinarySensor(HeatingControllerEntity, BinarySensorEntity)
             "window_contact_entities": list(
                 self._coordinator.data.get(CONF_WINDOW_CONTACT_ENTITIES, [])
             ),
-            "comfort_condition_entities": list(
-                self._coordinator.room_comfort_condition_entities
-            ),
+            # The room's own comfort switch; the card shows it as a toggle.
+            "comfort_condition_entities": self._room_comfort_switches(),
         }
+
+    def _room_comfort_switches(self) -> list[str]:
+        if not self._coordinator.has_room_comfort_switch:
+            return []
+        entity_id = er.async_get(self.hass).async_get_entity_id(
+            "switch", DOMAIN, f"{self._coordinator.room_id}_comfort"
+        )
+        return [entity_id] if entity_id else []
 
 
 class RadiatorNotHeatingBinarySensor(HeatingControllerEntity, BinarySensorEntity):

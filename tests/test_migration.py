@@ -106,7 +106,7 @@ async def test_hub_takes_the_house_settings(
     assert data["flow_curve_entity"] == "sensor.heizkurve_vorlauftemperatur_effektiv"
     assert data["flow_threshold_entity"] == "sensor.vorlaufschwelle_effektiv"
     assert data["flow_threshold_c"] == 30.0
-    assert data["comfort_condition_entities"] == ["input_boolean.heizung_komfortmodus"]
+    assert "comfort_condition_entities" not in data
     assert data["heat_source_climate_entity"] == "climate.heizung_leaving_water_offset"
     assert data["design_outdoor_temperature_c"] == -13.5
     assert data["frost_protection_temperature_c"] == 5.0
@@ -131,7 +131,6 @@ async def test_rooms_keep_their_own_settings(
             "room_name",
             "trvs",
             "window_contact_entities",
-            "room_comfort_condition_entities",
             "boost_enabled",
             "pv_boost_enabled",
             "pv_boost_temperature_offset_c",
@@ -148,6 +147,7 @@ async def test_rooms_keep_their_own_settings(
             "learning_enabled_entity",
             "heating_available_entity",
             "comfort_condition_entities",
+            "room_comfort_condition_entities",
         ):
             assert key not in data, (title, key)
 
@@ -163,6 +163,9 @@ async def test_rooms_keep_their_own_settings(
         for title, data in rooms.items()
         if not data["use_house_comfort_conditions"]
     ] == ["Flur EG"]
+    assert [title for title, data in rooms.items() if data["room_comfort_switch"]] == [
+        "Dani"
+    ]
     assert {
         title: data["learning_block_entity"]
         for title, data in rooms.items()

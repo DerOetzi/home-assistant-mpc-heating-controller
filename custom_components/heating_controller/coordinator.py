@@ -35,7 +35,6 @@ from homeassistant.util import slugify
 
 from .const import (
     CONF_BOOST_TEMPERATURE_OFFSET,
-    CONF_COMFORT_CONDITION_ENTITIES,
     CONF_CONSTRUCTION,
     CONF_DESIGN_INDOOR_TEMPERATURE,
     CONF_DESIGN_OUTDOOR_TEMPERATURE,
@@ -57,10 +56,9 @@ from .const import (
     CONF_OPAQUE_SURFACES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PV_BOOST_ENABLED,
-    CONF_PV_BOOST_ENTITY,
     CONF_PV_BOOST_TEMPERATURE_OFFSET,
     CONF_ROOM_AREA,
-    CONF_ROOM_COMFORT_CONDITION_ENTITIES,
+    CONF_ROOM_COMFORT_SWITCH,
     CONF_ROOM_HEAT_LOAD,
     CONF_ROOM_NAME,
     CONF_ROOM_SENSOR_ENTITY,
@@ -219,18 +217,6 @@ class HeatingRoomCoordinator:
         self._mounted_mode_entities: list[str] = [
             trv.mounted_mode_entity for trv in trvs if trv.mounted_mode_entity
         ]
-        self.room_comfort_condition_entities: list[str] = list(
-            self.data.get(CONF_ROOM_COMFORT_CONDITION_ENTITIES, [])
-        )
-        house_comfort_condition_entities: list[str] = (
-            list(self.data.get(CONF_COMFORT_CONDITION_ENTITIES, []))
-            if self.data.get(CONF_USE_HOUSE_COMFORT_CONDITIONS, True)
-            else []
-        )
-        self._comfort_condition_entities: list[str] = [
-            *house_comfort_condition_entities,
-            *self.room_comfort_condition_entities,
-        ]
 
         self._heat_source_climate_entity: str | None = self.data.get(
             CONF_HEAT_SOURCE_CLIMATE_ENTITY
@@ -269,6 +255,17 @@ class HeatingRoomCoordinator:
                 ],
             )
         )
+        # Until the switches restore: house on, the room's own switch off.
+        self.follows_house_comfort: bool = self.data.get(
+            CONF_USE_HOUSE_COMFORT_CONDITIONS, True
+        )
+        self.has_room_comfort_switch: bool = self.data.get(
+            CONF_ROOM_COMFORT_SWITCH, False
+        )
+        if self.follows_house_comfort:
+            self.state.set_house_comfort(True)
+        if self.has_room_comfort_switch:
+            self.state.set_room_comfort(False)
 
         thermal_config = RoomThermalConfig(
             design_indoor_temperature_c=self.data[CONF_DESIGN_INDOOR_TEMPERATURE],
@@ -419,14 +416,9 @@ class HeatingRoomCoordinator:
         if valve_curves is not None:
             self.mpc.restore_valve_curves(valve_curves)
 
-        for entity_id in self._comfort_condition_entities:
-            self.state.set_comfort_condition(entity_id, self._is_on(entity_id))
-
         for entity_id in self.data.get(CONF_WINDOW_CONTACT_ENTITIES, []):
             self.state.update_window_state(entity_id, self._is_on(entity_id))
         self.mpc.set_window_open(self.state.is_window_open, time.time())
-
-        self.state.set_pv_boost(self._is_on(self.data[CONF_PV_BOOST_ENTITY]))
 
         if self._learning_block_entity:
             self._learning_blocked = self._is_on(self._learning_block_entity)
@@ -452,9 +444,7 @@ class HeatingRoomCoordinator:
         )
         tracked_entities.extend(self._adaptation_status_entities)
         tracked_entities.extend(self._mounted_mode_entities)
-        tracked_entities.extend(self._comfort_condition_entities)
         tracked_entities.extend(self.data.get(CONF_WINDOW_CONTACT_ENTITIES, []))
-        tracked_entities.append(self.data[CONF_PV_BOOST_ENTITY])
         tracked_entities.append(self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY])
         tracked_entities.append(self._flow_temperature_entity)
         if self._heat_source_climate_entity:
@@ -742,11 +732,6 @@ class HeatingRoomCoordinator:
         elif entity_id == self._flow_temperature_entity:
             self._update_flow_temperature(new_state)
 
-        elif entity_id in self._comfort_condition_entities:
-            self.state.set_comfort_condition(
-                entity_id, self._bool_from_state(new_state)
-            )
-
         elif entity_id in self.data.get(CONF_WINDOW_CONTACT_ENTITIES, []):
             was_open = self.state.is_window_open
             _, is_open = self.state.update_window_state(
@@ -758,9 +743,6 @@ class HeatingRoomCoordinator:
                     WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S,
                     WINDOW_CLOSED_SUPPRESS_CAPACITY_LEARNING_S,
                 )
-
-        elif entity_id == self.data[CONF_PV_BOOST_ENTITY]:
-            self.state.set_pv_boost(self._bool_from_state(new_state))
 
         elif entity_id == self._learning_block_entity:
             self._learning_blocked = self._bool_from_state(new_state)
@@ -1107,6 +1089,20 @@ class HeatingRoomCoordinator:
 
     async def async_unblock(self) -> None:
         self.blocked = False
+        await self._async_recompute()
+
+    async def async_set_house_comfort(self, value: bool) -> None:
+        if not self.follows_house_comfort:
+            return
+        self.state.set_house_comfort(value)
+        await self._async_recompute()
+
+    async def async_set_room_comfort(self, value: bool) -> None:
+        self.state.set_room_comfort(value)
+        await self._async_recompute()
+
+    async def async_set_pv_boost(self, value: bool) -> None:
+        self.state.set_pv_boost(value)
         await self._async_recompute()
 
     async def async_set_comfort_temperature(self, value: float) -> None:

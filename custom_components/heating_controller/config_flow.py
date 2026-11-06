@@ -25,7 +25,6 @@ from .const import (
     CONF_BOOST_ENABLED,
     CONF_BOOST_TEMPERATURE_OFFSET,
     CONF_BUILDING_ROTATION,
-    CONF_COMFORT_CONDITION_ENTITIES,
     CONF_CONSTRUCTION,
     CONF_DESIGN_INDOOR_TEMPERATURE,
     CONF_DESIGN_OUTDOOR_TEMPERATURE,
@@ -52,14 +51,13 @@ from .const import (
     CONF_OPAQUE_SURFACES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PV_BOOST_ENABLED,
-    CONF_PV_BOOST_ENTITY,
     CONF_PV_BOOST_TEMPERATURE_OFFSET,
     CONF_RATE_LIMIT_REMAINING_ENTITY,
     CONF_RATE_LIMIT_RESERVE,
     CONF_ROOF_ORIENTATION,
     CONF_ROOF_TILT,
     CONF_ROOM_AREA,
-    CONF_ROOM_COMFORT_CONDITION_ENTITIES,
+    CONF_ROOM_COMFORT_SWITCH,
     CONF_ROOM_HEAT_LOAD,
     CONF_ROOM_NAME,
     CONF_ROOM_SENSOR_ENTITY,
@@ -193,19 +191,6 @@ def _hub_sources_schema(defaults: dict[str, Any]) -> vol.Schema:
                 selector.EntitySelectorConfig(domain=_FLOW_THRESHOLD_DOMAINS)
             ),
             _optional(CONF_FLOW_CURVE_ENTITY, defaults): _temperature_sensor(),
-            _marker(vol.Required, CONF_PV_BOOST_ENTITY, defaults): (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=_BOOLEAN_SIGNAL_DOMAINS)
-                )
-            ),
-            vol.Optional(
-                CONF_COMFORT_CONDITION_ENTITIES,
-                default=defaults.get(CONF_COMFORT_CONDITION_ENTITIES, []),
-            ): selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain=_BOOLEAN_SIGNAL_DOMAINS + ["schedule"], multiple=True
-                )
-            ),
             vol.Required(
                 CONF_FROST_PROTECTION_TEMPERATURE,
                 default=defaults.get(CONF_FROST_PROTECTION_TEMPERATURE, 8.0),
@@ -472,14 +457,10 @@ def _room_signals_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_USE_HOUSE_COMFORT_CONDITIONS,
                 default=defaults.get(CONF_USE_HOUSE_COMFORT_CONDITIONS, True),
             ): bool,
-            vol.Optional(
-                CONF_ROOM_COMFORT_CONDITION_ENTITIES,
-                default=defaults.get(CONF_ROOM_COMFORT_CONDITION_ENTITIES, []),
-            ): selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain=_BOOLEAN_SIGNAL_DOMAINS + ["schedule"], multiple=True
-                )
-            ),
+            vol.Required(
+                CONF_ROOM_COMFORT_SWITCH,
+                default=defaults.get(CONF_ROOM_COMFORT_SWITCH, False),
+            ): bool,
             _optional(CONF_LEARNING_BLOCK_ENTITY, defaults): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain=_BOOLEAN_SIGNAL_DOMAINS)
             ),

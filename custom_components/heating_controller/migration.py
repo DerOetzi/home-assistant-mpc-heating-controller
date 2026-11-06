@@ -21,7 +21,6 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import slugify
 
 from .const import (
-    CONF_COMFORT_CONDITION_ENTITIES,
     CONF_FLOW_CURVE_ENTITY,
     CONF_FLOW_TEMPERATURE_ENTITY,
     CONF_FLOW_THRESHOLD,
@@ -29,6 +28,7 @@ from .const import (
     CONF_LEAD_HEATING_LIMIT,
     CONF_LEARNING_BLOCK_ENTITY,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
+    CONF_ROOM_COMFORT_SWITCH,
     CONF_ROOM_NAME,
     CONF_USE_HOUSE_COMFORT_CONDITIONS,
     DEFAULT_FLOW_THRESHOLD_C,
@@ -45,6 +45,8 @@ HUB_VERSION = 8
 ROOM_ENTRY_VERSION = 7
 
 LEGACY_LEARNING_ENABLED_ENTITY = "learning_enabled_entity"
+LEGACY_COMFORT_CONDITION_ENTITIES = "comfort_condition_entities"
+LEGACY_ROOM_COMFORT_CONDITION_ENTITIES = "room_comfort_condition_entities"
 
 # The one installation that ran version 7, recognised by its outdoor helper.
 # Its helpers built from these values are replaced by the hub.
@@ -87,7 +89,7 @@ async def async_migrate_rooms_to_hub(hass: HomeAssistant) -> None:
     # Built before the first room's entry turns into the hub and loses its data.
     subentries = [
         ConfigSubentry(
-            data=MappingProxyType(_room_data(room, hub_data, this_house)),
+            data=MappingProxyType(_room_data(room, this_house)),
             subentry_id=room.entry_id,
             subentry_type=SUBENTRY_TYPE_ROOM,
             title=room.data[CONF_ROOM_NAME],
@@ -118,9 +120,6 @@ def _hub_data(rooms: list[ConfigEntry], this_house: bool) -> dict[str, Any]:
     data: dict[str, Any] = {CONF_FLOW_THRESHOLD: DEFAULT_FLOW_THRESHOLD_C}
     for key in HUB_KEYS:
         values = [room.data[key] for room in rooms if key in room.data]
-        if key == CONF_COMFORT_CONDITION_ENTITIES:
-            # Rooms that left the house-wide conditions out keep an empty list.
-            values = [value for value in values if value] or values
         if not values:
             continue
         data[key] = values[0]
@@ -140,13 +139,16 @@ def _hub_data(rooms: list[ConfigEntry], this_house: bool) -> dict[str, Any]:
     return data
 
 
-def _room_data(
-    room: ConfigEntry, hub_data: dict[str, Any], this_house: bool
-) -> dict[str, Any]:
+def _room_data(room: ConfigEntry, this_house: bool) -> dict[str, Any]:
     data = {key: room.data[key] for key in ROOM_KEYS if key in room.data}
+    # Comfort entities became switches: a room with house-wide entities
+    # follows the hub's switch, one with entities of its own gets a switch.
     data[CONF_USE_HOUSE_COMFORT_CONDITIONS] = bool(
-        room.data.get(CONF_COMFORT_CONDITION_ENTITIES)
-    ) or not hub_data.get(CONF_COMFORT_CONDITION_ENTITIES)
+        room.data.get(LEGACY_COMFORT_CONDITION_ENTITIES)
+    )
+    data[CONF_ROOM_COMFORT_SWITCH] = bool(
+        room.data.get(LEGACY_ROOM_COMFORT_CONDITION_ENTITIES)
+    )
     learning_block = _HOUSE_LEARNING_BLOCK.get(
         room.data.get(LEGACY_LEARNING_ENABLED_ENTITY, "")
     )

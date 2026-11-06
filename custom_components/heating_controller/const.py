@@ -40,20 +40,20 @@ CONF_TRV_NOMINAL_POWER_W = "nominal_power_w"
 
 CONF_ROOM_SENSOR_ENTITY = "room_sensor_entity"
 CONF_WINDOW_CONTACT_ENTITIES = "window_contact_entities"
-CONF_COMFORT_CONDITION_ENTITIES = "comfort_condition_entities"
-CONF_ROOM_COMFORT_CONDITION_ENTITIES = "room_comfort_condition_entities"
 CONF_OUTDOOR_TEMPERATURE_ENTITY = "outdoor_temperature_entity"
 CONF_HEAT_SOURCE_CLIMATE_ENTITY = "heat_source_climate_entity"
 CONF_FLOW_THRESHOLD = "flow_threshold_c"
 CONF_FLOW_THRESHOLD_ENTITY = "flow_threshold_entity"
-CONF_PV_BOOST_ENTITY = "pv_boost_entity"
 CONF_FLOW_TEMPERATURE_ENTITY = "flow_temperature_entity"
 # The heat pump's effective heating curve; the hub reports the reserve of the
 # lead rooms against it.
 CONF_FLOW_CURVE_ENTITY = "flow_curve_entity"
 # Learning stops while this room entity is on (e.g. an extra heater runs).
 CONF_LEARNING_BLOCK_ENTITY = "learning_block_entity"
+# The room follows the hub's comfort switch.
 CONF_USE_HOUSE_COMFORT_CONDITIONS = "use_house_comfort_conditions"
+# The room gets a comfort switch of its own (e.g. a guest in the guest room).
+CONF_ROOM_COMFORT_SWITCH = "room_comfort_switch"
 CONF_LEAD_HEATING_LIMIT = "lead_heating_limit"
 CONF_LEAD_FLOW = "lead_flow"
 
@@ -137,8 +137,6 @@ HUB_KEYS = (
     CONF_FLOW_THRESHOLD,
     CONF_FLOW_THRESHOLD_ENTITY,
     CONF_FLOW_CURVE_ENTITY,
-    CONF_PV_BOOST_ENTITY,
-    CONF_COMFORT_CONDITION_ENTITIES,
     CONF_FROST_PROTECTION_TEMPERATURE,
     CONF_DESIGN_OUTDOOR_TEMPERATURE,
     CONF_DESIGN_TEMPERATURE_SYSTEM,
@@ -165,7 +163,7 @@ ROOM_KEYS = (
     CONF_TRVS,
     CONF_ROOM_SENSOR_ENTITY,
     CONF_WINDOW_CONTACT_ENTITIES,
-    CONF_ROOM_COMFORT_CONDITION_ENTITIES,
+    CONF_ROOM_COMFORT_SWITCH,
     CONF_USE_HOUSE_COMFORT_CONDITIONS,
     CONF_LEARNING_BLOCK_ENTITY,
     CONF_BOOST_ENABLED,

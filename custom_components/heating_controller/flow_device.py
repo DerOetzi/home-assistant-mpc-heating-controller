@@ -71,7 +71,6 @@ class FlowDevice:
         self.controller = FlowController(self._config(), time.time())
         self.decision: FlowDecision | None = None
         self.last_error: str | None = None
-        self._last_actual: float | None = None
         self._listeners: list[Callable[[], None]] = []
         self._context = Context()
 
@@ -88,7 +87,7 @@ class FlowDevice:
             margin_k=n["margin"],
             hysteresis_k=n["hysteresis"],
             hold_s=n["hold_time_min"] * 60,
-            threshold_c=None if self.mode is ActuatorMode.OFFSET else n["threshold"],
+            threshold_c=self.threshold_c,
         )
 
     def set_number(self, key: str, value: float) -> None:
@@ -118,17 +117,14 @@ class FlowDevice:
     def threshold_c(self) -> float:
         """The lowest flow the heat source usefully delivers.
 
-        Offset mode: the curve's warm end plus the current offset, as the heat
-        source sees it (the last reported offset during a cloud gap, the
-        fallback before any). Setpoint mode: the threshold number.
+        Offset mode: the curve's warm end without offset. The offset is the
+        control's own output; a threshold moving with it would follow the
+        rooms' demand and could no longer say whether they need heat.
+        Setpoint mode: the threshold number.
         """
         if self.mode is ActuatorMode.SETPOINT:
             return self.numbers["threshold"]
-        actual = self.actual
-        if actual is not None:
-            self._last_actual = actual
-        offset = self._last_actual if self._last_actual is not None else self._fallback
-        return round(self.numbers["curve_flow_warm"] + offset, 1)
+        return self.numbers["curve_flow_warm"]
 
     @property
     def charge_raise_max_k(self) -> float:

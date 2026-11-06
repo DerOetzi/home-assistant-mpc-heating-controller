@@ -13,11 +13,15 @@ match wins:
    time is over.
 5. Off for at least the minimum pause -> on when the return dropped below
    the start threshold (peak or off-peak), or on a draw while not hot.
+
+Between switches the decision keeps the reason of the last one, as long as the
+pump still is in the state that reason set. IDLE only remains when that is
+unknown (after a start, or the pump was switched from outside).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time
 from enum import StrEnum
 
@@ -80,8 +84,18 @@ class CirculationController:
     def __init__(self, config: CirculationConfig) -> None:
         self.config = config
         self._release_hot_since: datetime | None = None
+        self._last: tuple[CirculationReason, bool] | None = None
 
     def decide(self, inputs: CirculationInputs) -> CirculationDecision:
+        decision = self._decide(inputs)
+        if decision.reason is not CirculationReason.IDLE:
+            pump_on = inputs.pump_on if decision.pump_on is None else decision.pump_on
+            self._last = (decision.reason, pump_on)
+        elif self._last is not None and self._last[1] == inputs.pump_on:
+            decision = replace(decision, reason=self._last[0])
+        return decision
+
+    def _decide(self, inputs: CirculationInputs) -> CirculationDecision:
         cfg = self.config
         ret = inputs.return_c
 

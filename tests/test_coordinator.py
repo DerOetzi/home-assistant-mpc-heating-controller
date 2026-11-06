@@ -53,11 +53,9 @@ ENTRY_DATA = {
     "trvs": [{"device_id": TRV_DEVICE_PLACEHOLDER, **TRV_EMITTER}],
     "room_sensor_entity": "sensor.wohnzimmer_temperatur",
     "window_contact_entities": ["binary_sensor.fenster_wohnzimmer"],
-    "comfort_condition_entities": ["input_boolean.comfort_release"],
     "outdoor_temperature_entity": "sensor.outdoor_temperature",
     "heat_source_climate_entity": "climate.heat_source",
     "flow_temperature_entity": "sensor.flow_temperature",
-    "pv_boost_entity": "binary_sensor.pv_boost",
     "boost_enabled": False,
     "boost_temperature_offset_c": 5.0,
     "frost_protection_temperature_c": 8.0,
@@ -179,7 +177,6 @@ def _room_data(hass: HomeAssistant, **overrides) -> dict:
 def _seed_entities(
     hass: HomeAssistant,
     *,
-    comfort_release=True,
     heat_available=True,
     flow_temp=42.0,
 ) -> None:
@@ -190,13 +187,9 @@ def _seed_entities(
     )
     hass.states.async_set("sensor.wohnzimmer_temperatur", "18.5")
     hass.states.async_set("binary_sensor.fenster_wohnzimmer", "off")
-    hass.states.async_set(
-        "input_boolean.comfort_release", "on" if comfort_release else "off"
-    )
     hass.states.async_set("sensor.outdoor_temperature", "-3.0")
     hass.states.async_set("climate.heat_source", "heat" if heat_available else "off")
     hass.states.async_set("sensor.flow_temperature", str(flow_temp))
-    hass.states.async_set("binary_sensor.pv_boost", "off")
     hass.states.async_set("input_number.flow_threshold", "30.0")
 
 
@@ -816,17 +809,36 @@ async def test_legacy_learning_factors_imported_from_room_prefixed_text_entities
     coordinator.async_unload()
 
 
-async def test_room_comfort_conditions_gate_comfort_like_global_ones(
+async def test_house_and_room_switch_both_gate_comfort(hass: HomeAssistant) -> None:
+    _seed_entities(hass)
+    data = {**ENTRY_DATA, "room_comfort_switch": True}
+    entry = MockConfigEntry(domain=DOMAIN, data=data)
+    entry.add_to_hass(hass)
+
+    coordinator = _coordinator(hass, entry, _trvs())
+    _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+
+    # The room's own switch starts off.
+    assert coordinator.state.is_comfort() is False
+
+    await coordinator.async_set_room_comfort(True)
+    assert coordinator.state.is_comfort() is True
+
+    await coordinator.async_set_house_comfort(False)
+    assert coordinator.state.is_comfort() is False
+
+    coordinator.async_unload()
+
+
+async def test_room_off_the_house_switch_follows_only_its_own(
     hass: HomeAssistant,
 ) -> None:
-    """Room-specific conditions are split out only for the card's benefit;
-    for the control logic they are AND-ed with the global ones like before."""
     _seed_entities(hass)
-    hass.states.async_set("switch.arbeitszimmer_aktiv", "off")
-
     data = {
         **ENTRY_DATA,
-        "room_comfort_condition_entities": ["switch.arbeitszimmer_aktiv"],
+        "use_house_comfort_conditions": False,
+        "room_comfort_switch": True,
     }
     entry = MockConfigEntry(domain=DOMAIN, data=data)
     entry.add_to_hass(hass)
@@ -835,14 +847,11 @@ async def test_room_comfort_conditions_gate_comfort_like_global_ones(
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
 
-    assert coordinator.state.is_comfort() is False
-
-    hass.states.async_set("switch.arbeitszimmer_aktiv", "on")
-    await hass.async_block_till_done()
+    await coordinator.async_set_house_comfort(False)
+    await coordinator.async_set_room_comfort(True)
     assert coordinator.state.is_comfort() is True
 
-    hass.states.async_set("switch.arbeitszimmer_aktiv", "off")
-    await hass.async_block_till_done()
+    await coordinator.async_set_room_comfort(False)
     assert coordinator.state.is_comfort() is False
 
     coordinator.async_unload()

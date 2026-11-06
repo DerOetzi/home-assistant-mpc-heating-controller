@@ -88,3 +88,19 @@ def test_continuous_run_and_release() -> None:
         _inputs(MORNING + timedelta(minutes=30), continuous=True, return_c=58.5)
     )
     assert later.release
+
+
+def test_reason_holds_until_next_switch() -> None:
+    ctrl = CirculationController(CirculationConfig())
+    assert ctrl.decide(_inputs(NOON, return_c=40.0)).reason is CirculationReason.IDLE
+    assert ctrl.decide(_inputs(return_c=39.0)).reason is CirculationReason.COOLED
+    running = ctrl.decide(_inputs(pump_on=True, pump_minutes=1.0, return_c=42.0))
+    assert running.pump_on is None
+    assert running.reason is CirculationReason.COOLED
+    ctrl.decide(_inputs(pump_on=True, pump_minutes=1.0, return_c=46.0))
+    resting = ctrl.decide(_inputs(pump_minutes=1.0, return_c=45.0))
+    assert resting.pump_on is None
+    assert resting.reason is CirculationReason.HOT
+    # Pump switched on from outside: the last reason no longer fits.
+    outside = ctrl.decide(_inputs(pump_on=True, pump_minutes=1.0, return_c=42.0))
+    assert outside.reason is CirculationReason.IDLE

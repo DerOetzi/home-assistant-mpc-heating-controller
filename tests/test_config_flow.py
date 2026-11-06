@@ -19,8 +19,6 @@ HUB_SOURCES = {
     "flow_threshold_c": 28.0,
     "flow_threshold_entity": "input_number.flow_threshold",
     "flow_curve_entity": "sensor.flow_curve",
-    "pv_boost_entity": "binary_sensor.pv_boost",
-    "comfort_condition_entities": ["input_boolean.comfort_release"],
     "frost_protection_temperature_c": 6.0,
 }
 HUB_SUN = {
@@ -44,6 +42,7 @@ ROOM_SIGNALS = {
     "room_sensor_entity": "sensor.wohnzimmer_temperatur",
     "window_contact_entities": [],
     "use_house_comfort_conditions": False,
+    "room_comfort_switch": True,
     "learning_block_entity": "binary_sensor.extra_heater",
 }
 ROOM_SETTINGS = {
@@ -209,7 +208,6 @@ async def test_room_flow_adds_a_room(hass: HomeAssistant) -> None:
     assert dict(subentry.data) == {
         "room_name": "Wohnzimmer",
         "trvs": [{"device_id": device_id, **TRV_EMITTER}],
-        "room_comfort_condition_entities": [],
         "window_surfaces": [],
         "opaque_surfaces": [],
         **ROOM_SIGNALS,

@@ -51,29 +51,29 @@ async def test_window_contacts_present_when_key_missing(hass: HomeAssistant) -> 
     assert state.attributes["window_contact_entities"] == []
 
 
-async def test_exposes_only_room_specific_comfort_conditions(
-    hass: HomeAssistant,
-) -> None:
-    data = {
-        **_room_data(hass),
-        "room_comfort_condition_entities": ["input_boolean.gast_zu_besuch"],
-    }
-    await _setup(hass, data)
+async def test_exposes_the_room_comfort_switch(hass: HomeAssistant) -> None:
+    await _setup(hass, {**_room_data(hass), "room_comfort_switch": True})
 
     state = hass.states.get("binary_sensor.wohnzimmer_heating_automation")
     assert state is not None
-    assert state.attributes["comfort_condition_entities"] == [
-        "input_boolean.gast_zu_besuch"
-    ]
+    (switch_id,) = state.attributes["comfort_condition_entities"]
+    switch = hass.states.get(switch_id)
+    assert switch is not None
+    assert switch.domain == "switch"
 
 
-async def test_comfort_conditions_empty_when_key_missing(hass: HomeAssistant) -> None:
-    assert "room_comfort_condition_entities" not in _room_data(hass)
+async def test_no_comfort_switch_on_the_card_without_one(hass: HomeAssistant) -> None:
+    assert "room_comfort_switch" not in _room_data(hass)
     await _setup(hass, _room_data(hass))
 
     state = hass.states.get("binary_sensor.wohnzimmer_heating_automation")
     assert state is not None
     assert state.attributes["comfort_condition_entities"] == []
+    assert not [
+        entity_id
+        for entity_id in hass.states.async_entity_ids("switch")
+        if entity_id.startswith("switch.wohnzimmer") and "comfort" in entity_id
+    ]
 
 
 async def test_reports_a_radiator_that_stays_cold(hass: HomeAssistant) -> None:

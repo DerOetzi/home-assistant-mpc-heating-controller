@@ -16,6 +16,11 @@ from enum import StrEnum
 
 from .write_budget import WritePriority
 
+# How long the lead flow or the outdoor value may be missing before the
+# fallback is written. Right after a start or reload the rooms have no
+# estimate yet; a fallback then would cost two writes for nothing.
+FALLBACK_GRACE_S = 300.0
+
 
 class ActuatorMode(StrEnum):
     OFFSET = "offset"
@@ -65,9 +70,8 @@ class FlowControlConfig:
     margin_k: float
     hysteresis_k: float
     hold_s: float
-    # Lowest target in setpoint mode. In offset mode the threshold moves with
-    # the offset (curve's warm end + offset), so it cannot bound the target.
-    threshold_c: float | None
+    # Lowest target: below it the heat source does not usefully heat.
+    threshold_c: float
 
 
 @dataclass(frozen=True)
@@ -102,12 +106,15 @@ class FlowController:
         self.last_written: float | None = None
         self.external_change_ts: float | None = None
         self._fallback_active = False
+        self._missing_since: float | None = None
         self._charge_active = False
         self._before_write: float | None = None
 
     def _round(self, value: float) -> float:
         cfg = self.config
-        stepped = round(value / cfg.step) * cfg.step
+        # Up to the next step: the flow never falls below the target, so the
+        # margin stays whole. The epsilon keeps values on a step where they are.
+        stepped = math.ceil(value / cfg.step - 1e-9) * cfg.step
         return max(cfg.minimum, min(cfg.maximum, round(stepped, 3)))
 
     def observe_actual(self, actual: float | None, now_ts: float) -> None:
@@ -158,6 +165,15 @@ class FlowController:
                 else curve_flow + (cfg.fallback if needs_curve else 0.0)
             )
             value = self._round(cfg.fallback)
+            if self._missing_since is None:
+                self._missing_since = now_ts
+            if (
+                not self._fallback_active
+                and now_ts - self._missing_since < FALLBACK_GRACE_S
+            ):
+                return FlowDecision(
+                    target, value, FlowSource.FALLBACK, reason="fallback_wait"
+                )
             # Once written, sent again only after the hold time: the cloud
             # shows the new value with its next poll.
             already = self.last_written is not None and math.isclose(
@@ -179,11 +195,12 @@ class FlowController:
                 reason="fallback",
             )
 
+        self._missing_since = None
         lead = inputs.lead_min_flow_c + cfg.margin_k
         target, source = lead, FlowSource.LEAD
         if inputs.charge_flow_c is not None and inputs.charge_flow_c > target:
             target, source = inputs.charge_flow_c, FlowSource.CHARGE
-        if cfg.threshold_c is not None and target < cfg.threshold_c:
+        if target < cfg.threshold_c:
             target, source = cfg.threshold_c, FlowSource.THRESHOLD
 
         raw = target - curve_flow if needs_curve else target
@@ -200,7 +217,10 @@ class FlowController:
         if _same(inputs.actual, value):
             return decision
         if inputs.actual is not None and not urgent:
-            if abs(value - inputs.actual) < cfg.hysteresis_k:
+            # Against the unrounded need: rounding up alone would turn every
+            # tenth above the step into a write.
+            needed = max(cfg.minimum, min(cfg.maximum, raw))
+            if abs(needed - inputs.actual) < cfg.hysteresis_k:
                 return FlowDecision(
                     decision.target_flow_c, value, source, reason="hysteresis"
                 )

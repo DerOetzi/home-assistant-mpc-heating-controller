@@ -10,6 +10,7 @@ from heating_controller.const import (
     SUBENTRY_TYPE_FLOW,
     SUBENTRY_TYPE_ROOM,
 )
+from heating_controller.control.flow import FALLBACK_GRACE_S
 from heating_controller.migration import HUB_VERSION
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -96,11 +97,24 @@ async def _tick(hass: HomeAssistant, freezer: FrozenDateTimeFactory) -> None:
     await hass.async_block_till_done()
 
 
+async def _past_fallback_grace(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    for _ in range(int(FALLBACK_GRACE_S // 60) + 1):
+        await _tick(hass, freezer)
+
+
 async def test_shadow_mode_computes_without_writing(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory
 ) -> None:
     calls = await _setup(hass)
     await _tick(hass, freezer)
+    # No lead room, but right after setup: nothing pending yet.
+    target = hass.states.get("sensor.vorlauf_actuator_target")
+    assert target.state == "0.0"
+    assert target.attributes["pending_write"] is None
+
+    await _past_fallback_grace(hass, freezer)
 
     # No lead room: fallback 0 is what would be written.
     target = hass.states.get("sensor.vorlauf_actuator_target")
@@ -118,7 +132,7 @@ async def test_writes_once_switched_on(
     await hass.services.async_call(
         "switch", "turn_on", {"entity_id": "switch.vorlauf_write_flow"}, blocking=True
     )
-    await _tick(hass, freezer)
+    await _past_fallback_grace(hass, freezer)
 
     (call,) = _actuator_calls(calls)
     assert call.data["temperature"] == 0.0
@@ -135,19 +149,27 @@ async def test_hub_and_rooms_take_the_flow_threshold(hass: HomeAssistant) -> Non
     entry = hass.config_entries.async_entries(DOMAIN)[0]
     hub = entry.runtime_data
 
-    # Offset mode: curve's warm end 29 + offset 2.
-    assert hub.flow_threshold_c == 31.0
-    assert all(room.flow_threshold_c == 31.0 for room in hub.rooms.values())
+    # Offset mode: the curve's warm end, whatever offset the heat source has.
+    assert hub.flow_threshold_c == 29.0
+    assert all(room.flow_threshold_c == 29.0 for room in hub.rooms.values())
     assert hass.states.get("number.vorlauf_flow_threshold") is None
     assert (
-        float(hass.states.get("sensor.vorlauf_flow_threshold_effective").state) == 31.0
+        float(hass.states.get("sensor.vorlauf_flow_threshold_effective").state) == 29.0
     )
 
-    hass.states.async_set(ACTUATOR, "heat", {"temperature": -1.0})
-    assert hub.flow_threshold_c == 28.0
-    # Cloud gap: the last reported offset holds.
-    hass.states.async_set(ACTUATOR, "unavailable")
-    assert hub.flow_threshold_c == 28.0
+    hass.states.async_set(ACTUATOR, "heat", {"temperature": -5.0})
+    assert hub.flow_threshold_c == 29.0
+
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {
+            "entity_id": "number.vorlauf_heating_curve_flow_temperature_warm",
+            "value": 27.0,
+        },
+        blocking=True,
+    )
+    assert hub.flow_threshold_c == 27.0
 
 
 async def test_curve_sensors(hass: HomeAssistant) -> None:
