@@ -82,6 +82,7 @@ from .const import (
     LEARNING_CYCLE_INTERVAL_MINUTES,
     SENSOR_POLL_INTERVAL_MINUTES,
     Construction,
+    CurveEnd,
     DesignTemperatureSystem,
     FlowSupplyStatus,
     HeatEmitterType,
@@ -235,6 +236,9 @@ class HeatingRoomCoordinator:
         self.flow_threshold_provider: Callable[[], float] | None = None
         # Set by the hub when a hot water device sees the charges.
         self.hot_water_charge_provider: Callable[[], bool] | None = None
+        # Set by the hub when a flow device knows the heating curve's outdoor
+        # end points: (cold, warm).
+        self.curve_outdoor_provider: Callable[[], tuple[float, float]] | None = None
         self._learning_block_entity: str | None = self.data.get(
             CONF_LEARNING_BLOCK_ENTITY
         )
@@ -1174,6 +1178,31 @@ class HeatingRoomCoordinator:
         """
         result = self.normal_result
         return result.hold_flow_temperature_c if result else None
+
+    @property
+    def comfort_temperature_c(self) -> float:
+        return self.state.determine_base_target_temperature(HeatMode.COMFORT)
+
+    def curve_outdoor_c(self, end: CurveEnd) -> float | None:
+        """Outdoor value of one end of the heat source's curve; None without one."""
+        if self.curve_outdoor_provider is None:
+            return None
+        cold_c, warm_c = self.curve_outdoor_provider()
+        return cold_c if end is CurveEnd.COLD else warm_c
+
+    def hold_flow_at_curve_end_c(self, end: CurveEnd) -> float | None:
+        """Flow that holds the comfort temperature at one end of the curve.
+
+        Comfort, not the current mode: the curve has to carry the room when it
+        is in use. Learned UA, no gains -- errs high, the safe side for a
+        curve that also has to hold through the night.
+        """
+        outdoor_c = self.curve_outdoor_c(end)
+        if outdoor_c is None:
+            return None
+        return self.mpc.calculate_hold_flow_temperature_c(
+            self.comfort_temperature_c, outdoor_c
+        )
 
     @property
     def normal_gated_hold_flow_temperature_c(self) -> float | None:

@@ -2,6 +2,7 @@
 
 from datetime import timedelta
 
+import pytest
 from freezegun.api import FrozenDateTimeFactory
 from heating_controller.const import (
     DOMAIN,
@@ -225,3 +226,45 @@ async def test_subentry_flow_creates_and_allows_only_one(hass: HomeAssistant) ->
     )
     assert again["type"] is FlowResultType.ABORT
     assert again["reason"] == "already_configured"
+
+
+async def test_curve_recommendation_from_the_lead_rooms_hold_flow(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set(
+        ACTUATOR, "heat", {"temperature": 0, "min_temp": -10, "max_temp": 10}
+    )
+
+    async def ignore(call: ServiceCall) -> None:
+        pass
+
+    for domain, service in (
+        ("climate", "set_temperature"),
+        ("switch", "turn_on"),
+        ("switch", "turn_off"),
+    ):
+        hass.services.async_register(domain, service, ignore)
+    entry = _hub_with_flow({**_room_data(hass), "lead_flow": True})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    room = "sensor.wohnzimmer_hold_flow_temperature_at_curve"
+    cold = hass.states.get(f"{room}_cold_end")
+    warm = hass.states.get(f"{room}_warm_end")
+    assert cold.attributes["outdoor_temperature_c"] == -13.0
+    assert warm.attributes["outdoor_temperature_c"] == 18.0
+    assert float(cold.state) > float(warm.state) > 0
+
+    recommendation = hass.states.get(
+        "sensor.vorlauf_heating_curve_recommendation_cold"
+    )
+    assert float(recommendation.state) == pytest.approx(
+        float(cold.state) + 1.0, abs=0.06
+    )
+    assert recommendation.attributes["room"] == "Wohnzimmer"
+    assert recommendation.attributes["current_curve_flow_c"] == 54.0
+    assert recommendation.attributes["difference_k"] == pytest.approx(
+        54.0 - float(recommendation.state), abs=0.06
+    )

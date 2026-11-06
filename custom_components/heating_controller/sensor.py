@@ -22,7 +22,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import CapacityOutcome, Surface, UaBalanceOutcome
+from .const import CapacityOutcome, CurveEnd, Surface, UaBalanceOutcome
 from .control.circulation import CirculationReason
 from .control.flow import ActuatorMode
 from .control.hot_water import HotWaterPhase
@@ -69,6 +69,8 @@ async def async_setup_entry(
             FlowTargetSensor(flow),
             FlowActuatorTargetSensor(flow),
             FlowThresholdSensor(flow),
+            FlowCurveRecommendationSensor(flow, CurveEnd.COLD),
+            FlowCurveRecommendationSensor(flow, CurveEnd.WARM),
         ],
     )
     async_add_hot_water_entities(
@@ -101,6 +103,8 @@ async def async_setup_entry(
             MinFlowTemperatureSensor(coordinator),
             HoldFlowTemperatureSensor(coordinator),
             GatedHoldFlowTemperatureSensor(coordinator),
+            CurveHoldFlowTemperatureSensor(coordinator, CurveEnd.COLD),
+            CurveHoldFlowTemperatureSensor(coordinator, CurveEnd.WARM),
             HeatingDemandSensor(coordinator),
             RequestedHeatingPowerSensor(coordinator),
             AvailableHeatingPowerSensor(coordinator),
@@ -397,6 +401,47 @@ class FlowTargetSensor(_FlowTemperatureSensor):
         }
 
 
+class FlowCurveRecommendationSensor(_FlowTemperatureSensor):
+    """Curve point the flow lead rooms need: hold flow at comfort plus margin.
+
+    Learned UA, no gains. Compare with the curve number of the same end.
+    """
+
+    def __init__(self, flow: FlowDevice, end: CurveEnd) -> None:
+        super().__init__(flow, f"flow_curve_recommendation_{end}")
+        self._end = end
+        self._attr_translation_key = f"flow_curve_recommendation_{end}"
+
+    def _lead(self) -> LeadValue:
+        return self._flow.hub.lead_curve_hold_flow(self._end)
+
+    @property
+    def available(self) -> bool:
+        return self._lead().value_c is not None
+
+    @property
+    def native_value(self) -> float | None:
+        lead = self._lead()
+        if lead.value_c is None:
+            return None
+        return round(lead.value_c + self._flow.numbers["margin"], 1)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        lead = self._lead()
+        current_c = self._flow.numbers[f"curve_flow_{self._end}"]
+        value = self.native_value
+        return {
+            "outdoor_temperature_c": self._flow.numbers[f"curve_outdoor_{self._end}"],
+            "lead_hold_flow_c": lead.value_c,
+            "margin_k": self._flow.numbers["margin"],
+            "room": lead.room,
+            "rooms": lead.rooms,
+            "current_curve_flow_c": current_c,
+            "difference_k": None if value is None else round(current_c - value, 1),
+        }
+
+
 class FlowActuatorActualSensor(FlowEntity, SensorEntity):
     """The actuator as the heat source reports it (offset in K or setpoint)."""
 
@@ -655,6 +700,42 @@ class GatedHoldFlowTemperatureSensor(_DiagnosticSensor):
             "calculation_target_temperature_c": (
                 self._coordinator.normal_target_temperature_c
             ),
+        }
+
+
+class CurveHoldFlowTemperatureSensor(_DiagnosticSensor):
+    """Hold flow at one end of the heating curve, at comfort, learned UA.
+
+    The room's own point for setting the heat source's curve; the flow
+    device's recommendation takes the highest of the flow lead rooms.
+    """
+
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator: HeatingRoomCoordinator, end: CurveEnd) -> None:
+        super().__init__(coordinator, f"hold_flow_temperature_curve_{end}")
+        self._end = end
+        self._attr_translation_key = f"hold_flow_temperature_curve_{end}"
+
+    @property
+    def available(self) -> bool:
+        return self._coordinator.curve_outdoor_c(self._end) is not None
+
+    @property
+    def native_value(self) -> float | None:
+        return self._coordinator.hold_flow_at_curve_end_c(self._end)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        info = self._coordinator.mpc.get_ua_balance_info()
+        return {
+            "outdoor_temperature_c": self._coordinator.curve_outdoor_c(self._end),
+            "target_temperature_c": self._coordinator.comfort_temperature_c,
+            "ua_factor": _rounded(self._coordinator.mpc.learned_ua_factor, 4),
+            "ua_last_learned": _iso(info.last_learned_ts),
         }
 
 

@@ -49,6 +49,7 @@ from .const import (
     DEFAULT_SEASON_OFF_AFTER_H,
     DEFAULT_SEASON_ON_THRESHOLD_H,
     HEAT_SOURCE_ACTIVE_STATE,
+    CurveEnd,
     RoofOrientation,
 )
 from .control.heating_season import HeatingSeason
@@ -229,6 +230,10 @@ class HeatingHub:
         self.flow = flow
         for room in self.rooms.values():
             room.flow_threshold_provider = lambda: flow.threshold_c
+            room.curve_outdoor_provider = lambda: (
+                flow.numbers["curve_outdoor_cold"],
+                flow.numbers["curve_outdoor_warm"],
+            )
 
     def set_hot_water(self, hot_water: HotWaterDevice) -> None:
         """Rooms take the charges the hot water device sees."""
@@ -364,6 +369,12 @@ class HeatingHub:
         """Flow the flow lead rooms need, recovery included."""
         return self._lead(
             CONF_LEAD_FLOW, lambda room: room.normal_min_flow_temperature_c
+        )
+
+    def lead_curve_hold_flow(self, end: CurveEnd) -> LeadValue:
+        """Flow the flow lead rooms need at one end of the curve, at comfort."""
+        return self._lead(
+            CONF_LEAD_FLOW, lambda room: room.hold_flow_at_curve_end_c(end)
         )
 
     def _float_state(self, entity_id: str) -> float | None:

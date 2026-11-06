@@ -468,6 +468,12 @@
       "gated_hold_flow_temperature": {
         "name": "Gated hold flow temperature"
       },
+      "hold_flow_temperature_curve_cold": {
+        "name": "Hold flow temperature at curve cold end"
+      },
+      "hold_flow_temperature_curve_warm": {
+        "name": "Hold flow temperature at curve warm end"
+      },
       "hold_flow_temperature": {
         "name": "Hold flow temperature"
       },
@@ -595,6 +601,12 @@
       },
       "flow_curve": {
         "name": "Heating curve flow temperature"
+      },
+      "flow_curve_recommendation_cold": {
+        "name": "Heating curve recommendation cold"
+      },
+      "flow_curve_recommendation_warm": {
+        "name": "Heating curve recommendation warm"
       },
       "flow_actuator_actual": {
         "name": "Actuator actual"

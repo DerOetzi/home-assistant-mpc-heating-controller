@@ -468,6 +468,12 @@
       "gated_hold_flow_temperature": {
         "name": "Haltevorlauftemperatur mit Gate"
       },
+      "hold_flow_temperature_curve_cold": {
+        "name": "Haltevorlauf Kurve kalt"
+      },
+      "hold_flow_temperature_curve_warm": {
+        "name": "Haltevorlauf Kurve warm"
+      },
       "hold_flow_temperature": {
         "name": "Haltevorlauftemperatur"
       },
@@ -595,6 +601,12 @@
       },
       "flow_curve": {
         "name": "Heizkurve Vorlauftemperatur"
+      },
+      "flow_curve_recommendation_cold": {
+        "name": "Heizkurve Empfehlung kalt"
+      },
+      "flow_curve_recommendation_warm": {
+        "name": "Heizkurve Empfehlung warm"
       },
       "flow_actuator_actual": {
         "name": "Stellgröße Ist"

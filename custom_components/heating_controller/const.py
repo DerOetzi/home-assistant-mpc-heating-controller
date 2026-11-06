@@ -191,6 +191,13 @@ LEARNING_CYCLE_INTERVAL_MINUTES = 30
 SENSOR_POLL_INTERVAL_MINUTES = 5
 
 
+class CurveEnd(StrEnum):
+    """One end point of the heat source's heating curve."""
+
+    COLD = "cold"
+    WARM = "warm"
+
+
 class HeatMode(StrEnum):
     COMFORT = "comfort"
     ECO = "eco"

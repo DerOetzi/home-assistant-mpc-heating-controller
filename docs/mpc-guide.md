@@ -817,3 +817,29 @@ outdoor temperature, regardless of stored heat — and keeps accruing long-term 
 throughout. It depends only on the setpoint and the outdoor temperature, which makes it
 the useful one for judging where your building's heating limit actually sits; the gated
 entity is the one to act on.
+
+## Setting the heating curve
+
+With a flow device, every room also reports its hold flow at the two outdoor end points
+of the heating curve (*Hold flow temperature at curve cold/warm end*, diagnostic): the
+same calculation as the hold flow, at the room's comfort temperature instead of the
+current mode's, with the learned heat-loss factor. Attributes: the outdoor value, the
+target, `ua_factor` and `ua_last_learned` — a factor that has not been learned recently
+makes the point provisional.
+
+The flow device turns these into *Heating curve recommendation cold* / *warm*: the highest
+value among the flow lead rooms plus the margin. Attributes `room`, `rooms`,
+`current_curve_flow_c` (the curve number of that end) and `difference_k` (current minus
+recommended; positive means the curve is set higher than the lead rooms need). Read it
+before changing the heat source's curve:
+
+- Gains are left out, so the points err high — the safe side for a curve that also has to
+  hold through the night.
+- The model uses the design spread at every load, so a radiator needs about half the
+  spread above the room before it gives off anything. The warm end therefore cannot drop
+  far below room temperature plus half the spread, even when the load there is tiny.
+- The model's need is curved (steeper at the warm end); a straight curve through both
+  recommended points sits slightly below it in between. The raise around 0 °C or a
+  slightly higher warm end covers that.
+- In offset mode the warm end is also the flow threshold: lowering it moves the heating
+  limit with it.

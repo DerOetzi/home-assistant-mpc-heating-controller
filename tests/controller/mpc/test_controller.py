@@ -1504,3 +1504,19 @@ def test_without_a_valve_report_the_ramp_starts_at_zero(monkeypatch):
     assert first.result.demand_pct == 20
     # The window has passed: the report no longer seeds, the ramp steps on.
     assert later.result.demand_pct == 40
+
+
+def test_hold_flow_at_other_outdoor_values_follows_the_same_calculation():
+    """The curve end points ask the same question at other outdoor values."""
+    controller = _esszimmer_controller()
+    controller.set_room_sensor_temperature(21.0)
+    result = controller.compute(target_temperature_c=21.0).result
+
+    assert (
+        controller.calculate_hold_flow_temperature_c(21.0, 8.8)
+        == result.hold_flow_temperature_c
+    )
+    cold_c = controller.calculate_hold_flow_temperature_c(21.0, -13.0)
+    warm_c = controller.calculate_hold_flow_temperature_c(21.0, 18.0)
+    assert warm_c < result.hold_flow_temperature_c < cold_c
+    assert controller.calculate_hold_flow_temperature_c(21.0, 22.0) == 0.0

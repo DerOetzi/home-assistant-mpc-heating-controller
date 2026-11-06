@@ -573,14 +573,24 @@ class RoomMpcController:
         self, mpc_input: RoomMpcInput
     ) -> float | None:
         """Flow needed to hold the setpoint -- ungated, weather-driven only."""
+        return self.calculate_hold_flow_temperature_c(
+            mpc_input.target_temp_c, mpc_input.outdoor_temp_c
+        )
+
+    def calculate_hold_flow_temperature_c(
+        self, target_temp_c: float, outdoor_temp_c: float
+    ) -> float | None:
+        """Flow that holds target_temp_c at outdoor_temp_c with the learned UA.
+
+        Also asked for outdoor values other than the current one, e.g. the
+        heating curve's end points, to read off a curve the room would need.
+        """
         hold_power_w = max(
             0.0,
-            self._loss_model.calculate_heat_loss_w(
-                mpc_input.target_temp_c, mpc_input.outdoor_temp_c
-            ),
+            self._loss_model.calculate_heat_loss_w(target_temp_c, outdoor_temp_c),
         )
         return self._emitter_model.calculate_recommended_flow_temperature_c(
-            hold_power_w, mpc_input.target_temp_c
+            hold_power_w, target_temp_c
         )
 
     def _calculate_recovery_flow(

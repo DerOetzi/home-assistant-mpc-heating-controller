@@ -153,7 +153,11 @@ hot-water charge may raise the flow. The flow threshold replaces the hub's thres
 entity: in offset mode the curve's warm end (*Flow threshold effective*), in setpoint mode
 a number on the device. The target never drops below it. *Write flow* starts off: the device computes and shows *Flow target* and
 *Actuator target* but writes nothing until switched on. See
-[Flow control](docs/mpc-guide.md#flow-control).
+[Flow control](docs/mpc-guide.md#flow-control). *Heating curve recommendation cold* /
+*warm* report the curve points the flow lead rooms need (hold flow at comfort with the
+learned heat-loss factor, plus margin); each room reports its own as *Hold flow
+temperature at curve cold/warm end*. See
+[Setting the heating curve](docs/mpc-guide.md#setting-the-heating-curve).
 
 Optionally **Add hot water control** on the hub, once: the integration then sets the
 water heater's target, runs the legionella cycle and the circulation pump.
