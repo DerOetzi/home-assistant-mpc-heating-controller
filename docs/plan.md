@@ -1,4 +1,4 @@
-# Offener Umsetzungsplan (Stand 2026-11-06)
+# Offener Umsetzungsplan (Stand 2026-11-07)
 
 Nur was noch zu tun ist, mit den Angaben für die Umsetzung. Erledigtes steht im Code, in `mpc-guide.md` und in der Git-Historie. Getroffene Entscheidungen stehen im Skill `heating-controller` (`references/entscheidungen.md`).
 
@@ -104,6 +104,79 @@ Neustart nach Okay, eine Zwangsladung beobachten (Duschbad/Rebekka gegen 05.11.)
 - Reserve/Offset nach Spreizungs-Fix Tag/Nacht getrennt bewerten; vor 01.11. nicht vergleichbar.
 - Arbeitszimmer unter Soll bei 100 % Ventil: vermutlich Voreinstellung — Nutzer prüfen lassen.
 - e1/e2: Stufen bzw. Mindestabstand beim Nachführen der TRV-Sollwerte — klären, ob noch gewünscht.
+
+## 5. Absenk-Simulation (`tools/`, offline, nicht in Integration)
+
+Ziel: Strom-Ersparnis vs. Mehrbedarf beim Aufholen, wenn alle Räume (außer Flur EG, Dani — bleiben Basis) für X h um Y K abgesenkt werden, je Startzeit und Tagestyp. Ergebnis: HTML-Heatmap-Seite. Wiederholbar nach jeder Saison mit neu gelernten Parametern. Ändert nichts in HA, Absenklogik in Integration bleibt eigenes Thema.
+
+### 5a. Eingaben
+
+- **Raumparameter** per MCP aus Lernstatus-Attributen (UA-Faktor, Kapazitätsfaktor, Fläche, Bauweise, Heizkörper, Ventilkennlinie, Gewinne soweit bestimmt) → `tools/absenk_sim/rooms.json`. Kein Recorder-Zugriff aus Skript.
+- **Wetter**: Open-Meteo-Archiv Leinburg, vergangene Winter stündlich (Temperatur, GTI je Fassade wie Integration). Offset zum Daikin-Fühler aus Überlappung Okt/Nov fitten. Tage klassieren: Tagesmittel < −5, −5…0, 0…5, 5…10, > 10 °C × klar/trüb. Je Klasse Mediantag + Streuung über alle Tage.
+- **COP**: Form COP(T_außen, T_vorlauf) aus Datenblatt (Modell per `ha_get_device`). Kalibrierung gegen Daikin-Strom (nur 2-h-Summen, keine Wärme): Zwilling auf vergangene Tage mit gemessenem Vorlauf + Ventilöffnungen → Q je 2-h-Fenster, Skalierfaktor(en) fitten, sodass Q/COP Strom trifft. WW-Ladungen, Abtauen, Neustart-/Ausfallfenster raus (prüfen ob Onecta Heizen/WW trennt). Restfehler = Validierungsmaß.
+
+### 5b. Zwilling
+
+- `tools/absenk_sim/` importiert `models/{emitter,loss,capacity}.py` und Planer aus `controller.py` (keine Kopie der Physik), venv `~/.venvs/heating-controller`.
+- Alle 10 Räume gleichzeitig, Schritt wie Controller. Gemeinsamer Vorlauf = max. Mindestvorlauf der Vorlauf-Leiträume, begrenzt durch Kurve + Offset und Auslegungsvorlauf. WP-Maximalleistung je T_außen als Deckel.
+- Validierung vor Auswertung: vergangene Tage nachspielen, RMSE Raumtemperatur je Raum ausweisen.
+- Grenzen markieren statt modellieren: Zellen mit Vorlauf unter Schwelle/Mindestmodulation (Takten) kennzeichnen.
+
+### 5c. Szenarien
+
+- Raster: Startstunde 0–23 × Dauer 1–24 h (+ 48 h) × Y = 1/2/3/4 K × Tagestyp.
+- Benannt (Marker + Tabelle): Arbeitstag 7–17, Vormittag 8–13, Nachmittag 13–18, Abend 17–23, Nacht 22–6, Nacht lang 21–7, Ausflug 6–22, 24 h, Wochenende 48 h.
+- Fenster 3 Tage: Einschwingtag, Absenkung, Nachlauftag mit vollem Aufholen. Ersparnis = Differenz zum Basisfall (immer Komfort) über ganzes Fenster.
+- Aufholstrategien: (a) vorheizen mit bekannter Rückkehrzeit, Soll bei Rückkehr erreicht (Obergrenze, MPC kennt Rückkehr heute nicht); (b) Aufheizen erst bei Rückkehr.
+- Sensitivität Kapazität × 0,5 / 1 / 2 (1R1C bildet träge Wandmasse nicht ab).
+
+### 5d. Ausgaben
+
+- Je Zelle: Strom kWh Basis/Szenario, Ersparnis %, Aufholdauer, Komfortdefizit Kh nach Rückkehr, Spitzenvorlauf, Takt-Markierung → `results.json`.
+- HTML-Seite: Heatmap X = Startstunde, Y = Dauer, divergierende Farbe (Ersparnis/Mehrverbrauch). Auswahl Tagestyp, Y, Strategie, Kapazitäts-Sensitivität. Zweite Heatmap Aufholdauer/Komfortdefizit. Klick auf Zelle: Raumtemperaturen, Vorlauf, COP, Strom Basis vs. Szenario, Anteil je Raum.
+- Vorab-Kennzahl: τ = C/UA je Raum.
+- Später optional: €-Skala mit PV-Deckung aus SolarEdge typischer Tage.
+
+### 5e. Reihenfolge
+
+1. τ je Raum + `rooms.json`. 2. Wetter-Archiv + Klassierung. 3. Zwilling + Validierung gegen vergangene Tage. 4. COP-Fit gegen 2-h-Strom. 5. Szenario-Raster. 6. HTML. Sinnvoll nach 1b (Gewinne in Regelung), sonst Gewinne getrennt ein-/ausschaltbar.
+
+Ergebnis an Nutzer; berührt Entscheidung „Keine Tag/Nacht-Absenkung“ — Bewertung trifft Nutzer.
+
+## 6. Hysterese-Simulation (`tools/`, baut auf 5)
+
+Ziel: Pendelbetrieb statt Halten — Räume auf Soll + X K heizen, dann bis Soll − Y K auskühlen lassen, wiederholt. Frage: Strom, WP-Takten und Komfort gegenüber heutigem Halten im Zielband. Gleicher Zwilling, gleiche Eingaben (Räume, Wetter-Tagestypen, COP-Fit) wie 5; Szenario-Modul daneben, kein eigener Zwilling.
+
+### 6a. Betriebsarten
+
+- (a) **Nur Räume pendeln, WP läuft durch**: TRVs je Raum mit Hysterese, gemeinsamer Vorlauf wie heute aus Leiträumen. Räume laufen phasenversetzt.
+- (b) **Synchron, WP im Intervall**: alle Räume heizen gemeinsam bis +X, dann WP aus (Heizanforderung weg) bis erster Leitraum −Y erreicht. Heizphase mit Vorlauf für Anstieg in Zeit T_heiz (Parameter), Abkühlphase ohne Heizleistung.
+- (c) **PV-gekoppelt**: wie (b), Heizphase bevorzugt bei Überschuss (SolarEdge-Tagesprofile), +X als thermischer Speicher.
+- Vergleichsbasis: heutiges Halten (Zielband 0,1 K).
+
+### 6b. WP-Modell (Zusatz zu 5)
+
+- Mindestmodulation (Datenblatt) und Takt-Mindestzeiten als Grenze: unter Mindestleistung zählt Halten als Takten (Starts/h aus Leistungsbedarf geschätzt). Ohne Wärmezähler nur Modellschätzung, so ausweisen.
+- COP je Phase aus T_außen und Vorlauf der Phase; Startverluste je Start als Parameter (Datenblatt/Literatur, Sensitivität 0 / typisch / hoch).
+- Abtauen: COP-Abschlag im Bereich ca. −5…+5 °C wie in 5.
+
+### 6c. Raster
+
+- X = 0…1,5 K, Y = 0…1,5 K (Schritt 0,25) × Betriebsart × Tagestyp, Rechenfenster 2 Tage nach Einschwingtag.
+- Mitteltemperatur verschiebt sich bei X ≠ Y: Ergebnis zweifach ausweisen — wie gerechnet und bezogen auf gleiche mittlere Raumtemperatur (UA-Korrektur), sonst vergleicht man Komfortniveaus statt Betriebsweisen.
+- Sensitivität Kapazität × 0,5 / 1 / 2 (Zykluslänge hängt direkt an C).
+
+### 6d. Ausgaben
+
+- Je Zelle: Strom kWh vs. Basis (%), WP-Starts/Tag, mittlere Lauf- und Pausendauer, Zyklusdauer je Raum, Komfort (Kh unter Soll − 0,5, max. Abweichung), Spitzenvorlauf, TRV-Schreibzahl (Akku, Zigbee).
+- HTML-Seite wie 5: Heatmap X × Y, Auswahl Betriebsart/Tagestyp/Bezug; Klick auf Zelle: Verlauf Räume, Vorlauf, WP an/aus, Strom.
+- Gemeinsame Seite mit 5 möglich (Reiter Absenkung / Hysterese).
+
+### 6e. Reihenfolge
+
+Nach 5 Schritt 4 (Zwilling + COP-Fit validiert). 1. Betriebsart (a) und Basis, 2. (b) mit WP-Intervall, 3. (c) PV, 4. HTML.
+
+Ergebnis an Nutzer; berührt Entscheidungen „Zielband 0,1 K“ und „WP-Heizbetrieb schaltet Nutzer“ — Bewertung trifft Nutzer.
 
 ## Später / offen (eigenes Design, nicht ungefragt)
 
