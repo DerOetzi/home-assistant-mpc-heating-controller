@@ -38,12 +38,6 @@ Tests: Planer wählt bei +200 W Gewinn kleinere Öffnung; Haltebedarf 0 bei Gewi
 
 Tests: Haltevorlauf sinkt bei 200 W Gewinn; Recovery mit Sonne ab Stunde 2 erreicht Ziel bei niedrigerem Vorlauf; Prognose fehlt → wie ohne Sonne.
 
-## 2. Vorlauf: Schatten beenden
-
-`switch.vorlauf_schreiben` ist aus (Schatten). Offen:
-- So 08.11.: Schattenwerte seit Neustart mit Fallback-Wartezeit gegen Ist und Tagesauswertung prüfen (Esszimmer bestimmt Vorlauf fast allein; nachts Schatten 3–8 K unter Offset +2; Schreibzahl gegen Budget), dann Nutzer schaltet `switch.vorlauf_schreiben` an.
-- Danach: Prüfpunkt „Offset-Empfehlung" in `tagesauswertung.md` wird „Vorlauf-Regelung geprüft" (Schreibzahl, `external_change`, Budget).
-
 ## 3. Ladeplan Warmwasser im MPC
 
 Anlass 05.11. 13:05–13:45: Zwangsladung, Heizkreis 40 min ohne Umlauf, Duschbad 20,8 → 20,5 °C, Rebekka lau; erst Offset +3 hielt. Ziel: Ladungen vorhersagen, gefährdete Räume heizen dosiert vor, Vorlauf steigt vorher und in der Erholung. Kein Vorheizen „auf Verdacht" in allen Räumen.

@@ -364,8 +364,12 @@ hour as well — where a radiator fan blows room air past the TRV, it reads clos
 even next to a warm radiator — but unlike a warm TRV it does not clear the whole opening:
 sun or a neighbour may lift a room too, and room sensors step in 0.1 K. Below that flow even
 a sound radiator stays barely warm, so the hour starts over. A hot-water charge (see
-[Hot-water charges](#hot-water-charges)) starts the hour over. The verdict holds while the
-valve is shut and clears as soon as an open valve warms the TRV again.
+[Hot-water charges](#hot-water-charges)) starts the hour over. A verdict needs a cold start:
+the valve at no more than 15 % for at least 30 minutes, and the opening within 15 minutes of
+that. A TRV already warm from a partly open valve shows neither rise nor lead at a low flow,
+so such an hour stays without a verdict. A radiator whose valve never closes is not judged.
+The verdict holds while the valve is shut and clears as soon as an open valve warms the TRV
+again or the room rises by 0.3 K over the hour.
 
 Meanwhile the room learns nothing (status `radiator_not_heating`). The running heat-balance stretch ends where the valve opened for the hour that led to
 the verdict: that hour's heat is in doubt as well. `binary_sensor.<room>_radiator_not_heating` (problem) is on, its attribute

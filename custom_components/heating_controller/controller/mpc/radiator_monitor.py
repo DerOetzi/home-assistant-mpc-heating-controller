@@ -15,6 +15,13 @@ RADIATOR_CHECK_MIN_LEAD_C = 1.0
 # water warms its TRV within those (dining room, 31 October: 21.01 at the
 # opening, already 21.13 at the next cycle, 21.36 a quarter of an hour on).
 RADIATOR_CHECK_BASELINE_S = 15 * 60
+# A verdict needs a TRV that started out cold: the valve nearly shut for this
+# long, and the opening no more than the baseline time after that. A TRV
+# already warm from a partly open valve has nothing left to show at a low flow
+# (Rebekka, 37-39 °C flow: 0.13-0.25 K rise, 0.4-0.6 K above the room after an
+# hour wide open; the same radiator from a shut valve rose 0.58 K).
+RADIATOR_CHECK_COLD_MAX_OPENING_PCT = 15.0
+RADIATOR_CHECK_COLD_MIN_S = 30 * 60
 # A room rising this much over the hour gets heat from its radiator. Where a
 # radiator fan blows room air past the TRV it reads close to the room even
 # next to a warm radiator (bedroom, 30 October: TRV +0.22 K, room +0.4 K).
@@ -36,9 +43,11 @@ class RadiatorDeliveryMonitor:
     Air in the radiator or a valve stuck shut looks the same from here: the
     TRV reports its valve open, yet its own reading stays near the room's
     and the room does not rise. Only judged while the flow is warm enough
-    for a sound radiator to warm its TRV. The verdict holds while the valve
-    is shut, heating is off or the flow too low -- there is nothing to test
-    then -- and clears as soon as an open valve warms the TRV again.
+    for a sound radiator to warm its TRV, and only after an opening from a
+    nearly shut valve: without that cold start a steady reading says nothing.
+    The verdict holds while the valve is shut, heating is off or the flow too
+    low -- there is nothing to test then -- and clears as soon as an open
+    valve warms the TRV again.
     """
 
     def __init__(self) -> None:
@@ -50,6 +59,11 @@ class RadiatorDeliveryMonitor:
         # Once the radiator warmed during an opening, a steady reading later
         # on is a radiator that holds its output, not one that fails.
         self._heated_this_opening = False
+        # Since when the valve is nearly shut, and when the last long enough
+        # shut spell ended.
+        self._cold_since_ts: float | None = None
+        self._cold_until_ts: float | None = None
+        self._cold_start = False
         self.not_heating = False
         # When the valve opened for the hour that led to the verdict.
         self.not_heating_since_ts: float | None = None
@@ -64,6 +78,7 @@ class RadiatorDeliveryMonitor:
         full_output_fraction: float | None = None,
         hot_water_charge: bool = False,
     ) -> None:
+        self._track_cold_valve(now_ts, opening_pct)
         if (
             not heat_available
             or opening_pct is None
@@ -94,6 +109,10 @@ class RadiatorDeliveryMonitor:
 
         if self._open_since_ts is None:
             self._open_since_ts = now_ts
+            self._cold_start = self._cold_start or (
+                self._cold_until_ts is not None
+                and now_ts - self._cold_until_ts <= RADIATOR_CHECK_BASELINE_S
+            )
             baseline = [
                 reading
                 for reading in self._before_opening
@@ -130,12 +149,27 @@ class RadiatorDeliveryMonitor:
         elif room_rise_c >= RADIATOR_CHECK_MIN_ROOM_RISE_C:
             self._clear_verdict()
         elif (
-            not self._heated_this_opening
+            self._cold_start
+            and not self._heated_this_opening
             and now_ts - self._open_since_ts >= RADIATOR_CHECK_WINDOW_S
         ):
             if not self.not_heating:
                 self.not_heating_since_ts = self._open_since_ts
             self.not_heating = True
+
+    def _track_cold_valve(self, now_ts: float, opening_pct: float | None) -> None:
+        if opening_pct is None:
+            return
+        if opening_pct <= RADIATOR_CHECK_COLD_MAX_OPENING_PCT:
+            if self._cold_since_ts is None:
+                self._cold_since_ts = now_ts
+            return
+        if (
+            self._cold_since_ts is not None
+            and now_ts - self._cold_since_ts >= RADIATOR_CHECK_COLD_MIN_S
+        ):
+            self._cold_until_ts = now_ts
+        self._cold_since_ts = None
 
     def _clear_verdict(self) -> None:
         self.not_heating = False
@@ -145,3 +179,4 @@ class RadiatorDeliveryMonitor:
         self._open_since_ts = None
         self._readings = []
         self._heated_this_opening = False
+        self._cold_start = False
