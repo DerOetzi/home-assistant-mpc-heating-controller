@@ -228,7 +228,7 @@ target temperature range and step:
 | Danfoss Ally (eTRV0100, eTRV0101, eTRV0103) | ZHA | the same; not yet tested on a real device |
 
 Only devices with a profile can be picked. For another model please
-[open an issue](https://github.com/DerOetzi/home-assistant-mcp-heating-controller/issues)
+[open an issue](https://github.com/DerOetzi/home-assistant-mpc-heating-controller/issues)
 with its manufacturer, model, integration, and the entities the device has (their entity
 IDs and unique IDs, e.g. from the device page or `Settings → Entities`). Profiles are YAML
 files in `custom_components/heating_controller/device_profiles/`, so a pull request with a

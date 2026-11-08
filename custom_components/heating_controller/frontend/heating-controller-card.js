@@ -25,7 +25,7 @@ window.customCards.push({
   description: TRANSLATIONS.en.card_description,
   preview: true,
   documentationURL:
-    "https://github.com/DerOetzi/home-assistant-mcp-heating-controller",
+    "https://github.com/DerOetzi/home-assistant-mpc-heating-controller",
 });
 window.customCards.push({
   type: CURVE_CARD_TAG,
@@ -33,7 +33,7 @@ window.customCards.push({
   description: TRANSLATIONS.en.curve_card_description,
   preview: true,
   documentationURL:
-    "https://github.com/DerOetzi/home-assistant-mcp-heating-controller",
+    "https://github.com/DerOetzi/home-assistant-mpc-heating-controller",
 });
 
 console.info(`%c ${CARD_TAG} %c loaded`, "color: white; background: #d35400", "");
