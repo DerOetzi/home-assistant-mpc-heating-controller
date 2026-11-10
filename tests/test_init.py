@@ -6,6 +6,7 @@ from heating_controller.store import LearningFactorsStore
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, HomeAssistant, ServiceCall
 from homeassistant.exceptions import Unauthorized
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.storage import Store
 from homeassistant.util import slugify
 from pytest_homeassistant_custom_component.common import MockConfigEntry, MockUser
@@ -409,6 +410,104 @@ async def test_a_room_whose_trv_is_gone_stays_out(hass: HomeAssistant) -> None:
 
     assert entry.state is ConfigEntryState.LOADED
     assert entry.entry_id not in hass.data[DOMAIN]
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def _set_room_device_disabled(
+    hass: HomeAssistant, entry: MockConfigEntry, disabled: bool
+) -> None:
+    registry = dr.async_get(hass)
+    device = registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    registry.async_update_device(
+        device.id, disabled_by=dr.DeviceEntryDisabler.USER if disabled else None
+    )
+    await hass.async_block_till_done()
+
+
+async def test_disabling_a_room_device_takes_the_room_out_and_keeps_its_data(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup_room(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    await coordinator.store.async_save(
+        LearningFactors(ua_factor=0.8, capacity_factor=1.0)
+    )
+
+    await _set_room_device_disabled(hass, entry, True)
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.entry_id not in hass.data[DOMAIN]
+    assert entry.runtime_data.rooms == {}
+    assert hass.states.get("select.wohnzimmer_heating_mode") is None
+    kept = LearningFactorsStore(hass, ENTRY_DATA["room_name"], entry.entry_id)
+    assert await kept.async_load() is not None
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_disabled_room_is_no_lead_room(hass: HomeAssistant) -> None:
+    _register_noop_services(hass)
+    _seed_entities(hass)
+    entry = _hub_entry(
+        {**_room_data(hass), "lead_heating_limit": True, "lead_flow": True}
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    hold = hass.states.get("sensor.heizung_lead_rooms_hold_flow_temperature")
+    assert hold.attributes["rooms"] == ["Wohnzimmer"]
+
+    await _set_room_device_disabled(hass, entry, True)
+
+    hold = hass.states.get("sensor.heizung_lead_rooms_hold_flow_temperature")
+    assert hold.attributes["rooms"] == []
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_enabling_a_room_device_brings_the_room_back(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup_room(hass)
+    await _set_room_device_disabled(hass, entry, True)
+    assert entry.entry_id not in hass.data[DOMAIN]
+
+    await _set_room_device_disabled(hass, entry, False)
+
+    assert entry.entry_id in hass.data[DOMAIN]
+    assert entry.runtime_data.disabled_rooms == {}
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_disabled_room_stays_out_after_a_restart(hass: HomeAssistant) -> None:
+    entry = await _setup_room(hass)
+    await _set_room_device_disabled(hass, entry, True)
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.entry_id not in hass.data[DOMAIN]
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_removing_a_disabled_room_drops_its_stores(hass: HomeAssistant) -> None:
+    entry = await _setup_room(hass)
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    await coordinator.store.async_save(
+        LearningFactors(ua_factor=0.8, capacity_factor=1.0)
+    )
+    await _set_room_device_disabled(hass, entry, True)
+
+    hass.config_entries.async_remove_subentry(entry, entry.entry_id)
+    await hass.async_block_till_done()
+
+    leftover = LearningFactorsStore(hass, ENTRY_DATA["room_name"], entry.entry_id)
+    assert await leftover.async_load() is None
 
     assert await hass.config_entries.async_unload(entry.entry_id)
 

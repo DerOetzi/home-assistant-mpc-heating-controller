@@ -290,6 +290,9 @@ try a different curve before setting it on the heat source.
 - Each room is a sub-entry of the hub — deleting a room removes only that room's entities and
   learning data, other rooms keep running. Adding, changing or deleting a room reloads all
   rooms.
+- Disabling a room's device takes the room out of the integration until you enable it again:
+  no control, no learning, not counted as a lead room. Its TRVs keep their last setpoint and its
+  learning data stays. Disabling or enabling reloads all rooms.
 - Learning (the `ua_factor`/`capacity_factor` self-calibration) only runs while the shared
   heat source is actually calling for heat at or above the configured flow threshold; outside the
   heating season the room simply stops adjusting until it's needed again. Within that time

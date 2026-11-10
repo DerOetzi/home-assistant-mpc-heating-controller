@@ -90,6 +90,7 @@ Neustart nach Okay, eine Zwangsladung beobachten (Duschbad/Rebekka gegen 05.11.)
 
 ## 4. Beobachten (laufend, Tagesauswertung)
 
+- Boiler-Modus TRV: nach Z2M 2.15.0 (~01.12., Schreib-Fix `heating_system_mode` UINT8) alle 13 `select.heizung_*_heating_system_mode` auf `default_heating`, direkt danach `heating_controller.recalibrate` mit `reset_valve_curves` alle Räume. Dann prüfen: Streuung weg? Ventil fällt bei Typ-1-Absenken weiter auf ~10 %? Bis dahin Kennlinien (Reset 10.11.) im Auto-Modus gelernt, nicht mit danach mischen.
 - Ventilkennlinien seit Rampen-Probe 05.11.: Tabelle je TRV (Status, Klassen, Abstand zu Seed). `scattered` bei mehreren TRVs → innerer Regelkreis auf gemessene Öffnung erwägen. Weicht gelernte Kurve bei den meisten TRVs deutlich vom Seed ab → Seed im Profil nachziehen vorschlagen.
 - Planer in Öffnung: Zu/Auf-Wechsel je TRV pro Nacht und `trv_setpoint_writes` gegen Nächte vor 03.11.
 - Wirkung (h), (i), (k) und Heizkörper-Check-Regeln seit 31.10.

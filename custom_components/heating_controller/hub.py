@@ -82,6 +82,8 @@ class HeatingHub:
         self.hass = hass
         self.entry = entry
         self.rooms: dict[str, HeatingRoomCoordinator] = {}
+        # Room id to name of rooms left out because their device is disabled.
+        self.disabled_rooms: dict[str, str] = {}
         self._flow_threshold_entity: str | None = entry.data.get(
             CONF_FLOW_THRESHOLD_ENTITY
         )

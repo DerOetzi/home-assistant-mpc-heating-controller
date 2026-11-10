@@ -5,9 +5,18 @@ import logging
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import (
+    CALLBACK_TYPE,
+    Event,
+    HomeAssistant,
+    ServiceCall,
+    callback,
+)
 from homeassistant.helpers import (
     config_validation as cv,
+)
+from homeassistant.helpers import (
+    device_registry as dr,
 )
 from homeassistant.helpers import (
     entity_registry as er,
@@ -114,6 +123,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingConfigEntry) -> b
     for subentry in entry.subentries.values():
         if subentry.subentry_type != SUBENTRY_TYPE_ROOM:
             continue
+        if _room_device_disabled(hass, entry, subentry.subentry_id):
+            hub.disabled_rooms[subentry.subentry_id] = subentry.data[CONF_ROOM_NAME]
+            continue
         coordinator = await _async_setup_room(hass, entry, subentry, profiles)
         if coordinator is not None:
             rooms[subentry.subentry_id] = coordinator
@@ -130,10 +142,51 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingConfigEntry) -> b
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    entry.async_on_unload(_async_track_room_devices(hass, entry))
 
     _async_register_services(hass)
 
     return True
+
+
+def _room_device_disabled(
+    hass: HomeAssistant, entry: HeatingConfigEntry, room_id: str
+) -> bool:
+    return any(
+        device.disabled and (DOMAIN, room_id) in device.identifiers
+        for device in dr.async_entries_for_config_entry(
+            dr.async_get(hass), entry.entry_id
+        )
+    )
+
+
+@callback
+def _async_track_room_devices(
+    hass: HomeAssistant, entry: HeatingConfigEntry
+) -> CALLBACK_TYPE:
+    """Reload when a room's device is disabled or enabled.
+
+    The registry only hides a disabled device's entities; the room's control
+    and learning run in its coordinator, which setup leaves out.
+    """
+
+    @callback
+    def _handle_device_update(event: Event[dr.EventDeviceRegistryUpdatedData]) -> None:
+        if event.data["action"] != "update":
+            return
+        if "disabled_by" not in event.data["changes"]:
+            return
+        device = dr.async_get(hass).async_get(event.data["device_id"])
+        if device is None:
+            return
+        if any(
+            subentry.subentry_type == SUBENTRY_TYPE_ROOM
+            and (DOMAIN, subentry.subentry_id) in device.identifiers
+            for subentry in entry.subentries.values()
+        ):
+            hass.config_entries.async_schedule_reload(entry.entry_id)
+
+    return hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, _handle_device_update)
 
 
 async def _async_setup_room(
@@ -164,9 +217,12 @@ async def _async_update_listener(
 ) -> None:
     """A changed hub or room reloads all rooms; a removed room drops its files."""
     hub: HeatingHub = entry.runtime_data
-    for room_id, coordinator in hub.rooms.items():
+    room_names = {
+        room_id: coordinator.room_name for room_id, coordinator in hub.rooms.items()
+    } | hub.disabled_rooms
+    for room_id, room_name in room_names.items():
         if room_id not in entry.subentries:
-            await _async_remove_room_stores(hass, coordinator.room_name, room_id)
+            await _async_remove_room_stores(hass, room_name, room_id)
     hass.config_entries.async_schedule_reload(entry.entry_id)
 
 
