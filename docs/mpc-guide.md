@@ -253,7 +253,7 @@ Home Assistant to api.open-meteo.com. A series older than three hours counts as 
 sun terms are learned by day then, and none is estimated. Surfaces: four facades from the
 house's rotation (the bearing of its north facade) plus two roof surfaces with the roof's
 pitch. Each surface's sensor (*Irradiance …*, W/m²) shows the current value and the next 24
-hours as attribute `forecast`.
+hours as attribute `forecast` (not recorded).
 
 **Shown.** `sensor.<room>_additional_heat` (German install: `sensor.<raum>_zusatzwarme`) is
 the gain the model would count now — determined terms only. Attributes: `steady_gain_w`,
@@ -261,8 +261,10 @@ the gain the model would count now — determined terms only. Attributes: `stead
 `gain_profile_workday_w` and `gain_profile_other_days_w` (8 values each), `profile_determined`,
 `profile_days` (days with hours per block, counted up to three),
 `sun_coefficients_w`, `sun_determined`, `hour_samples`, `residual_rms_w` (spread of the
-hourly residual), `last_hour`, `last_hour_outcome`. The state of both regressions survives
-restarts; changing a room's surfaces starts its hourly level anew.
+hourly residual), `last_hour`, `last_hour_outcome`. The profile and sun attributes
+(`gain_profile_*`, `profile_*`, `sun_coefficients_w`, `sun_determined`) are not recorded; read
+them live. The state of both regressions survives restarts; changing a room's surfaces starts
+its hourly level anew.
 
 ## Sizing a room correctly
 
@@ -323,7 +325,8 @@ or more and the valve opens almost fully. A TRV without a reading falls back to 
 The mode is set on the hub for all rooms; the attribute `trv_setpoint_writes` of the
 target valve opening sensor counts the target writes per TRV since setup, and its attribute
 `trv_valve_positions` lists the opening each TRV reports right now (`pi_heating_demand`,
-`null` without a valve-position entity).
+`null` without a valve-position entity). The recorder keeps only `trv_setpoint_writes`; the
+history of targets and openings is on the TRV entities.
 
 Every write wakes the TRV, so a valve switches between shut and open sparingly: a shut
 valve opens from 10 % target opening on, an open one stays open down to 5 %, and a TRV switches

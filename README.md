@@ -199,7 +199,7 @@ The hub's device *Heizung* reports the lead rooms:
   only with a heating curve entity; unavailable while the flow is 0 (all lead rooms in
   their surplus buffer).
 - *Irradiance &lt;surface&gt;* — sun on each surface some room uses (W/m², diagnostic),
-  with the next 24 hours as attribute `forecast`; unavailable when the last fetch is more
+  with the next 24 hours as attribute `forecast` (not recorded); unavailable when the last fetch is more
   than three hours old.
 - *Heat source reachable* — off once the measured flow temperature has been missing longer
   than the configured gap (diagnostic).

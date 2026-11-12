@@ -600,6 +600,8 @@ class IrradianceSensor(HeatingHubEntity, SensorEntity):
     _attr_native_unit_of_measurement = UnitOfIrradiance.WATTS_PER_SQUARE_METER
     _attr_suggested_display_precision = 0
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    # The state records the sun; the forecast is for reading now.
+    _unrecorded_attributes = frozenset({"forecast"})
 
     def __init__(self, hub: HeatingHub, surface: Surface) -> None:
         super().__init__(hub, f"irradiance_{surface}")
@@ -799,6 +801,8 @@ class HeatingDemandSensor(_DiagnosticSensor):
     _attr_translation_key = "heating_demand"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = PERCENTAGE
+    # The TRVs record their own targets and valve positions.
+    _unrecorded_attributes = frozenset({"trv_target_temps", "trv_valve_positions"})
 
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
         super().__init__(coordinator, "heating_demand")
@@ -849,6 +853,18 @@ class AdditionalHeatSensor(_DiagnosticSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfPower.WATT
     _attr_suggested_display_precision = 0
+    # The learned profile and sun terms live in the gain store; recorded with
+    # every change of the current gain they would be copied each time.
+    _unrecorded_attributes = frozenset(
+        {
+            "gain_profile_workday_w",
+            "gain_profile_other_days_w",
+            "profile_determined",
+            "profile_days",
+            "sun_coefficients_w",
+            "sun_determined",
+        }
+    )
 
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
         super().__init__(coordinator, "additional_heat")
@@ -959,6 +975,8 @@ class RoomTemperatureSensor(_DiagnosticSensor):
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    # The room sensor and the TRVs record their own readings.
+    _unrecorded_attributes = frozenset({"room_sensor_temp_c", "trv_temperatures"})
 
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
         super().__init__(coordinator, "room_temperature")
