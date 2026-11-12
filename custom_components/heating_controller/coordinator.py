@@ -317,7 +317,9 @@ class HeatingRoomCoordinator:
             self.data.get(CONF_STATIONARY_RANGE, DEFAULT_STATIONARY_RANGE_C)
         )
         self.mpc.set_sun_condition(self.is_sun_condition_met)
-        self.mpc.set_gain_context(self.profile_index_at, self.fresh_sun_series)
+        self.mpc.set_gain_context(
+            self.profile_index_at, self.local_day_at, self.fresh_sun_series
+        )
 
         self.store = LearningFactorsStore(hass, self.room_name, room_id)
         self.flow_gate_store = FlowGateStateStore(hass, self.room_name, room_id)
@@ -385,6 +387,11 @@ class HeatingRoomCoordinator:
     def profile_index_at(self, timestamp: float) -> int:
         local = dt_util.as_local(dt_util.utc_from_timestamp(timestamp))
         return profile_index(local.hour, self.is_workday(timestamp))
+
+    @staticmethod
+    def local_day_at(timestamp: float) -> int:
+        """Ordinal of the date in HA's time zone."""
+        return dt_util.as_local(dt_util.utc_from_timestamp(timestamp)).toordinal()
 
     def current_gain(self) -> GainBreakdown:
         now_ts = time.time()

@@ -65,6 +65,7 @@ def _feed(learner, loss_model, days, gain_w, sun=None, seed=1, sensor_noise_c=0.
     rng = random.Random(seed)
     learner.set_gain_context(
         lambda ts: profile_index(int((ts % DAY_S) // 3600), True),
+        lambda ts: int(ts // DAY_S),  # UTC days are enough here
         lambda: sun,
     )
     loss_w = loss_model.effective_ua_w_per_k * (ROOM_C - OUTDOOR_C)
@@ -171,7 +172,7 @@ def test_dark_hour_without_sun_series_learns():
 
 def test_hour_started_mid_way_is_too_short():
     learner, _, gains = _setup(window_surfaces=())
-    learner.set_gain_context(lambda ts: 0, lambda: None)
+    learner.set_gain_context(lambda ts: 0, lambda ts: 0, lambda: None)
     for minute in range(30, 75, 5):
         ts = START_TS + minute * 60
         learner.append_history(

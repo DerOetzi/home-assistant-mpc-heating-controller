@@ -4,7 +4,7 @@ import time
 from collections.abc import Callable
 from bisect import bisect_left
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, datetime
 from itertools import pairwise
 
 from ...const import (
@@ -104,6 +104,11 @@ def _default_profile_index(timestamp: float) -> int:
     return profile_index(moment.tm_hour, moment.tm_wday < 5)
 
 
+def _default_local_day(timestamp: float) -> int:
+    # UTC; the coordinator supplies HA's time zone.
+    return datetime.fromtimestamp(timestamp, UTC).toordinal()
+
+
 @dataclass
 class LearnerHistoryEntry:
     timestamp: float
@@ -176,6 +181,7 @@ class RoomMpcModelLearner:
         self._gain_model = gain_model
         self._gain_hour_done_ts: float | None = None
         self._profile_index_at: Callable[[float], int] = _default_profile_index
+        self._local_day_at: Callable[[float], int] = _default_local_day
         self._sun_source: Callable[[], SunSource | None] = lambda: None
         self._target_band_c = max(0.0, target_band_c)
 
@@ -349,10 +355,13 @@ class RoomMpcModelLearner:
     def set_gain_context(
         self,
         profile_index_at: Callable[[float], int],
+        local_day_at: Callable[[float], int],
         sun_source: Callable[[], SunSource | None],
     ) -> None:
-        """Where the hourly gain learning gets its day profile and sun from."""
+        """Where the hourly gain learning gets its day profile, its local day
+        number and the sun from."""
         self._profile_index_at = profile_index_at
+        self._local_day_at = local_day_at
         self._sun_source = sun_source
 
     def _maybe_learn_gain_hour(self, now_ts: float) -> None:
@@ -428,7 +437,7 @@ class RoomMpcModelLearner:
             self._profile_index_at(mid_ts),
             sun_values,
             unexplained_w,
-            date.fromtimestamp(mid_ts).toordinal(),
+            self._local_day_at(mid_ts),
         )
         return HourOutcome.LEARNED
 

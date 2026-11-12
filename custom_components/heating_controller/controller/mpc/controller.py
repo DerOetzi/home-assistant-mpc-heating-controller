@@ -688,6 +688,8 @@ class RoomMpcController:
                     prediction_error=prediction_error,
                 )
 
+        # Demand 0 is never below activation, so the search always has a result.
+        assert best is not None
         return best
 
     def _target_band_error_c(
@@ -900,9 +902,10 @@ class RoomMpcController:
     def set_gain_context(
         self,
         profile_index_at: Callable[[float], int],
+        local_day_at: Callable[[float], int],
         sun_source: Callable[[], SunSource | None],
     ) -> None:
-        self._learner.set_gain_context(profile_index_at, sun_source)
+        self._learner.set_gain_context(profile_index_at, local_day_at, sun_source)
 
     def consume_persisted_learning_factors(self) -> LearningFactors | None:
         return self._learner.consume_persisted_learning_factors()
