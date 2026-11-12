@@ -20,10 +20,6 @@ def _flow_gate_storage_key(room_name: str, entry_id: str) -> str:
     return f"{DOMAIN}_{slugify(room_name)}_{entry_id}_flow_gate"
 
 
-def _observer_storage_key(room_name: str, entry_id: str) -> str:
-    return f"{DOMAIN}_{slugify(room_name)}_{entry_id}_observer"
-
-
 class LearningFactorsStore:
     def __init__(self, hass: HomeAssistant, room_name: str, entry_id: str) -> None:
         self._room_name = room_name
@@ -79,18 +75,6 @@ class FlowGateStateStore:
 
     async def async_remove(self) -> None:
         await self._store.async_remove()
-
-
-async def async_remove_observer_store(
-    hass: HomeAssistant, room_name: str, entry_id: str
-) -> None:
-    """Delete the file of the removed disturbance observer, if one is left.
-
-    Drop after season 2026/27.
-    """
-    await Store(
-        hass, STORAGE_VERSION, _observer_storage_key(room_name, entry_id)
-    ).async_remove()
 
 
 def _valve_curve_storage_key(room_name: str, entry_id: str) -> str:

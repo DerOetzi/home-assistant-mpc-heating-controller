@@ -236,31 +236,6 @@ async def test_recalibrate_rejects_disturbance(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_setup_drops_the_old_observer_store(hass: HomeAssistant) -> None:
-    entry_id = "old_observer"
-    old_store = Store(
-        hass, 1, f"{DOMAIN}_{slugify(ENTRY_DATA['room_name'])}_{entry_id}_observer"
-    )
-    await old_store.async_save({"room_name": "x", "disturbance_w": -40.0})
-
-    _seed_entities(hass)
-
-    async def handler(call: ServiceCall) -> None:
-        pass
-
-    hass.services.async_register("climate", "set_temperature", handler)
-    hass.services.async_register("switch", "turn_on", handler)
-    hass.services.async_register("switch", "turn_off", handler)
-    entry = _hub_entry(_room_data(hass), entry_id=entry_id)
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-
-    assert await old_store.async_load() is None
-
-    assert await hass.config_entries.async_unload(entry.entry_id)
-
-
 async def test_recalibrate_needs_at_least_one_factor(
     hass: HomeAssistant, hass_admin_user: MockUser
 ) -> None:
@@ -418,7 +393,11 @@ async def _set_room_device_disabled(
     hass: HomeAssistant, entry: MockConfigEntry, disabled: bool
 ) -> None:
     registry = dr.async_get(hass)
-    device = registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    device = next(
+        device
+        for device in registry.devices.values()
+        if (DOMAIN, entry.entry_id) in device.identifiers
+    )
     registry.async_update_device(
         device.id, disabled_by=dr.DeviceEntryDisabler.USER if disabled else None
     )

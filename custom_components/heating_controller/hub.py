@@ -251,7 +251,7 @@ class HeatingHub:
 
     @property
     def charge_flow_c(self) -> float | None:
-        """Flow the rooms need around a planned hot-water charge (phase 4)."""
+        """Flow the rooms need around a planned hot-water charge; not built yet."""
         return None
 
     # --- Writes to the heat source -----------------------------------------

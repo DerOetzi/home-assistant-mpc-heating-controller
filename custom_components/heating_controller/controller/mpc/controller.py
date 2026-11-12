@@ -924,14 +924,11 @@ class RoomMpcController:
     def set_stationary_range_c(self, stationary_range_c: float) -> None:
         self._learner.set_stationary_range_c(stationary_range_c)
 
-    def set_learning_window_active(self, active: bool, now_ts: float) -> None:
-        self._learner.set_learning_window_active(active, now_ts)
-
     def set_learning_paused(self, paused: bool, now_ts: float) -> None:
         self._learner.set_learning_paused(paused, now_ts)
 
     def set_window_open(self, window_open: bool, now_ts: float) -> None:
         self._learner.set_window_open(window_open, now_ts)
 
-    def set_sun_condition(self, sun_condition: callable[[float], bool]) -> None:
+    def set_sun_condition(self, sun_condition: Callable[[float], bool]) -> None:
         self._learner.set_sun_condition(sun_condition)

@@ -88,6 +88,7 @@ from .const import (
     DEFAULT_TARGET_BAND_C,
     DEFAULT_TRV_SETPOINT_MODE,
     DOMAIN,
+    HUB_VERSION,
     FACADES,
     FLOW_TITLE,
     HOT_WATER_TITLE,
@@ -112,7 +113,6 @@ from .const import (
 )
 from .control.flow import ActuatorMode
 from .hot_water_device import HOT_WATER_DEFAULTS, WEEKDAYS
-from .migration import HUB_VERSION
 from .profiles import (
     DeviceProfile,
     TrvResolveError,

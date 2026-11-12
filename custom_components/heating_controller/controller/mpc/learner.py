@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from bisect import bisect_left
+from dataclasses import dataclass, field
 from datetime import date
 from itertools import pairwise
 
@@ -34,13 +35,13 @@ CAPACITY_LEARNING_RATE = 0.005
 # the window, the heat the controller requested has to match the losses plus
 # what the room stored; the UA that balances this is the learning target.
 #
-# The window is a stretch of usable time: it runs until the learning window
-# closes, learning is paused, a window contact opens, the configured room
+# The window is a stretch of usable time: it runs until learning is paused, a
+# window contact opens, the configured room
 # sensor drops out, heating stays off for longer than a short interruption, or
 # the sun condition ends, and is balanced
 # once at that end. A night shortened by an interruption still counts as long as
 # the remaining stretch is long enough; a stretch that reaches the maximum is
-# balanced right away so a learning window that never closes still learns.
+# balanced right away so a stretch that never ends still learns.
 UA_BALANCE_MIN_WINDOW_S = 4 * 3600
 UA_BALANCE_MAX_WINDOW_S = 8 * 3600
 # Heating briefly unavailable (a missed heat-source poll, the flow dipping
@@ -126,6 +127,10 @@ class LearnerHistoryEntry:
     window_open: bool = False
     # Learning paused, outdoor temperature missing or learner disabled.
     learning_paused: bool = False
+    # Result of the stationary check over the full hour before this sample,
+    # kept so a long history is not fitted again on every cycle.
+    stationary_checked: bool = field(default=False, compare=False, repr=False)
+    stationary_since_ts: float | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass
@@ -188,8 +193,6 @@ class RoomMpcModelLearner:
         self._capacity_suppression = _FactorSuppression()
         self._capacity_outcome = CapacityOutcome.DISABLED
         self._stationary_range_c = DEFAULT_STATIONARY_RANGE_C
-        self._learning_window_active = True
-        self._learning_window_active_since_ts = 0.0
         self._learning_paused = False
         self._learning_resumed_ts = 0.0
         self._room_sensor_fallback = False
@@ -198,7 +201,7 @@ class RoomMpcModelLearner:
         self._radiator_not_heating = False
         self._window_open = False
         self._outdoor_temperature_missing = False
-        self._sun_condition: callable[[float], bool] = lambda _ts: True
+        self._sun_condition: Callable[[float], bool] = lambda _ts: True
         self._pending_persisted_factors: LearningFactors | None = None
 
         self._learning_state = self._create_learning_state(LearningStatus.DISABLED)
@@ -262,18 +265,10 @@ class RoomMpcModelLearner:
     def set_stationary_range_c(self, stationary_range_c: float) -> None:
         self._stationary_range_c = stationary_range_c
 
-    def set_learning_window_active(self, active: bool, now_ts: float) -> None:
-        if active and not self._learning_window_active:
-            self._learning_window_active_since_ts = now_ts
-        if not active and self._learning_window_active:
-            self._close_ua_balance(now_ts)
-        self._learning_window_active = active
-
     def set_learning_paused(self, paused: bool, now_ts: float) -> None:
-        # Unlike the learning window this blocks both factors: it is an external
-        # veto for when the inputs themselves are not trustworthy (e.g. an
-        # estimated outdoor temperature). Windows that started before the
-        # resume carry paused samples and are discarded.
+        # Blocks both factors: an external veto for when the inputs themselves
+        # are not trustworthy (e.g. an estimated outdoor temperature). Windows
+        # that started before the resume carry paused samples and are discarded.
         if self._learning_paused and not paused:
             self._learning_resumed_ts = now_ts
         if paused and not self._learning_paused:
@@ -315,7 +310,7 @@ class RoomMpcModelLearner:
             self._capacity_suppression.suppress(now_ts)
         self._outdoor_temperature_missing = missing
 
-    def set_sun_condition(self, sun_condition: callable[[float], bool]) -> None:
+    def set_sun_condition(self, sun_condition: Callable[[float], bool]) -> None:
         self._sun_condition = sun_condition
 
     def append_history(
@@ -622,7 +617,6 @@ class RoomMpcModelLearner:
     def _ua_balance_start_ts(self) -> float:
         return max(
             self._ua_balance_from_ts,
-            self._learning_window_active_since_ts,
             self._learning_resumed_ts,
             self._ua_blocked_until_ts,
             self._history[0].timestamp if self._history else 0.0,
@@ -631,7 +625,7 @@ class RoomMpcModelLearner:
     def _close_ua_balance(self, end_ts: float) -> None:
         """End the running heat-balance stretch; the next cycle balances it."""
         if self._ua_balance_closed is not None:
-            # Heating went off before the learning window closed, and only
+            # Heating went off before the stretch was closed, and only
             # turned out to stay off for too long afterwards.
             start_ts, closed_end_ts = self._ua_balance_closed
             if start_ts < end_ts < closed_end_ts:
@@ -640,7 +634,6 @@ class RoomMpcModelLearner:
         if (
             not self._history
             or self._learning_paused
-            or not self._learning_window_active
             or self._room_sensor_fallback
             or self._valve_position_missing
             or self._trv_adapting
@@ -686,8 +679,6 @@ class RoomMpcModelLearner:
             return UaBalanceOutcome.RADIATOR_NOT_HEATING
         if self._window_open:
             return UaBalanceOutcome.WINDOW_OPEN
-        if not self._learning_window_active:
-            return UaBalanceOutcome.OUTSIDE_WINDOW
         if not self._history:
             return UaBalanceOutcome.COLLECTING
 
@@ -901,20 +892,35 @@ class RoomMpcModelLearner:
         Only samples from start_ts on count, so a stretch never reaches back
         before its own start. None while the room still moves.
         """
-        end_ts = self._history[index].timestamp
-        window = [
-            entry
-            for entry in self._history[: index + 1]
-            if entry.timestamp >= max(start_ts, end_ts - UA_BALANCE_STATIONARY_WINDOW_S)
-        ]
-        if (
-            len(window) < MIN_HISTORY_SAMPLES
-            or end_ts - window[0].timestamp < UA_BALANCE_STATIONARY_WINDOW_S * 0.9
-        ):
-            return None
-        slope_c_per_h = (
-            self._trend_drift_c(window) / (end_ts - window[0].timestamp) * 3600
+        entry = self._history[index]
+        end_ts = entry.timestamp
+        window_start_ts = end_ts - UA_BALANCE_STATIONARY_WINDOW_S
+        # A full hour inside the history and the stretch reads the same on
+        # every cycle; a cut one depends on where the stretch starts.
+        full_window = window_start_ts >= max(start_ts, self._history[0].timestamp)
+        if full_window and entry.stationary_checked:
+            return entry.stationary_since_ts
+        first = bisect_left(
+            self._history,
+            max(start_ts, window_start_ts),
+            hi=index + 1,
+            key=lambda sample: sample.timestamp,
         )
+        stationary_since_ts = self._held_still_since_ts(
+            self._history[first : index + 1]
+        )
+        if full_window:
+            entry.stationary_checked = True
+            entry.stationary_since_ts = stationary_since_ts
+        return stationary_since_ts
+
+    def _held_still_since_ts(self, window: list[LearnerHistoryEntry]) -> float | None:
+        if len(window) < MIN_HISTORY_SAMPLES:
+            return None
+        duration_s = window[-1].timestamp - window[0].timestamp
+        if duration_s < UA_BALANCE_STATIONARY_WINDOW_S * 0.9:
+            return None
+        slope_c_per_h = self._trend_drift_c(window) / duration_s * 3600
         if abs(slope_c_per_h) >= UA_BALANCE_STATIONARY_SLOPE_C_PER_H:
             return None
         return window[0].timestamp

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Callable, Mapping
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -31,7 +32,6 @@ from homeassistant.helpers.event import (
 )
 from homeassistant.helpers.sun import get_astral_event_date
 from homeassistant.util import dt as dt_util
-from homeassistant.util import slugify
 
 from .const import (
     CONF_BOOST_TEMPERATURE_OFFSET,
@@ -112,10 +112,12 @@ from .store import (
     GainStore,
     LearningFactorsStore,
     ValveCurveStore,
-    async_remove_observer_store,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+RECOMPUTE_DEBOUNCE_S = 1.0
+SUN_EVENT_CACHE_SIZE = 8
 
 LEARNING_CYCLE_INTERVAL = timedelta(minutes=LEARNING_CYCLE_INTERVAL_MINUTES)
 
@@ -350,6 +352,13 @@ class HeatingRoomCoordinator:
         self._started_ts = 0.0
 
         self._unsub: list[Callable[[], None]] = []
+        # Entities report in bursts (a TRV its temperature and valve position,
+        # the heat pump flow and outdoor temperature): one recompute per burst.
+        self._pending_recompute: asyncio.Task[None] | None = None
+        # A recompute awaits TRV writes; a second one in between would plan
+        # and write on half-updated state.
+        self._recompute_lock = asyncio.Lock()
+        self._sun_events: dict[tuple[str, date], datetime | None] = {}
         self._listeners: list[Callable[[], None]] = []
 
     def set_sun_provider(
@@ -400,8 +409,6 @@ class HeatingRoomCoordinator:
         factors = await self.store.async_load()
         if factors is not None:
             self.mpc.recalibrate_learning_factors(factors)
-        else:
-            await self._async_import_legacy_learning_factors()
 
         gains = await self.gain_store.async_load()
         if gains is not None:
@@ -411,10 +418,6 @@ class HeatingRoomCoordinator:
         if flow_gate_state is not None:
             self.mpc.restore_flow_gate_state(flow_gate_state)
             self._persisted_flow_gate_state = flow_gate_state
-
-        # The disturbance observer is gone; its file would stay behind in
-        # .storage -- drop after season 2026/27.
-        await async_remove_observer_store(self.hass, self.room_name, self.room_id)
 
         valve_curves = await self.valve_curve_store.async_load()
         if valve_curves is not None:
@@ -489,34 +492,10 @@ class HeatingRoomCoordinator:
         for unsub in self._unsub:
             unsub()
         self._unsub = []
+        if self._pending_recompute is not None:
+            self._pending_recompute.cancel()
+            self._pending_recompute = None
         self.mpc.destroy()
-
-    async def _async_import_legacy_learning_factors(self) -> None:
-        slug = slugify(self.room_name)
-        ua_state = self.hass.states.get(f"text.{slug}_ua_factor")
-        capacity_state = self.hass.states.get(f"text.{slug}_capacity_factor")
-        if ua_state is None or capacity_state is None:
-            return
-
-        try:
-            factors = LearningFactors(
-                ua_factor=float(ua_state.state),
-                capacity_factor=float(capacity_state.state),
-            )
-        except ValueError:
-            _LOGGER.warning(
-                "Could not parse legacy learning factors for room %s", self.room_name
-            )
-            return
-
-        self.mpc.recalibrate_learning_factors(factors)
-        await self.store.async_save(factors)
-        _LOGGER.info(
-            "Imported legacy learning factors for room %s: ua_factor=%s capacity_factor=%s",
-            self.room_name,
-            factors.ua_factor,
-            factors.capacity_factor,
-        )
 
     def _refresh_temperature_inputs(self) -> None:
         for index, entity_id in enumerate(self._trv_entity_ids):
@@ -702,15 +681,20 @@ class HeatingRoomCoordinator:
 
     @callback
     def _async_handle_state_change(self, event: Event[EventStateChangedData]) -> None:
-        entity_id = event.data["entity_id"]
-        new_state = event.data["new_state"]
-        self.hass.async_create_task(
-            self._async_process_state_change(entity_id, new_state)
-        )
+        self._apply_state_change(event.data["entity_id"], event.data["new_state"])
+        if self._pending_recompute is None:
+            self._pending_recompute = self.hass.async_create_task(
+                self._async_recompute_after_burst()
+            )
 
-    async def _async_process_state_change(
-        self, entity_id: str, new_state: State | None
-    ) -> None:
+    async def _async_recompute_after_burst(self) -> None:
+        await asyncio.sleep(RECOMPUTE_DEBOUNCE_S)
+        # Cleared first: a change that arrives while this one computes gets
+        # its own recompute.
+        self._pending_recompute = None
+        await self._async_recompute()
+
+    def _apply_state_change(self, entity_id: str, new_state: State | None) -> None:
         if entity_id in self._trv_entity_ids:
             index = self._trv_entity_ids.index(entity_id)
             self.mpc.set_trv_temperature(
@@ -750,8 +734,6 @@ class HeatingRoomCoordinator:
 
         elif entity_id == self._learning_block_entity:
             self._learning_blocked = self._bool_from_state(new_state)
-
-        await self._async_recompute()
 
     async def _async_handle_learning_cycle(self, _now: Any) -> None:
         self.mpc.run_learning_cycle()
@@ -809,17 +791,24 @@ class HeatingRoomCoordinator:
         moment = dt_util.utc_from_timestamp(timestamp)
         today = dt_util.as_local(moment).date()
 
-        sunset_today = get_astral_event_date(self.hass, SUN_EVENT_SUNSET, today)
+        sunset_today = self._sun_event(SUN_EVENT_SUNSET, today)
         if sunset_today is not None and moment >= sunset_today + SUNSET_LEARNING_DELAY:
             return True
 
-        sunrise_today = get_astral_event_date(self.hass, SUN_EVENT_SUNRISE, today)
-        sunset_yesterday = get_astral_event_date(
-            self.hass, SUN_EVENT_SUNSET, today - timedelta(days=1)
-        )
+        sunrise_today = self._sun_event(SUN_EVENT_SUNRISE, today)
+        sunset_yesterday = self._sun_event(SUN_EVENT_SUNSET, today - timedelta(days=1))
         if sunrise_today is None or sunset_yesterday is None:
             return False
         return sunset_yesterday + SUNSET_LEARNING_DELAY <= moment < sunrise_today
+
+    def _sun_event(self, event: str, day: date) -> datetime | None:
+        # The learner asks for every sample of its history on every cycle.
+        key = (event, day)
+        if key not in self._sun_events:
+            if len(self._sun_events) >= SUN_EVENT_CACHE_SIZE:
+                self._sun_events.clear()
+            self._sun_events[key] = get_astral_event_date(self.hass, event, day)
+        return self._sun_events[key]
 
     @property
     def flow_threshold_c(self) -> float:
@@ -841,6 +830,10 @@ class HeatingRoomCoordinator:
         return value
 
     async def _async_recompute(self) -> None:
+        async with self._recompute_lock:
+            await self._async_recompute_locked()
+
+    async def _async_recompute_locked(self) -> None:
         self.mpc.set_flow_threshold_c(self.flow_threshold_c)
         if self.hot_water_charge_provider is not None:
             self.mpc.set_external_hot_water_charge(self.hot_water_charge_provider())

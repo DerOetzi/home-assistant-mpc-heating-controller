@@ -321,17 +321,6 @@ def test_capacity_window_after_the_resume_learns():
     assert capacity_model.learned_capacity_factor != 1.0
 
 
-def test_inactive_learning_window_still_lets_capacity_learn():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-    learner.set_learning_window_active(False, START_TS - 600)
-
-    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
-
-    assert learner.get_learning_state().status == LearningStatus.LEARNED
-    assert capacity_model.learned_capacity_factor != 1.0
-
-
 def test_sun_condition_blocks_capacity():
     learner, _, capacity_model = make_learner()
     learner.enable()
@@ -396,12 +385,12 @@ def test_heat_balance_keeps_collecting_until_the_maximum_window():
     assert loss_model.learned_ua_factor == 1.0
 
 
-def test_closing_the_learning_window_balances_the_stretch():
+def test_pausing_learning_balances_the_stretch():
     learner, loss_model, _ = make_learner()
     learner.enable()
 
     end_ts = feed_night(learner, hours=5)
-    learner.set_learning_window_active(False, end_ts + 60)
+    learner.set_learning_paused(True, end_ts + 60)
     learner.run_learning_cycle()
 
     assert learner.get_learning_state().status == LearningStatus.LEARNED
@@ -414,7 +403,7 @@ def test_heat_balance_needs_the_minimum_window():
     learner.enable()
 
     end_ts = feed_night(learner, hours=UA_BALANCE_MIN_WINDOW_S / 3600 - 0.5)
-    learner.set_learning_window_active(False, end_ts + 60)
+    learner.set_learning_paused(True, end_ts + 60)
     learner.run_learning_cycle()
 
     assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.TOO_SHORT
@@ -426,12 +415,12 @@ def test_closed_stretch_is_balanced_only_once():
     learner.enable()
 
     end_ts = feed_night(learner, hours=5)
-    learner.set_learning_window_active(False, end_ts + 60)
+    learner.set_learning_paused(True, end_ts + 60)
     learner.run_learning_cycle()
     after_first = loss_model.learned_ua_factor
     learner.run_learning_cycle()
 
-    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.OUTSIDE_WINDOW
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.PAUSED
     assert loss_model.learned_ua_factor == after_first
 
 
@@ -521,43 +510,6 @@ def test_heat_balance_skips_windows_with_gaps():
     learner.enable()
 
     feed_night(learner, skip=range(20, 26))
-    learner.run_learning_cycle()
-
-    assert loss_model.learned_ua_factor == 1.0
-
-
-def test_heat_balance_starts_when_the_learning_window_opens():
-    learner, _, _ = make_learner()
-    learner.enable()
-    learner.set_learning_window_active(False, NIGHT_START_TS)
-    learner.set_learning_window_active(True, NIGHT_START_TS + 3600)
-
-    feed_night(learner)
-    learner.run_learning_cycle()
-
-    info = learner.get_ua_balance_info()
-    assert info.outcome == UaBalanceOutcome.COLLECTING
-    assert info.collecting_since_ts == NIGHT_START_TS + 3600
-
-
-def test_heat_balance_learns_when_the_learning_window_opened_before():
-    learner, loss_model, _ = make_learner()
-    learner.enable()
-    learner.set_learning_window_active(False, NIGHT_START_TS - 7200)
-    learner.set_learning_window_active(True, NIGHT_START_TS - 3600)
-
-    feed_night(learner)
-    learner.run_learning_cycle()
-
-    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
-
-
-def test_inactive_learning_window_blocks_the_heat_balance():
-    learner, loss_model, _ = make_learner()
-    learner.enable()
-    learner.set_learning_window_active(False, NIGHT_START_TS - 60)
-
-    feed_night(learner)
     learner.run_learning_cycle()
 
     assert loss_model.learned_ua_factor == 1.0
@@ -719,8 +671,7 @@ def test_a_room_moving_after_sunrise_is_outside_the_window_not_coasting():
     assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.OUTSIDE_WINDOW
 
 
-def test_closing_the_learning_window_after_sunrise_balances_nothing():
-    # All rooms, 31 October: night mode off an hour after sunrise.
+def test_pausing_learning_after_sunrise_balances_nothing():
     learner, loss_model, _ = make_learner()
     learner.enable()
     sunrise_ts = NIGHT_START_TS + 6 * 3600
@@ -730,10 +681,10 @@ def test_closing_the_learning_window_after_sunrise_balances_nothing():
     learner.run_learning_cycle()
     learned_factor = loss_model.learned_ua_factor
 
-    learner.set_learning_window_active(False, end_ts + 60)
+    learner.set_learning_paused(True, end_ts + 60)
     learner.run_learning_cycle()
 
-    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.OUTSIDE_WINDOW
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.PAUSED
     assert loss_model.learned_ua_factor == learned_factor
 
 
@@ -772,7 +723,7 @@ def test_short_heating_interruption_is_bridged_as_no_heating():
     learner.enable(now_ts=off_ts + 15 * 60 + 1)
 
     end_ts = feed_night(learner, hours=6)
-    learner.set_learning_window_active(False, end_ts + 60)
+    learner.set_learning_paused(True, end_ts + 60)
     learner.run_learning_cycle()
 
     info = learner.get_ua_balance_info()
@@ -942,19 +893,6 @@ def test_balance_info_names_why_a_balance_was_skipped(kwargs, outcome):
     learner.run_learning_cycle()
 
     assert learner.get_ua_balance_info().outcome == outcome
-
-
-def test_balance_info_reports_an_inactive_learning_window():
-    learner, _, _ = make_learner()
-    learner.enable()
-    learner.set_learning_window_active(False, NIGHT_START_TS)
-
-    feed_night(learner)
-    learner.run_learning_cycle()
-
-    info = learner.get_ua_balance_info()
-    assert info.outcome == UaBalanceOutcome.OUTSIDE_WINDOW
-    assert info.collecting_since_ts is None
 
 
 def test_heat_balance_discards_a_target_above_the_limit():
@@ -1407,7 +1345,7 @@ def test_heat_balance_starts_once_the_room_has_settled():
     assert info.outcome == UaBalanceOutcome.COLLECTING
     assert info.collecting_since_ts == NIGHT_START_TS + settled_index * STEP_S
 
-    learner.set_learning_window_active(False, end_ts + 60)
+    learner.set_learning_paused(True, end_ts + 60)
     learner.run_learning_cycle()
 
     info = learner.get_ua_balance_info()
@@ -1463,6 +1401,21 @@ def test_a_still_room_counts_from_the_start_of_its_still_hour():
     still_since_ts = NIGHT_START_TS + coast_steps * STEP_S
     assert info.collecting_since_ts == pytest.approx(still_since_ts, abs=3 * STEP_S)
     assert info.collecting_since_ts < NIGHT_START_TS + 2 * 3600
+
+
+def test_a_later_cycle_finds_the_same_still_hour():
+    learner, _, _ = make_learner()
+    learner.enable()
+
+    coast_steps = 12
+    temps = [21.8 - 0.4 * min(index, coast_steps) / coast_steps for index in range(37)]
+    feed_night(learner, hours=3, room_temps=temps, target_temp_c=21.0)
+    learner.run_learning_cycle()
+    first_since_ts = learner.get_ua_balance_info().collecting_since_ts
+    learner.run_learning_cycle()
+
+    assert first_since_ts is not None
+    assert learner.get_ua_balance_info().collecting_since_ts == first_since_ts
 
 
 def _pulsing_temps():
@@ -1746,7 +1699,7 @@ def test_a_drifting_still_start_is_retried_from_where_the_room_came_near():
         for index in range(NIGHT_COUNT)
     ]
     end_ts = feed_night(learner, room_temps=temps, target_temp_c=21.0)
-    learner.set_learning_window_active(False, end_ts + 60)
+    learner.set_learning_paused(True, end_ts + 60)
     learner.run_learning_cycle()
 
     near_index = next(i for i, t in enumerate(temps) if t <= 21.1 + 1e-9)

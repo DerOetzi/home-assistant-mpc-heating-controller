@@ -1,6 +1,6 @@
 import pytest
 from heating_controller.const import DOMAIN, HUB_TITLE, SUBENTRY_TYPE_ROOM
-from heating_controller.migration import HUB_VERSION
+from heating_controller.const import HUB_VERSION
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, InvalidData

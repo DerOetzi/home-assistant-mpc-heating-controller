@@ -25,7 +25,6 @@ from homeassistant.helpers import (
     target,
 )
 from homeassistant.helpers.service import async_register_admin_service
-from homeassistant.helpers.typing import ConfigType
 
 from . import frontend
 from .const import (
@@ -36,6 +35,7 @@ from .const import (
     CONF_ROOM_NAME,
     CONF_TRVS,
     DOMAIN,
+    HUB_VERSION,
     SERVICE_RECALIBRATE,
     SERVICE_UNBLOCK,
     SUBENTRY_TYPE_FLOW,
@@ -51,7 +51,6 @@ from .coordinator import HeatingRoomCoordinator
 from .flow_device import FlowDevice
 from .hot_water_device import HotWaterDevice
 from .hub import HeatingHub
-from .migration import HUB_VERSION, async_migrate_rooms_to_hub
 from .profiles import (
     DeviceProfile,
     TrvResolveError,
@@ -105,13 +104,6 @@ PLATFORMS = [
 ]
 
 type HeatingConfigEntry = ConfigEntry[HeatingHub]
-
-
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    # Runs before any entry is set up, so the rooms of config version 7 can
-    # move into the hub before HA lists the entries to set up.
-    await async_migrate_rooms_to_hub(hass)
-    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: HeatingConfigEntry) -> bool:
@@ -227,12 +219,10 @@ async def _async_update_listener(
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    # Rooms of version 7 move into the hub in async_setup; anything older is
-    # not supported any more.
     if entry.version < HUB_VERSION:
         _LOGGER.error(
-            "Config entry %s has version %s; only version 7 rooms migrate to the "
-            "hub. Remove it and add the room to the hub again",
+            "Config entry %s has version %s, which is not supported any more. "
+            "Remove it and add the room to the hub again",
             entry.title,
             entry.version,
         )
@@ -254,10 +244,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: HeatingConfigEntry) -> 
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    # A room entry of version 7 is removed by the move into the hub; its
-    # stores belong to its subentry now and stay.
-    if entry.version < HUB_VERSION:
-        return
     await HubStore(hass, entry.entry_id).async_remove()
     for subentry in entry.subentries.values():
         if subentry.subentry_type != SUBENTRY_TYPE_ROOM:

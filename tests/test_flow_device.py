@@ -12,7 +12,7 @@ from heating_controller.const import (
     SUBENTRY_TYPE_ROOM,
 )
 from heating_controller.control.flow import FALLBACK_GRACE_S
-from heating_controller.migration import HUB_VERSION
+from heating_controller.const import HUB_VERSION
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.data_entry_flow import FlowResultType

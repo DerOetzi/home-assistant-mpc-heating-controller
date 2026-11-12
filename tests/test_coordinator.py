@@ -20,7 +20,7 @@ from heating_controller.coordinator import (
     ROOM_SENSOR_STARTUP_GRACE_S,
     HeatingRoomCoordinator,
 )
-from heating_controller.migration import HUB_VERSION
+from heating_controller.const import HUB_VERSION
 from heating_controller.profiles import StatusMatch, TrvBinding
 from homeassistant.const import (
     EVENT_HOMEASSISTANT_FINAL_WRITE,
@@ -783,32 +783,6 @@ async def test_setup_tolerates_missing_heat_source_climate_entity(
     coordinator.async_unload()
 
 
-async def test_legacy_learning_factors_imported_from_room_prefixed_text_entities(
-    hass: HomeAssistant,
-) -> None:
-    """Legacy entities are named <room>_ua_factor / <room>_capacity_factor
-    (room-prefixed), not ua_factor_<room> — this pins that exact order."""
-    _seed_entities(hass)
-    hass.states.async_set("text.wohnzimmer_ua_factor", "0.9982289915877139")
-    hass.states.async_set("text.wohnzimmer_capacity_factor", "1.0074397084454827")
-
-    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
-    entry.add_to_hass(hass)
-
-    coordinator = _coordinator(hass, entry, _trvs())
-    _register_fake_climate_set_temperature(hass)
-    await coordinator.async_setup()
-
-    assert coordinator.mpc.learned_ua_factor == 0.9982289915877139
-    assert coordinator.mpc.learned_capacity_factor == 1.0074397084454827
-
-    saved = await coordinator.store.async_load()
-    assert saved.ua_factor == 0.9982289915877139
-    assert saved.capacity_factor == 1.0074397084454827
-
-    coordinator.async_unload()
-
-
 async def test_house_and_room_switch_both_gate_comfort(hass: HomeAssistant) -> None:
     _seed_entities(hass)
     data = {**ENTRY_DATA, "room_comfort_switch": True}
@@ -1015,15 +989,6 @@ async def _setup_coordinator(
     return coordinator
 
 
-async def test_learning_window_stays_open(hass: HomeAssistant) -> None:
-    _seed_entities(hass)
-    coordinator = await _setup_coordinator(hass)
-
-    assert coordinator.mpc._learner._learning_window_active is True
-
-    coordinator.async_unload()
-
-
 async def test_learning_block_follows_the_linked_entity(hass: HomeAssistant) -> None:
     _seed_entities(hass)
     hass.states.async_set("binary_sensor.extra_heater", "on")
@@ -1143,6 +1108,38 @@ async def test_sun_condition_needs_two_hours_after_sunset_and_ends_at_sunrise(
     assert met(next_sunrise - timedelta(minutes=1)) is True
     assert met(next_sunrise + timedelta(minutes=1)) is False
 
+    coordinator.async_unload()
+
+
+async def test_a_burst_of_state_changes_recomputes_once(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_entities(hass, flow_temp=42.0)
+    hass.states.async_set("climate.heat_source", "heat", {"current_temperature": 20.0})
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+
+    coordinator = _coordinator(hass, entry, _trvs())
+    _register_fake_climate_set_temperature(hass)
+    await coordinator.async_setup()
+
+    recomputes = 0
+    recompute = coordinator._async_recompute_locked
+
+    async def counting_recompute() -> None:
+        nonlocal recomputes
+        recomputes += 1
+        await recompute()
+
+    monkeypatch.setattr(coordinator, "_async_recompute_locked", counting_recompute)
+
+    hass.states.async_set("sensor.flow_temperature", "25.0")
+    hass.states.async_set("sensor.flow_temperature", "26.0")
+    hass.states.async_set("sensor.flow_temperature", "27.0")
+    await hass.async_block_till_done()
+
+    assert recomputes == 1
+    assert coordinator.last_result.input.flow_temp_c == 27.0
     coordinator.async_unload()
 
 

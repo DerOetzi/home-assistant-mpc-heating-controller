@@ -269,9 +269,6 @@ fallback offset that fits the target opening poorly, so give a profile for a new
 starting value. The Danfoss Ally profiles carry the values
 above, read off one TRV in October 2026; each TRV replaces them with what it learns.
 
-Upgrading from a version that configured TRVs by entity migrates every TRV to its device.
-A room with a TRV no profile covers stops with a migration error in the log.
-
 ## Dashboard card
 
 Once a room's entities exist, add a `custom:heating-controller-card` to a dashboard (via the

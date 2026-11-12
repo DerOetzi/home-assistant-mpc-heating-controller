@@ -4,6 +4,10 @@ from enum import StrEnum
 
 DOMAIN = "heating_controller"
 
+# Config entry version of the hub that holds rooms, flow and hot water as
+# subentries.
+HUB_VERSION = 8
+
 DEFAULT_COMFORT_TEMPERATURE_C = 22.0
 DEFAULT_ECO_TEMPERATURE_OFFSET_C = -2.0
 DEFAULT_FLOW_THRESHOLD_C = 30.0
