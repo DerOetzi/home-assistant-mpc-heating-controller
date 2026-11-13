@@ -1,6 +1,5 @@
 import pytest
-from heating_controller.const import DOMAIN, HUB_TITLE, SUBENTRY_TYPE_ROOM
-from heating_controller.const import HUB_VERSION
+from heating_controller.const import DOMAIN, HUB_TITLE, HUB_VERSION, SUBENTRY_TYPE_ROOM
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
@@ -35,7 +34,6 @@ HUB_CONTROL = {
     "mpc_hold_override_demand_pct": 40.0,
     "mpc_max_demand_step_pct": 20.0,
     "max_sensor_age_s": 1800.0,
-    "stationary_range_c": 0.3,
     "target_band_c": 0.15,
 }
 ROOM_SIGNALS = {

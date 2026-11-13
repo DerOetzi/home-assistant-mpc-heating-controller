@@ -1072,7 +1072,7 @@ class UaLearningStatusSensor(_DiagnosticSensor):
 
 
 class CapacityLearningStatusSensor(_DiagnosticSensor):
-    """What the last 30-minute replay did with the capacity factor."""
+    """Outcome of the last jump stretch."""
 
     _attr_translation_key = "capacity_learning_status"
     _attr_device_class = SensorDeviceClass.ENUM
@@ -1087,8 +1087,16 @@ class CapacityLearningStatusSensor(_DiagnosticSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        info = self._coordinator.mpc.get_capacity_info()
         return {
-            "capacity_j_per_k": round(self._coordinator.mpc.effective_capacity_j_per_k)
+            "capacity_j_per_k": round(self._coordinator.mpc.effective_capacity_j_per_k),
+            "last_stretch_kind": info.kind,
+            "last_stretch_start": _iso(info.start_ts),
+            "last_stretch_end": _iso(info.end_ts),
+            "last_stretch_room_delta_c": _rounded(info.room_delta_c, 2),
+            "last_stretch_estimate_factor": _rounded(info.estimate_factor, 3),
+            "last_stretch_saturated_share": _rounded(info.saturated_share, 2),
+            "last_learned": _iso(info.last_learned_ts),
         }
 
 

@@ -4,6 +4,7 @@ from dataclasses import KW_ONLY, dataclass
 
 from ...const import (
     DEFAULT_FLOW_THRESHOLD_C,
+    CapacityOutcome,
     Construction,
     DesignTemperatureSystem,
     HeatEmitterType,
@@ -94,3 +95,18 @@ class UaBalanceInfo:
     last_mean_room_c: float | None = None
     last_mean_flow_c: float | None = None
     last_mean_heating_w: float | None = None
+
+
+@dataclass
+class CapacityStretchInfo:
+    """The last jump stretch the capacity was judged on, for diagnostics."""
+
+    outcome: CapacityOutcome = CapacityOutcome.WAITING
+    # "heat_up" or "cool_down"
+    kind: str | None = None
+    start_ts: float | None = None
+    end_ts: float | None = None
+    room_delta_c: float | None = None
+    estimate_factor: float | None = None
+    saturated_share: float | None = None
+    last_learned_ts: float | None = None

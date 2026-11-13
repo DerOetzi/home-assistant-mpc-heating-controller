@@ -52,7 +52,10 @@ async def async_setup_entry(
         lambda hot_water: (
             [HotWaterBoostSwitch(hot_water)]
             + (
-                [CirculationContinuousSwitch(hot_water)]
+                [
+                    CirculationMainSwitch(hot_water),
+                    CirculationContinuousSwitch(hot_water),
+                ]
                 if hot_water.circulation_enabled
                 else []
             )
@@ -181,6 +184,28 @@ class HotWaterBoostSwitch(HotWaterEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         self._hot_water.set_boost(False)
+        self.async_write_ha_state()
+
+
+class CirculationMainSwitch(HotWaterEntity, SwitchEntity):
+    """Off: pump stays off, overriding continuous runs and legionella."""
+
+    _attr_translation_key = "circulation_main"
+    _attr_icon = "mdi:power"
+
+    def __init__(self, hot_water: HotWaterDevice) -> None:
+        super().__init__(hot_water, "circulation_main")
+
+    @property
+    def is_on(self) -> bool:
+        return self._hot_water.circulation_main
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        self._hot_water.set_circulation_main(True)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        self._hot_water.set_circulation_main(False)
         self.async_write_ha_state()
 
 

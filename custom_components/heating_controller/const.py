@@ -16,11 +16,6 @@ DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C = 0.5
 DEFAULT_FLOW_GATE_OPEN_SURPLUS_C = 0.2
 DEFAULT_FLOW_GATE_HOLD_TIME_S = 900.0
 
-DEFAULT_STATIONARY_RANGE_C = 0.2
-MIN_STATIONARY_RANGE_C = 0.1
-MAX_STATIONARY_RANGE_C = 1.0
-STATIONARY_RANGE_STEP_C = 0.05
-
 # Band below the setpoint the demand counts as on target in: one step of the
 # usual 0.1 K room sensor.
 DEFAULT_TARGET_BAND_C = 0.1
@@ -96,7 +91,6 @@ CONF_FLOW_GATE_CLOSE_SURPLUS = "flow_gate_close_surplus_c"
 CONF_FLOW_GATE_OPEN_SURPLUS = "flow_gate_open_surplus_c"
 CONF_FLOW_GATE_HOLD_TIME = "flow_gate_hold_time_s"
 CONF_MAX_SENSOR_AGE = "max_sensor_age_s"
-CONF_STATIONARY_RANGE = "stationary_range_c"
 CONF_TARGET_BAND = "target_band_c"
 CONF_TRV_SETPOINT_MODE = "trv_setpoint_mode"
 # Sun on the building: how the house is turned, its roof, and which day
@@ -152,7 +146,6 @@ HUB_KEYS = (
     CONF_FLOW_GATE_OPEN_SURPLUS,
     CONF_FLOW_GATE_HOLD_TIME,
     CONF_MAX_SENSOR_AGE,
-    CONF_STATIONARY_RANGE,
     CONF_TARGET_BAND,
     CONF_TRV_SETPOINT_MODE,
     CONF_BUILDING_ROTATION,
@@ -326,21 +319,32 @@ class UaBalanceOutcome(StrEnum):
 
 
 class CapacityOutcome(StrEnum):
+    """Outcome of the last jump stretch (setpoint step and the room following)."""
+
+    # No stretch since the start.
+    WAITING = "waiting"
+    # A stretch is still running.
+    RUNNING = "running"
+    # A heat-up stretch moved the factor.
     LEARNED = "learned"
-    STATIONARY = "stationary"
-    SMALL_ERROR = "small_error"
-    SMALL_CHANGE = "small_change"
+    # A cool-down stretch gave an estimate; the factor stays.
+    ESTIMATED = "estimated"
+    TOO_SHORT = "too_short"
+    # The room moved too little, or its sensor reported too few values.
+    TOO_SMALL = "too_small"
+    GAP = "gap"
+    # Sun on the room's windows during or before the stretch.
     OUTSIDE_WINDOW = "outside_window"
-    DISTURBED = "disturbed"
-    SUPPRESSED = "suppressed"
+    # Heat and temperature change disagree in sign, or the estimate is out
+    # of range.
+    IMPLAUSIBLE = "implausible"
+    # Window open or its contact unknown when the stretch started.
+    WINDOW_OPEN = "window_open"
     ROOM_SENSOR_FALLBACK = "room_sensor_fallback"
     VALVE_POSITION_MISSING = "valve_position_missing"
     TRV_ADAPTING = "trv_adapting"
     RADIATOR_NOT_HEATING = "radiator_not_heating"
-    OUTDOOR_TEMPERATURE_MISSING = "outdoor_temperature_missing"
     PAUSED = "paused"
-    WAITING = "waiting"
-    DISABLED = "disabled"
 
 
 class RoofOrientation(StrEnum):

@@ -31,7 +31,6 @@
           "flow_gate_open_surplus_c": "Surplus gate: reopen below setpoint + (K)",
           "flow_gate_hold_time_s": "Surplus gate: hold time before closing (s)",
           "max_sensor_age_s": "Max sensor age (s)",
-          "stationary_range_c": "Stationary range for learning (K)",
           "target_band_c": "Target band below setpoint (K)",
           "trv_setpoint_mode": "TRV target mode"
         }
@@ -531,21 +530,21 @@
       "capacity_learning_status": {
         "name": "Capacity learning status",
         "state": {
-          "learned": "Learned",
-          "stationary": "Room stationary",
-          "small_error": "Error too small",
-          "small_change": "Change too small",
-          "outside_window": "Outside the learning window",
-          "disturbed": "Window disturbed",
-          "suppressed": "Suppressed",
-          "room_sensor_fallback": "Room sensor missing",
-          "paused": "Paused",
           "waiting": "Waiting",
-          "disabled": "Disabled",
+          "running": "Stretch running",
+          "learned": "Learned",
+          "estimated": "Estimated",
+          "too_short": "Stretch too short",
+          "too_small": "Change too small",
+          "gap": "Gap in data",
+          "outside_window": "Sun on the windows",
+          "implausible": "Implausible",
+          "window_open": "Window open",
+          "room_sensor_fallback": "Room sensor missing",
           "valve_position_missing": "Valve position missing",
           "trv_adapting": "TRV calibrating",
           "radiator_not_heating": "Radiator not heating",
-          "outdoor_temperature_missing": "Outdoor temperature missing"
+          "paused": "Paused"
         }
       },
       "valve_curve": {
@@ -653,6 +652,7 @@
       "circulation_reason": {
         "name": "Circulation reason",
         "state": {
+          "disabled": "Main switch off",
           "continuous": "Continuous run",
           "blocked": "Blocked",
           "gates_closed": "Nobody home / night",
@@ -677,6 +677,9 @@
       },
       "hot_water_boost": {
         "name": "Hot water boost"
+      },
+      "circulation_main": {
+        "name": "Circulation main switch"
       },
       "circulation_continuous": {
         "name": "Circulation continuous run"

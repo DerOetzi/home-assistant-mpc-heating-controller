@@ -14,6 +14,7 @@ NOON = datetime(2026, 11, 5, 12, 0)  # off-peak
 def _inputs(now: datetime = MORNING, **overrides) -> CirculationInputs:
     values = {
         "now": now,
+        "enabled": True,
         "pump_on": False,
         "pump_minutes": 10.0,
         "return_c": 42.0,
@@ -25,6 +26,20 @@ def _inputs(now: datetime = MORNING, **overrides) -> CirculationInputs:
     }
     values.update(overrides)
     return CirculationInputs(**values)
+
+
+def test_main_switch_off_overrides_everything() -> None:
+    ctrl = CirculationController(CirculationConfig(release_enabled=True))
+    for inputs in (
+        _inputs(enabled=False, return_c=20.0),
+        _inputs(enabled=False, continuous=True, pump_on=True, return_c=60.0),
+        _inputs(enabled=False, draw=True, return_c=20.0),
+        _inputs(enabled=False, return_c=None),
+    ):
+        decision = ctrl.decide(inputs)
+        assert decision.pump_on is False
+        assert decision.reason is CirculationReason.DISABLED
+        assert decision.release is False
 
 
 def test_starts_below_peak_threshold_and_stops_hot() -> None:

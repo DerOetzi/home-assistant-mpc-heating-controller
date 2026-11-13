@@ -2,7 +2,6 @@ from dataclasses import replace
 
 import pytest
 from heating_controller.const import (
-    CapacityOutcome,
     Construction,
     DesignTemperatureSystem,
     PanelRadiatorType,
@@ -972,9 +971,6 @@ def test_missing_outdoor_temperature_pauses_learning():
     assert controller.outdoor_temperature_missing is True
     assert controller.get_ua_balance_info().outcome == (
         UaBalanceOutcome.OUTDOOR_TEMPERATURE_MISSING
-    )
-    assert controller.get_capacity_outcome() == (
-        CapacityOutcome.OUTDOOR_TEMPERATURE_MISSING
     )
 
 

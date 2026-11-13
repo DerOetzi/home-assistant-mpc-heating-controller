@@ -168,6 +168,9 @@ async def test_capacity_learning_status_sensor_reports_the_replay(
     assert status.state == "waiting"
     # 20 m² medium construction, learned factor 1.0.
     assert status.attributes["capacity_j_per_k"] == 20 * 165 * 1000
+    assert status.attributes["last_stretch_kind"] is None
+    assert status.attributes["last_stretch_estimate_factor"] is None
+    assert status.attributes["last_learned"] is None
 
 
 def test_valve_curve_sensor_shows_status_and_rounded_bins() -> None:

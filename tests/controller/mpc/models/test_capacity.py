@@ -66,4 +66,4 @@ def test_learned_capacity_factor_is_clamped():
     assert model.learned_capacity_factor == MAX_LEARNED_CAPACITY_FACTOR
 
     model.learned_capacity_factor = -5
-    assert model.learned_capacity_factor == MIN_LEARNED_CAPACITY_FACTOR
+    assert model.learned_capacity_factor == MIN_LEARNED_CAPACITY_FACTOR == 0.15

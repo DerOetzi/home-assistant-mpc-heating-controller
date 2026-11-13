@@ -7,8 +7,6 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, HomeAssistant, ServiceCall
 from homeassistant.exceptions import Unauthorized
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.storage import Store
-from homeassistant.util import slugify
 from pytest_homeassistant_custom_component.common import MockConfigEntry, MockUser
 from test_coordinator import (
     ENTRY_DATA,

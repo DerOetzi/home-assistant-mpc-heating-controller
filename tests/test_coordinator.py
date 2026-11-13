@@ -5,10 +5,10 @@ from datetime import date, datetime, timedelta
 import pytest
 from heating_controller.const import (
     DEFAULT_FLOW_THRESHOLD_C,
-    DEFAULT_STATIONARY_RANGE_C,
     DOMAIN,
     HUB_KEYS,
     HUB_TITLE,
+    HUB_VERSION,
     SUBENTRY_TYPE_ROOM,
     FlowSupplyStatus,
     HeatMode,
@@ -20,7 +20,6 @@ from heating_controller.coordinator import (
     ROOM_SENSOR_STARTUP_GRACE_S,
     HeatingRoomCoordinator,
 )
-from heating_controller.const import HUB_VERSION
 from heating_controller.profiles import StatusMatch, TrvBinding
 from homeassistant.const import (
     EVENT_HOMEASSISTANT_FINAL_WRITE,
@@ -1048,24 +1047,6 @@ async def test_learning_is_not_paused_without_a_linked_entity(
     coordinator.async_unload()
 
 
-async def test_stationary_range_comes_from_the_entry(hass: HomeAssistant) -> None:
-    _seed_entities(hass)
-    coordinator = await _setup_coordinator(hass, stationary_range_c=0.5)
-
-    assert coordinator.mpc._learner._stationary_range_c == 0.5
-
-    coordinator.async_unload()
-
-
-async def test_stationary_range_defaults_without_a_setting(hass: HomeAssistant) -> None:
-    _seed_entities(hass)
-    coordinator = await _setup_coordinator(hass)
-
-    assert coordinator.mpc._learner._stationary_range_c == DEFAULT_STATIONARY_RANGE_C
-
-    coordinator.async_unload()
-
-
 async def test_closing_the_window_frees_capacity_before_ua(hass: HomeAssistant) -> None:
     _seed_entities(hass)
     coordinator = await _setup_coordinator(hass)
@@ -1080,7 +1061,7 @@ async def test_closing_the_window_frees_capacity_before_ua(hass: HomeAssistant) 
 
     assert learner._window_open is False
     ua_until = learner._ua_blocked_until_ts - before_close
-    capacity_until = learner._capacity_suppression.suppressed_until_ts - before_close
+    capacity_until = learner._capacity_blocked_until_ts - before_close
     assert 29 * 60 < ua_until <= 31 * 60
     assert 9 * 60 < capacity_until <= 11 * 60
 

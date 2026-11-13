@@ -62,7 +62,6 @@ from .const import (
     CONF_ROOM_HEAT_LOAD,
     CONF_ROOM_NAME,
     CONF_ROOM_SENSOR_ENTITY,
-    CONF_STATIONARY_RANGE,
     CONF_TARGET_BAND,
     CONF_TRV_EMITTER_TYPE,
     CONF_TRV_HEIGHT_MM,
@@ -77,7 +76,6 @@ from .const import (
     DEFAULT_FLOW_GATE_HOLD_TIME_S,
     DEFAULT_FLOW_GATE_OPEN_SURPLUS_C,
     DEFAULT_FLOW_THRESHOLD_C,
-    DEFAULT_STATIONARY_RANGE_C,
     HEAT_SOURCE_ACTIVE_STATE,
     LEARNING_CYCLE_INTERVAL_MINUTES,
     SENSOR_POLL_INTERVAL_MINUTES,
@@ -313,9 +311,6 @@ class HeatingRoomCoordinator:
             trv_setpoint_mode=TrvSetpointMode(self.data[CONF_TRV_SETPOINT_MODE]),
             flow_gate_config=flow_gate_config,
         )
-        self.mpc.set_stationary_range_c(
-            self.data.get(CONF_STATIONARY_RANGE, DEFAULT_STATIONARY_RANGE_C)
-        )
         self.mpc.set_sun_condition(self.is_sun_condition_met)
         self.mpc.set_gain_context(
             self.profile_index_at, self.local_day_at, self.fresh_sun_series
@@ -433,6 +428,7 @@ class HeatingRoomCoordinator:
         for entity_id in self.data.get(CONF_WINDOW_CONTACT_ENTITIES, []):
             self.state.update_window_state(entity_id, self._is_on(entity_id))
         self.mpc.set_window_open(self.state.is_window_open, time.time())
+        self._update_window_unknown()
 
         if self._learning_block_entity:
             self._learning_blocked = self._is_on(self._learning_block_entity)
@@ -655,6 +651,17 @@ class HeatingRoomCoordinator:
     def _float_state(self, entity_id: str) -> float | None:
         return self._float_from_state(self.hass.states.get(entity_id))
 
+    def _update_window_unknown(self) -> None:
+        # A contact that is unavailable counts as closed for control, but a
+        # jump stretch must not start on it: the window may well be open.
+        self.mpc.set_window_unknown(
+            any(
+                (state := self.hass.states.get(entity_id)) is None
+                or state.state not in (STATE_ON, STATE_OFF)
+                for entity_id in self.data.get(CONF_WINDOW_CONTACT_ENTITIES, [])
+            )
+        )
+
     @staticmethod
     def _bool_from_state(state: State | None) -> bool:
         return state is not None and state.state == STATE_ON
@@ -733,6 +740,7 @@ class HeatingRoomCoordinator:
                 entity_id, self._bool_from_state(new_state)
             )
             self.mpc.set_window_open(is_open, time.time())
+            self._update_window_unknown()
             if was_open and not is_open:
                 self.mpc.suppress_learning_for_interval(
                     WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S,

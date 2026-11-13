@@ -8,11 +8,11 @@ from heating_controller.const import (
     DOMAIN,
     HUB_KEYS,
     HUB_TITLE,
+    HUB_VERSION,
     SUBENTRY_TYPE_FLOW,
     SUBENTRY_TYPE_ROOM,
 )
 from heating_controller.control.flow import FALLBACK_GRACE_S
-from heating_controller.const import HUB_VERSION
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.data_entry_flow import FlowResultType
@@ -257,9 +257,7 @@ async def test_curve_recommendation_from_the_lead_rooms_hold_flow(
     assert warm.attributes["outdoor_temperature_c"] == 18.0
     assert float(cold.state) > float(warm.state) > 0
 
-    recommendation = hass.states.get(
-        "sensor.vorlauf_heating_curve_recommendation_cold"
-    )
+    recommendation = hass.states.get("sensor.vorlauf_heating_curve_recommendation_cold")
     assert float(recommendation.state) == pytest.approx(
         float(cold.state) + 1.0, abs=0.06
     )

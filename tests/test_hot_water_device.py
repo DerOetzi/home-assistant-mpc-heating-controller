@@ -7,10 +7,10 @@ from heating_controller.const import (
     DOMAIN,
     HUB_KEYS,
     HUB_TITLE,
+    HUB_VERSION,
     SUBENTRY_TYPE_HOT_WATER,
     SUBENTRY_TYPE_ROOM,
 )
-from heating_controller.const import HUB_VERSION
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.data_entry_flow import FlowResultType

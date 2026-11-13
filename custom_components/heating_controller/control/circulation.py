@@ -4,6 +4,7 @@ Port of the "Domestic Hot Water Circulation Control (Thermostatic)"
 blueprint. Each evaluation decides the pump from the current values, first
 match wins:
 
+0. Main switch off -> off, nothing else is evaluated (e.g. pump under repair).
 1. Continuous run requested -> on. Released once the return has held the
    release temperature for the release time (loop disinfected).
 2. Water heater blocked, or presence/day mode off -> off (a draw may still
@@ -29,6 +30,7 @@ from .hot_water import in_window
 
 
 class CirculationReason(StrEnum):
+    DISABLED = "disabled"
     CONTINUOUS = "continuous"
     BLOCKED = "blocked"
     GATES_CLOSED = "gates_closed"
@@ -63,6 +65,7 @@ class CirculationConfig:
 @dataclass(frozen=True)
 class CirculationInputs:
     now: datetime
+    enabled: bool
     pump_on: bool
     pump_minutes: float
     return_c: float | None
@@ -98,6 +101,10 @@ class CirculationController:
     def _decide(self, inputs: CirculationInputs) -> CirculationDecision:
         cfg = self.config
         ret = inputs.return_c
+
+        if not inputs.enabled:
+            self._release_hot_since = None
+            return CirculationDecision(False, CirculationReason.DISABLED)
 
         if inputs.continuous:
             release = False

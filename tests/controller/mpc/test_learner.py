@@ -7,25 +7,32 @@ from heating_controller.const import (
     LearningStatus,
     UaBalanceOutcome,
 )
+from heating_controller.controller.mpc import learner as learner_module
 from heating_controller.controller.mpc.learner import (
-    CAPACITY_LEARNING_RATE,
+    CAPACITY_JUMP_WEIGHT,
     UA_BALANCE_MAX_DRIFT_C,
     UA_BALANCE_MAX_INTERRUPTION_S,
     UA_BALANCE_MAX_WINDOW_S,
     UA_BALANCE_MIN_TARGET_FACTOR,
     UA_BALANCE_MIN_WINDOW_S,
     UA_BALANCE_WEIGHT,
-    LearnerPrediction,
     RoomMpcModelLearner,
 )
-from heating_controller.controller.mpc.models.capacity import ThermalCapacityModel
+from heating_controller.controller.mpc.models.capacity import (
+    MIN_LEARNED_CAPACITY_FACTOR,
+    ThermalCapacityModel,
+)
+from heating_controller.controller.mpc.models.gains import RoomGainModel
 from heating_controller.controller.mpc.models.loss import RoomLossModel
 from heating_controller.controller.mpc.types import LearningFactors, RoomThermalConfig
 from learner_helpers import (
     NIGHT_HOURS,
     NIGHT_START_TS,
     STEP_S,
+    feed_jump,
     feed_night,
+    feed_samples,
+    jump_samples,
     make_input,
 )
 
@@ -54,115 +61,7 @@ def test_enable_sets_waiting_interval():
     assert learner.get_learning_state().status == LearningStatus.WAITING_INTERVAL
 
 
-def test_run_learning_cycle_waits_without_active_prediction():
-    learner, _, _ = make_learner()
-    learner.enable()
-    learner.run_learning_cycle()
-    assert learner.get_learning_state().status == LearningStatus.WAITING_INTERVAL
-
-
 START_TS = 1_000_000.0
-
-
-def _evaluate_window(learner, inputs, power_w=100.0):
-    """Run the cycle that evaluates a prediction against the given window."""
-    learner.set_prediction(
-        LearnerPrediction(
-            timestamp=START_TS,
-            predicted_room_temperature_c=20.0,
-            prediction_horizon_s=1800,
-        )
-    )
-    learner.run_learning_cycle()
-
-    for mpc_input in inputs:
-        learner.append_history(
-            mpc_input, applied_heating_power_w=power_w, radiator_power_w=power_w
-        )
-
-    learner.run_learning_cycle()
-
-
-def _inputs(temperatures, outdoor_temp_c=-5.0):
-    return [
-        make_input(
-            START_TS + index * 300,
-            room_temp_c=room_temp_c,
-            outdoor_temp_c=outdoor_temp_c,
-        )
-        for index, room_temp_c in enumerate(temperatures)
-    ]
-
-
-# Test room: UA 1000 W / 32 K = 31.25 W/K, capacity 90 m² * 80 kJ/m²K = 7.2 MJ/K.
-# At 18 °C and -5 °C outside it loses ~720 W; 2 kW heating lets the replay rise
-# by ~0.25 K over the window.
-RISING = (18.0, 18.2, 18.4, 18.6, 18.8, 19.0)
-
-
-def test_cycle_reports_no_correction_when_the_room_matched_the_replay():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-
-    # 719 W covers the loss at 18 °C: the replay stays flat like the room.
-    _evaluate_window(learner, _inputs((18.0,) * 6), power_w=719.0)
-
-    assert learner.get_learning_state().status == LearningStatus.NO_CORRECTION
-    assert capacity_model.learned_capacity_factor == 1.0
-
-
-def test_cycle_reports_disturbed_when_the_outdoor_temperature_drifts():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-
-    _evaluate_window(
-        learner,
-        [
-            make_input(
-                START_TS + index * 300,
-                room_temp_c=room_temp_c,
-                outdoor_temp_c=-5.0 - index,
-            )
-            for index, room_temp_c in enumerate(RISING)
-        ],
-        power_w=2000.0,
-    )
-
-    assert learner.get_learning_state().status == LearningStatus.DISTURBED
-    assert capacity_model.learned_capacity_factor == 1.0
-
-
-def test_cycle_reports_disturbed_when_the_flow_temperature_jumps():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-
-    # A domestic hot water charge on the shared leaving-water sensor.
-    flow_temperatures = [45.0, 45.0, 55.0, 55.0, 45.0, 45.0]
-    _evaluate_window(
-        learner,
-        [
-            make_input(
-                START_TS + index * 300, room_temp_c=room_temp_c, flow_temp_c=flow_temp_c
-            )
-            for index, (room_temp_c, flow_temp_c) in enumerate(
-                zip(RISING, flow_temperatures)
-            )
-        ],
-        power_w=2000.0,
-    )
-
-    assert learner.get_learning_state().status == LearningStatus.DISTURBED
-    assert capacity_model.learned_capacity_factor == 1.0
-
-
-def test_suppress_for_interval_marks_current_window_invalid():
-    learner, _, _ = make_learner()
-    learner.enable()
-    learner.suppress_for_interval(3600, 3600)
-    assert learner.get_learning_state().status == LearningStatus.SUPPRESSED
-
-    learner.run_learning_cycle()
-    assert learner.get_learning_state().status == LearningStatus.SUPPRESSED
 
 
 def test_recalibrate_sets_factors_directly():
@@ -170,115 +69,6 @@ def test_recalibrate_sets_factors_directly():
     learner.recalibrate(LearningFactors(ua_factor=1.3, capacity_factor=0.8))
     assert loss_model.learned_ua_factor == 1.3
     assert capacity_model.learned_capacity_factor == 0.8
-
-
-def test_consume_persisted_learning_factors_returns_once():
-    learner, _, _ = make_learner()
-    learner.enable()
-
-    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
-
-    factors = learner.consume_persisted_learning_factors()
-    assert factors is not None
-    assert learner.consume_persisted_learning_factors() is None
-
-
-def test_stationary_window_leaves_capacity_alone():
-    learner, loss_model, capacity_model = make_learner()
-    learner.enable()
-
-    _evaluate_window(learner, _inputs((18.0,) * 6), power_w=2000.0)
-
-    assert learner.get_learning_state().status == LearningStatus.NO_CORRECTION
-    assert loss_model.learned_ua_factor == 1.0
-    assert capacity_model.learned_capacity_factor == 1.0
-
-
-def test_capacity_drops_when_the_room_overshoots_a_simulated_rise():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-
-    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
-
-    assert learner.get_learning_state().status == LearningStatus.LEARNED
-    assert capacity_model.learned_capacity_factor < 1.0
-
-
-def test_capacity_rises_when_the_room_falls_less_than_simulated():
-    learner, _, capacity_model = make_learner()
-    learner.recalibrate(LearningFactors(ua_factor=1.0, capacity_factor=0.5))
-    learner.enable()
-
-    # With half the capacity and -30 °C outside the unheated replay drops ~0.65 K.
-    _evaluate_window(
-        learner,
-        _inputs((20.0, 19.95, 19.9, 19.85, 19.8, 19.75), outdoor_temp_c=-30.0),
-        power_w=0.0,
-    )
-
-    assert learner.get_learning_state().status == LearningStatus.LEARNED
-    assert capacity_model.learned_capacity_factor > 0.5
-
-
-def test_capacity_drops_when_the_room_falls_more_than_simulated():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-
-    _evaluate_window(
-        learner, _inputs((20.0, 19.8, 19.6, 19.4, 19.2, 19.0)), power_w=0.0
-    )
-
-    assert learner.get_learning_state().status == LearningStatus.LEARNED
-    assert capacity_model.learned_capacity_factor < 1.0
-
-
-def test_capacity_replays_the_applied_power_not_the_plan():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-
-    # The prediction aimed at 20 °C, far above the room. Replayed with the power
-    # that was applied, the room rose exactly as modelled: nothing to learn.
-    learner.set_prediction(
-        LearnerPrediction(
-            timestamp=START_TS,
-            predicted_room_temperature_c=20.0,
-            prediction_horizon_s=1800,
-        )
-    )
-    learner.run_learning_cycle()
-    for index in range(6):
-        learner.append_history(
-            make_input(START_TS + index * 300, room_temp_c=18.0 + index * 0.0533),
-            applied_heating_power_w=2000.0,
-            radiator_power_w=2000.0,
-        )
-    learner.run_learning_cycle()
-
-    assert learner.get_learning_state().status == LearningStatus.NO_CORRECTION
-    assert capacity_model.learned_capacity_factor == 1.0
-
-
-def test_capacity_ignores_windows_with_almost_no_simulated_change():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-
-    _evaluate_window(
-        learner, _inputs((18.0, 18.1, 18.2, 18.3, 18.4, 18.5)), power_w=719.0
-    )
-
-    assert learner.get_learning_state().status == LearningStatus.NO_CORRECTION
-    assert capacity_model.learned_capacity_factor == 1.0
-
-
-def test_paused_learning_blocks_capacity():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-    learner.set_learning_paused(True, START_TS - 600)
-
-    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
-
-    assert learner.get_learning_state().status == LearningStatus.PAUSED
-    assert capacity_model.learned_capacity_factor == 1.0
 
 
 def test_pause_shows_immediately_while_enabled():
@@ -295,52 +85,6 @@ def test_enable_while_paused_reports_paused():
     learner.enable()
 
     assert learner.get_learning_state().status == LearningStatus.PAUSED
-
-
-def test_window_spanning_the_resume_is_discarded():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-    learner.set_learning_paused(True, START_TS - 600)
-    learner.set_learning_paused(False, START_TS + 300)
-
-    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
-
-    assert learner.get_learning_state().status == LearningStatus.PAUSED
-    assert capacity_model.learned_capacity_factor == 1.0
-
-
-def test_capacity_window_after_the_resume_learns():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-    learner.set_learning_paused(True, START_TS - 1200)
-    learner.set_learning_paused(False, START_TS - 600)
-
-    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
-
-    assert learner.get_learning_state().status == LearningStatus.LEARNED
-    assert capacity_model.learned_capacity_factor != 1.0
-
-
-def test_sun_condition_blocks_capacity():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-    learner.set_sun_condition(lambda ts: ts < START_TS + 900)
-
-    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
-
-    assert learner.get_learning_state().status == LearningStatus.OUTSIDE_WINDOW
-    assert capacity_model.learned_capacity_factor == 1.0
-
-
-def test_capacity_learns_once_its_shorter_suppression_ended():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-    learner.suppress_for_interval(3600, 0)
-
-    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
-
-    assert learner.get_learning_state().status == LearningStatus.LEARNED
-    assert capacity_model.learned_capacity_factor != 1.0
 
 
 # Samples in one feed_night of NIGHT_HOURS.
@@ -563,23 +307,6 @@ def test_missing_outdoor_temperature_balances_the_stretch_before_it():
     assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
 
 
-def test_missing_outdoor_temperature_blocks_both_factors():
-    learner, loss_model, capacity_model = make_learner()
-    learner.enable()
-    learner.set_outdoor_temperature_missing(True, START_TS - 600)
-
-    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
-
-    assert learner.get_ua_balance_info().outcome == (
-        UaBalanceOutcome.OUTDOOR_TEMPERATURE_MISSING
-    )
-    assert learner.get_capacity_outcome() == (
-        CapacityOutcome.OUTDOOR_TEMPERATURE_MISSING
-    )
-    assert capacity_model.learned_capacity_factor == 1.0
-    assert loss_model.learned_ua_factor == 1.0
-
-
 def test_heat_balance_starts_after_the_outdoor_temperature_is_back():
     learner, _, _ = make_learner()
     learner.enable()
@@ -592,30 +319,6 @@ def test_heat_balance_starts_after_the_outdoor_temperature_is_back():
     info = learner.get_ua_balance_info()
     assert info.outcome == UaBalanceOutcome.COLLECTING
     assert info.collecting_since_ts == NIGHT_START_TS + 3600
-
-
-def test_capacity_window_across_a_short_outage_is_discarded():
-    """An outage between two cycles leaves the window open across it."""
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-    learner.set_prediction(
-        LearnerPrediction(
-            timestamp=START_TS,
-            predicted_room_temperature_c=20.0,
-            prediction_horizon_s=1800,
-        )
-    )
-    learner.run_learning_cycle()
-    learner.set_outdoor_temperature_missing(True, START_TS + 600)
-    learner.set_outdoor_temperature_missing(False, START_TS + 900)
-    for mpc_input in _inputs(RISING):
-        learner.append_history(
-            mpc_input, applied_heating_power_w=2000.0, radiator_power_w=2000.0
-        )
-    learner.run_learning_cycle()
-
-    assert learner.get_capacity_outcome() == CapacityOutcome.SUPPRESSED
-    assert capacity_model.learned_capacity_factor == 1.0
 
 
 def test_stretch_ends_at_sunrise():
@@ -1005,114 +708,6 @@ def test_heat_balance_skips_mild_nights():
     assert loss_model.learned_ua_factor == 1.0
 
 
-def _replay_matching_window(learner):
-    learner.set_prediction(
-        LearnerPrediction(
-            timestamp=START_TS,
-            predicted_room_temperature_c=20.0,
-            prediction_horizon_s=1800,
-        )
-    )
-    learner.run_learning_cycle()
-    for index in range(6):
-        learner.append_history(
-            make_input(START_TS + index * 300, room_temp_c=18.0 + index * 0.0533),
-            applied_heating_power_w=2000.0,
-            radiator_power_w=2000.0,
-        )
-    learner.run_learning_cycle()
-
-
-def _paused(learner):
-    learner.set_learning_paused(True, START_TS - 600)
-    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
-
-
-def _suppressed(learner):
-    learner.suppress_for_interval(3600, 3600)
-    learner.run_learning_cycle()
-
-
-def _outside_window(learner):
-    learner.set_sun_condition(lambda ts: ts < START_TS + 900)
-    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
-
-
-def _disturbed(learner):
-    _evaluate_window(
-        learner,
-        [
-            make_input(
-                START_TS + index * 300,
-                room_temp_c=room_temp_c,
-                outdoor_temp_c=-5.0 - index,
-            )
-            for index, room_temp_c in enumerate(RISING)
-        ],
-        power_w=2000.0,
-    )
-
-
-@pytest.mark.parametrize(
-    ("scenario", "outcome"),
-    [
-        (lambda learner: learner.run_learning_cycle(), CapacityOutcome.WAITING),
-        (
-            lambda learner: _evaluate_window(learner, _inputs(RISING), power_w=2000.0),
-            CapacityOutcome.LEARNED,
-        ),
-        (
-            lambda learner: _evaluate_window(
-                learner, _inputs((18.0,) * 6), power_w=2000.0
-            ),
-            CapacityOutcome.STATIONARY,
-        ),
-        (_replay_matching_window, CapacityOutcome.SMALL_ERROR),
-        (
-            lambda learner: _evaluate_window(
-                learner, _inputs((18.0, 18.1, 18.2, 18.3, 18.4, 18.5)), power_w=719.0
-            ),
-            CapacityOutcome.SMALL_CHANGE,
-        ),
-        (_disturbed, CapacityOutcome.DISTURBED),
-        (_outside_window, CapacityOutcome.OUTSIDE_WINDOW),
-        (_paused, CapacityOutcome.PAUSED),
-        (_suppressed, CapacityOutcome.SUPPRESSED),
-    ],
-)
-def test_capacity_outcome_names_the_branch(scenario, outcome):
-    learner, _, _ = make_learner()
-    learner.enable()
-
-    scenario(learner)
-
-    assert learner.get_capacity_outcome() == outcome
-
-
-def test_capacity_outcome_reports_a_disabled_learner():
-    learner, _, _ = make_learner()
-    learner.enable()
-    learner.disable()
-    learner.run_learning_cycle()
-
-    assert learner.get_capacity_outcome() == CapacityOutcome.DISABLED
-
-
-def test_capacity_skips_windows_with_room_sensor_fallback():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-    inputs = _inputs(RISING)
-    inputs[2] = make_input(
-        inputs[2].now_ts, room_temp_c=RISING[2], room_sensor_fallback=True
-    )
-
-    _evaluate_window(learner, inputs, power_w=2000.0)
-
-    assert learner.get_learning_state().status == LearningStatus.SUPPRESSED
-    assert learner.get_capacity_outcome() == CapacityOutcome.ROOM_SENSOR_FALLBACK
-    assert capacity_model.learned_capacity_factor == 1.0
-
-
 def test_room_sensor_fallback_balances_the_stretch_before_it():
     learner, loss_model, _ = make_learner()
     learner.enable()
@@ -1161,18 +756,6 @@ def test_stretch_restarts_when_the_room_sensor_is_back():
     assert loss_model.learned_ua_factor == 1.0
 
 
-def test_open_window_blocks_capacity_however_long_it_stays_open():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-    learner.set_window_open(True, START_TS - 3 * 3600)
-
-    _evaluate_window(learner, _inputs(RISING), power_w=2000.0)
-
-    assert learner.get_learning_state().status == LearningStatus.SUPPRESSED
-    assert learner.get_capacity_outcome() == CapacityOutcome.SUPPRESSED
-    assert capacity_model.learned_capacity_factor == 1.0
-
-
 def test_opening_a_window_balances_the_stretch_before_it():
     learner, loss_model, _ = make_learner()
     learner.enable()
@@ -1212,114 +795,6 @@ def test_stretch_starts_after_a_long_open_window_closes():
     assert info.outcome == UaBalanceOutcome.COLLECTING
     assert info.collecting_since_ts == end_ts + STEP_S
     assert loss_model.learned_ua_factor == 1.0
-
-
-def _replay_rising_window(radiator_power_w):
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-    learner.set_prediction(
-        LearnerPrediction(
-            timestamp=START_TS,
-            predicted_room_temperature_c=19.0,
-            prediction_horizon_s=1800,
-        )
-    )
-    learner.run_learning_cycle()
-    for mpc_input in _inputs(RISING):
-        # Nothing is requested any more; only what the observer estimates
-        # reaches the room.
-        learner.append_history(
-            mpc_input,
-            applied_heating_power_w=0.0,
-            radiator_power_w=radiator_power_w,
-        )
-    learner.run_learning_cycle()
-    return learner, capacity_model
-
-
-def test_capacity_replay_uses_the_radiator_output():
-    # 1 K in 25 min takes 4.8 kW net into 7.2 MJ/K, plus ~730 W loss: with
-    # that from the radiators the replay rises like the room.
-    learner, capacity_model = _replay_rising_window(5530.0)
-
-    assert learner.get_capacity_outcome() == CapacityOutcome.SMALL_ERROR
-    assert capacity_model.learned_capacity_factor == 1.0
-
-
-def test_capacity_replay_without_radiator_output_sees_the_error():
-    learner, capacity_model = _replay_rising_window(0.0)
-
-    assert learner.get_capacity_outcome() == CapacityOutcome.LEARNED
-    assert capacity_model.learned_capacity_factor != 1.0
-
-
-def test_capacity_replay_without_disturbance():
-    # The room gets a steady 50 W the model has no term for; the UA factor
-    # learned at night took it up. Over a whole night of replays, heating and
-    # cooling in turn, the capacity factor must not drift off: the factor
-    # alone carries the gain.
-    learner, loss_model, capacity_model = make_learner()
-    gain_w = 50.0
-    outdoor_c = -15.0
-    window_count = 16
-    samples_per_window = 6
-    capacity_j_per_k = capacity_model.effective_capacity_j_per_k
-    base_ua_w_per_k = loss_model.base_ua_w_per_k
-
-    powers_w = []
-    temps = [18.0]
-    for window in range(window_count):
-        power_w = 3000.0 if window % 2 == 0 else 0.0
-        for _ in range(samples_per_window):
-            powers_w.append(power_w)
-            room_c = temps[-1]
-            for _ in range(STEP_S):
-                room_c += (
-                    power_w + gain_w - base_ua_w_per_k * (room_c - outdoor_c)
-                ) / capacity_j_per_k
-            temps.append(room_c)
-    temps.pop()
-    mean_delta_c = sum(temps) / len(temps) - outdoor_c
-    loss_model.learned_ua_factor = 1.0 - gain_w / (base_ua_w_per_k * mean_delta_c)
-    ua_factor = loss_model.learned_ua_factor
-
-    learner.enable()
-    replayed = 0
-    for window in range(window_count):
-        first = window * samples_per_window
-        learner.set_prediction(
-            LearnerPrediction(
-                timestamp=START_TS + first * STEP_S,
-                predicted_room_temperature_c=temps[first],
-                prediction_horizon_s=(samples_per_window - 1) * STEP_S,
-            )
-        )
-        learner.run_learning_cycle()
-        replayed += learner.get_capacity_outcome() in (
-            CapacityOutcome.SMALL_ERROR,
-            CapacityOutcome.LEARNED,
-        )
-        for index in range(first, first + samples_per_window):
-            learner.append_history(
-                make_input(
-                    START_TS + index * STEP_S,
-                    room_temp_c=temps[index],
-                    outdoor_temp_c=outdoor_c,
-                ),
-                applied_heating_power_w=powers_w[index],
-                radiator_power_w=powers_w[index],
-            )
-    learner.run_learning_cycle()
-    replayed += learner.get_capacity_outcome() in (
-        CapacityOutcome.SMALL_ERROR,
-        CapacityOutcome.LEARNED,
-    )
-
-    assert replayed >= 10
-    assert loss_model.learned_ua_factor == ua_factor
-    assert capacity_model.learned_capacity_factor == pytest.approx(
-        1.0, abs=3 * CAPACITY_LEARNING_RATE
-    )
 
 
 def _coasting_then_settled():
@@ -1498,20 +973,6 @@ def test_drift_weights_samples_by_the_time_they_stand_for():
     assert abs(weighted_drift) < abs(per_sample_drift) / 2
 
 
-def test_capacity_skips_windows_without_a_valve_position():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-    inputs = _inputs(RISING)
-    inputs[2] = make_input(
-        inputs[2].now_ts, room_temp_c=RISING[2], valve_position_missing=True
-    )
-
-    _evaluate_window(learner, inputs, power_w=2000.0)
-
-    assert learner.get_capacity_outcome() == CapacityOutcome.VALVE_POSITION_MISSING
-    assert capacity_model.learned_capacity_factor == 1.0
-
-
 def test_missing_valve_position_balances_the_stretch_before_it():
     learner, _, _ = make_learner()
     learner.enable()
@@ -1538,18 +999,6 @@ def test_missing_valve_position_blocks_the_heat_balance():
         learner.get_ua_balance_info().outcome == UaBalanceOutcome.VALVE_POSITION_MISSING
     )
     assert loss_model.learned_ua_factor == 1.0
-
-
-def test_capacity_skips_windows_while_a_trv_adapts():
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-    inputs = _inputs(RISING)
-    inputs[2] = make_input(inputs[2].now_ts, room_temp_c=RISING[2], trv_adapting=True)
-
-    _evaluate_window(learner, inputs, power_w=2000.0)
-
-    assert learner.get_capacity_outcome() == CapacityOutcome.TRV_ADAPTING
-    assert capacity_model.learned_capacity_factor == 1.0
 
 
 def test_an_adapting_trv_ends_the_stretch_before_it():
@@ -1634,7 +1083,7 @@ def test_a_radiator_not_heating_ends_the_stretch_when_its_valve_opened():
 
 
 def test_a_radiator_not_heating_blocks_learning():
-    learner, loss_model, capacity_model = make_learner()
+    learner, loss_model, _ = make_learner()
     learner.enable()
 
     feed_night(learner, radiator_not_heating=True)
@@ -1644,16 +1093,6 @@ def test_a_radiator_not_heating_blocks_learning():
         learner.get_ua_balance_info().outcome == UaBalanceOutcome.RADIATOR_NOT_HEATING
     )
     assert loss_model.learned_ua_factor == 1.0
-
-    learner, _, capacity_model = make_learner()
-    learner.enable()
-    inputs = _inputs(RISING)
-    inputs[2] = make_input(
-        inputs[2].now_ts, room_temp_c=RISING[2], radiator_not_heating=True
-    )
-    _evaluate_window(learner, inputs, power_w=2000.0)
-    assert learner.get_capacity_outcome() == CapacityOutcome.RADIATOR_NOT_HEATING
-    assert capacity_model.learned_capacity_factor == 1.0
 
 
 def test_a_night_with_fully_open_valves_below_the_band_is_not_learned():
@@ -1762,3 +1201,347 @@ def test_rejected_night_gives_no_gain_point():
     learner.run_learning_cycle()
     assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.DRIFT
     assert gains.night_points == 0
+
+
+# Jump stretches. A small room: 20 m² very light (1.6 MJ/K base), UA 15.625
+# W/K. Its true capacity of 0.48 MJ/K is a factor of 0.3, as the rooms show.
+JUMP_TS = 3_000_000.0
+BASE_CAPACITY_J_PER_K = 20 * 80.0 * 1000
+TRUE_CAPACITY_J_PER_K = 0.3 * BASE_CAPACITY_J_PER_K
+SMALL_UA_W_PER_K = 500 / 32
+
+
+def make_small_learner(gain_model_surfaces=None):
+    thermal_config = RoomThermalConfig(
+        room_heat_load_w=500, room_area_m2=20, construction=Construction.VERY_LIGHT
+    )
+    loss_model = RoomLossModel(thermal_config)
+    capacity_model = ThermalCapacityModel(thermal_config)
+    assert loss_model.effective_ua_w_per_k == pytest.approx(SMALL_UA_W_PER_K)
+    assert capacity_model.base_capacity_j_per_k == pytest.approx(BASE_CAPACITY_J_PER_K)
+    gain_model = (
+        None
+        if gain_model_surfaces is None
+        else RoomGainModel(
+            500, loss_model.base_ua_w_per_k, window_surfaces=gain_model_surfaces
+        )
+    )
+    learner = RoomMpcModelLearner(loss_model, capacity_model, gain_model=gain_model)
+    learner.enable()
+    return learner, capacity_model
+
+
+HEAT_UP_JUMP = {
+    "true_capacity_j_per_k": TRUE_CAPACITY_J_PER_K,
+    "ua_w_per_k": SMALL_UA_W_PER_K,
+    "start_room_c": 18.0,
+    "old_target_c": 18.0,
+    "new_target_c": 20.0,
+    "power_w": 600.0,
+}
+COOL_DOWN_JUMP = {
+    **HEAT_UP_JUMP,
+    "start_room_c": 20.0,
+    "old_target_c": 20.0,
+    "new_target_c": 18.0,
+    "power_w": 0.0,
+}
+
+
+def test_a_heat_up_stretch_learns_the_capacity():
+    learner, capacity_model = make_small_learner()
+    feed_jump(learner, start_ts=JUMP_TS, **HEAT_UP_JUMP)
+    learner.run_learning_cycle()
+
+    info = learner.get_capacity_info()
+    assert info.outcome == CapacityOutcome.LEARNED
+    assert info.kind == "heat_up"
+    assert info.start_ts == JUMP_TS + 2 * STEP_S
+    assert info.room_delta_c == pytest.approx(1.8, abs=0.11)
+    assert info.estimate_factor == pytest.approx(0.3, rel=0.2)
+    assert info.last_learned_ts == info.end_ts
+    assert capacity_model.learned_capacity_factor == pytest.approx(
+        1.0 + CAPACITY_JUMP_WEIGHT * (info.estimate_factor - 1.0)
+    )
+    assert learner.get_learning_state().status == LearningStatus.LEARNED
+    assert learner.consume_persisted_learning_factors().capacity_factor == (
+        capacity_model.learned_capacity_factor
+    )
+    assert learner.consume_persisted_learning_factors() is None
+
+
+def test_repeated_stretches_converge_on_the_true_capacity():
+    learner, capacity_model = make_small_learner()
+    ts = JUMP_TS
+    for _ in range(10):
+        ts = feed_jump(learner, start_ts=ts, **HEAT_UP_JUMP)
+        ts = feed_jump(learner, start_ts=ts, **COOL_DOWN_JUMP)
+        learner.run_learning_cycle()
+
+    assert capacity_model.learned_capacity_factor == pytest.approx(0.3, rel=0.15)
+
+
+def test_a_cool_down_stretch_only_estimates():
+    learner, capacity_model = make_small_learner()
+    feed_jump(learner, start_ts=JUMP_TS, **COOL_DOWN_JUMP)
+    learner.run_learning_cycle()
+
+    info = learner.get_capacity_info()
+    assert info.outcome == CapacityOutcome.ESTIMATED
+    assert info.kind == "cool_down"
+    assert info.estimate_factor == pytest.approx(0.3, rel=0.2)
+    assert info.last_learned_ts is None
+    assert capacity_model.learned_capacity_factor == 1.0
+    assert learner.get_learning_state().status == LearningStatus.WAITING_INTERVAL
+
+
+@pytest.mark.parametrize("unknown", [False, True])
+def test_an_open_or_unknown_window_at_the_start_blocks_the_stretch(unknown):
+    learner, capacity_model = make_small_learner()
+    if unknown:
+        learner.set_window_unknown(True)
+    else:
+        learner.set_window_open(True, JUMP_TS)
+    feed_jump(learner, start_ts=JUMP_TS, **HEAT_UP_JUMP)
+    learner.run_learning_cycle()
+
+    assert learner.get_capacity_outcome() == CapacityOutcome.WINDOW_OPEN
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_a_window_opening_mid_stretch_keeps_the_part_before():
+    learner, capacity_model = make_small_learner()
+    samples, _ = jump_samples(start_ts=JUMP_TS, **HEAT_UP_JUMP)
+    feed_samples(learner, samples[:8])
+    learner.set_window_open(True, samples[8][0])
+    feed_samples(learner, samples[8:])
+    learner.run_learning_cycle()
+
+    info = learner.get_capacity_info()
+    assert info.outcome == CapacityOutcome.LEARNED
+    assert info.end_ts == samples[7][0]
+    assert info.estimate_factor == pytest.approx(0.3, rel=0.2)
+    assert capacity_model.learned_capacity_factor < 1.0
+
+
+def test_a_flag_at_the_start_blocks_the_stretch():
+    learner, capacity_model = make_small_learner()
+    feed_jump(learner, start_ts=JUMP_TS, radiator_not_heating=True, **HEAT_UP_JUMP)
+    learner.run_learning_cycle()
+
+    assert learner.get_capacity_outcome() == CapacityOutcome.RADIATOR_NOT_HEATING
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_a_constant_setpoint_leaves_the_capacity_waiting():
+    learner, capacity_model = make_small_learner()
+    feed_night(learner, start_ts=JUMP_TS, power_w=312.5)
+    learner.run_learning_cycle()
+
+    assert learner.get_capacity_outcome() == CapacityOutcome.WAITING
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_a_room_barely_moving_is_too_small():
+    learner, capacity_model = make_small_learner()
+    feed_jump(
+        learner,
+        start_ts=JUMP_TS,
+        **{
+            **HEAT_UP_JUMP,
+            "start_room_c": 19.6,
+            "old_target_c": 19.0,
+            "power_w": 400.0,
+        },
+    )
+    learner.run_learning_cycle()
+
+    assert learner.get_capacity_outcome() == CapacityOutcome.TOO_SMALL
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_a_gap_in_the_stretch_is_not_learned():
+    learner, capacity_model = make_small_learner()
+    samples, _ = jump_samples(start_ts=JUMP_TS, **HEAT_UP_JUMP)
+    # Five samples missing: 30 minutes without data.
+    feed_samples(learner, samples[:4] + samples[9:])
+    learner.run_learning_cycle()
+
+    assert learner.get_capacity_outcome() == CapacityOutcome.GAP
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_an_estimate_out_of_range_is_implausible():
+    learner, capacity_model = make_small_learner()
+    feed_jump(
+        learner,
+        start_ts=JUMP_TS,
+        **{
+            **HEAT_UP_JUMP,
+            "true_capacity_j_per_k": 6.0 * BASE_CAPACITY_J_PER_K,
+            "power_w": 2000.0,
+        },
+    )
+    learner.run_learning_cycle()
+
+    info = learner.get_capacity_info()
+    assert info.outcome == CapacityOutcome.IMPLAUSIBLE
+    assert info.estimate_factor == pytest.approx(6.0, rel=0.2)
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_a_room_warming_without_heat_is_implausible():
+    learner, capacity_model = make_small_learner()
+    samples, _ = jump_samples(start_ts=JUMP_TS, **HEAT_UP_JUMP)
+    feed_samples(
+        learner, [(ts, room_c, target_c, 0.0) for ts, room_c, target_c, _ in samples]
+    )
+    learner.run_learning_cycle()
+
+    info = learner.get_capacity_info()
+    assert info.outcome == CapacityOutcome.IMPLAUSIBLE
+    assert info.estimate_factor is None
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_a_running_stretch_is_judged_once_it_ends():
+    learner, capacity_model = make_small_learner()
+    samples, _ = jump_samples(start_ts=JUMP_TS, **HEAT_UP_JUMP)
+    feed_samples(learner, samples[:5])
+    learner.run_learning_cycle()
+
+    info = learner.get_capacity_info()
+    assert info.outcome == CapacityOutcome.RUNNING
+    assert info.start_ts == JUMP_TS + 2 * STEP_S
+    assert capacity_model.learned_capacity_factor == 1.0
+
+    feed_samples(learner, samples[5:])
+    learner.run_learning_cycle()
+    assert learner.get_capacity_outcome() == CapacityOutcome.LEARNED
+    learned_factor = capacity_model.learned_capacity_factor
+    assert learned_factor < 1.0
+
+    learner.run_learning_cycle()
+    assert capacity_model.learned_capacity_factor == learned_factor
+
+
+def test_a_disabled_learner_still_estimates_cool_down():
+    learner, capacity_model = make_small_learner()
+    learner.disable(JUMP_TS)
+    feed_jump(learner, start_ts=JUMP_TS, **COOL_DOWN_JUMP)
+    learner.run_learning_cycle()
+
+    assert learner.get_capacity_outcome() == CapacityOutcome.ESTIMATED
+    assert learner.get_learning_state().status == LearningStatus.DISABLED
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_a_suppression_delays_the_start_of_the_stretch(monkeypatch):
+    learner, capacity_model = make_small_learner()
+    jump_ts = JUMP_TS + 2 * STEP_S
+    monkeypatch.setattr(learner_module.time, "time", lambda: jump_ts - 60)
+    learner.suppress_for_interval(1800, 600)
+    feed_jump(learner, start_ts=JUMP_TS, **HEAT_UP_JUMP)
+    learner.run_learning_cycle()
+
+    info = learner.get_capacity_info()
+    assert info.start_ts == jump_ts + 2 * STEP_S
+    assert info.outcome == CapacityOutcome.LEARNED
+    assert capacity_model.learned_capacity_factor < 1.0
+
+
+def test_an_estimate_below_the_lower_limit_is_implausible():
+    learner, capacity_model = make_small_learner()
+    feed_jump(
+        learner,
+        start_ts=JUMP_TS,
+        step_s=120,
+        **{
+            **HEAT_UP_JUMP,
+            "true_capacity_j_per_k": 0.05 * BASE_CAPACITY_J_PER_K,
+            "power_w": 400.0,
+        },
+    )
+    learner.run_learning_cycle()
+
+    info = learner.get_capacity_info()
+    assert info.outcome == CapacityOutcome.IMPLAUSIBLE
+    assert info.estimate_factor == pytest.approx(0.05, rel=0.25)
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_a_small_capacity_converges_on_the_lower_limit():
+    learner, capacity_model = make_small_learner()
+    ts = JUMP_TS
+    for _ in range(15):
+        ts = feed_jump(
+            learner,
+            start_ts=ts,
+            step_s=120,
+            **{**HEAT_UP_JUMP, "true_capacity_j_per_k": 0.12 * BASE_CAPACITY_J_PER_K},
+        )
+        ts = feed_jump(
+            learner,
+            start_ts=ts,
+            step_s=120,
+            **{
+                **COOL_DOWN_JUMP,
+                "true_capacity_j_per_k": 0.12 * BASE_CAPACITY_J_PER_K,
+            },
+        )
+        learner.run_learning_cycle()
+
+    assert learner.get_capacity_info().estimate_factor == pytest.approx(0.12, rel=0.2)
+    assert capacity_model.learned_capacity_factor == MIN_LEARNED_CAPACITY_FACTOR
+
+
+# Sun on the windows. 2026-11-02 12:00 UTC.
+NOON_TS = 1_793_577_600.0 + 12 * 3600
+
+
+class FixedSun:
+    """The same irradiance on every surface, or a function of time."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def value_at(self, surface, ts):
+        return self.value(ts) if callable(self.value) else self.value
+
+    def filtered_at(self, surface, ts, tau_s):
+        return self.value_at(surface, ts)
+
+
+def _sun_learner(sun, surfaces=("south",), dark=True):
+    learner, _ = make_small_learner(gain_model_surfaces=surfaces)
+    learner.set_gain_context(lambda ts: 0, lambda ts: 0, lambda: sun)
+    learner.set_sun_condition(lambda ts: dark)
+    feed_jump(learner, start_ts=NOON_TS, **HEAT_UP_JUMP)
+    learner.run_learning_cycle()
+    return learner.get_capacity_outcome()
+
+
+def test_a_stretch_without_sun_is_learned_at_midday():
+    assert _sun_learner(FixedSun(0.0)) == CapacityOutcome.LEARNED
+
+
+def test_sun_on_the_windows_blocks_the_stretch():
+    assert _sun_learner(FixedSun(200.0)) == CapacityOutcome.OUTSIDE_WINDOW
+
+
+def test_sun_shortly_before_the_stretch_blocks_it():
+    jump_ts = NOON_TS + 2 * STEP_S
+    sun = FixedSun(lambda ts: 200.0 if ts <= jump_ts - 90 * 60 else 0.0)
+    assert _sun_learner(sun) == CapacityOutcome.OUTSIDE_WINDOW
+
+
+def test_a_room_without_windows_ignores_the_sun():
+    assert _sun_learner(FixedSun(200.0), surfaces=()) == CapacityOutcome.LEARNED
+
+
+@pytest.mark.parametrize(
+    ("dark", "outcome"),
+    [(True, CapacityOutcome.LEARNED), (False, CapacityOutcome.OUTSIDE_WINDOW)],
+)
+def test_without_a_sun_source_the_sun_condition_decides(dark, outcome):
+    assert _sun_learner(None, dark=dark) == outcome

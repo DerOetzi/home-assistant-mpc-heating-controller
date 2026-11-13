@@ -71,32 +71,42 @@ stands:
 | `last_mean_heating_w` | Mean radiator heat the balance assumed over that stretch (hot-water charges count as zero). |
 | `learned_gain_w`, `gain_sigma_w`, `gain_fit_points`, `gain_determined`, `regression_ua_factor` | Night regression of steady gain and heat-loss factor, see [Gains and sun](#gains-and-sun). |
 
-**`sensor.<room>_capacity_learning_status`** — what the last 30-minute replay did with the
-capacity factor:
+**`sensor.<room>_capacity_learning_status`** — how the last jump stretch (see
+[When the model learns](#when-the-model-learns)) was judged:
 
 | State | Meaning |
 |---|---|
-| `learned` | The factor was adjusted slightly. |
-| `stationary` | The room moved less than the stationary range. |
-| `small_error` | The replay ended within 0.15 K of the room. |
-| `small_change` | The replay itself moved less than 0.1 K. |
-| `outside_window` | Sun up or less than two hours after sunset. |
-| `disturbed` | Outdoor temperature drifted more than 1 K or the heating flow jumped more than 5 K. A hot-water charge does not count, see [Hot-water charges](#hot-water-charges). |
-| `suppressed` | A window is open or was just closed (10 min), or the configuration changed. |
-| `room_sensor_fallback` | The window holds samples taken while the TRVs stood in for the room sensor. |
-| `valve_position_missing` | The window holds samples without a reported valve opening. |
-| `trv_adapting` | The window holds samples taken while a TRV calibrated its valve, was uncalibrated or in mounting mode. |
-| `radiator_not_heating` | The window holds samples taken while a radiator stayed cold. |
-| `outdoor_temperature_missing` | The outdoor temperature is missing. A window that ran across an outage is discarded (`suppressed`). |
-| `paused` | Learning enabled entity off. |
-| `waiting` | No complete window yet. |
-| `disabled` | Heating unavailable. |
+| `learned` | A heat-up stretch moved the factor 30 % of the way to its estimate. |
+| `estimated` | A cool-down stretch gave an estimate; the factor stays as it is. |
+| `running` | A stretch is in progress. |
+| `waiting` | No setpoint jump yet. |
+| `too_short` | The stretch lasted less than 10 minutes. |
+| `too_small` | The room moved less than 0.4 K, or showed fewer than three different readings. |
+| `gap` | More than 20 minutes without a sample, or the jump left the history before the stretch ended. |
+| `outside_window` | Sun on the room's windows during the stretch or the two hours before it. |
+| `implausible` | The net heat does not fit the room's change, or the estimate is outside 0.1–4. |
+| `window_open` | A window was open, or a contact reported neither open nor closed, when the stretch started. |
+| `room_sensor_fallback` | The TRVs stood in for the room sensor when the stretch started. |
+| `valve_position_missing` | No valve opening reported when the stretch started. |
+| `trv_adapting` | A TRV calibrated its valve, was uncalibrated or in mounting mode when the stretch started. |
+| `radiator_not_heating` | A radiator stayed cold when the stretch started. |
+| `paused` | Learning paused (block learning entity, flow or outdoor temperature missing) when the stretch started. |
 
-Attribute `capacity_j_per_k`: the effective heat capacity the model uses — base capacity from
-area and construction times the learned capacity factor.
+Each of the flags from `window_open` on ends a running stretch early instead; the part before
+it is still judged.
 
-Adjustments per cycle are intentionally small — expect the model to sharpen gradually over
-real heating days, not to converge instantly. None of these states need any action from you;
+| Attribute | Meaning |
+|---|---|
+| `capacity_j_per_k` | Effective heat capacity the model uses: base capacity from area and construction times the learned capacity factor. |
+| `last_stretch_kind` | `heat_up` or `cool_down`. |
+| `last_stretch_start`, `last_stretch_end` | Start and end of the last stretch judged (end empty while running or when blocked at the start). |
+| `last_stretch_room_delta_c` | How far the room moved over the stretch. |
+| `last_stretch_estimate_factor` | Capacity factor the stretch's energy balance points to. |
+| `last_stretch_saturated_share` | Share of the stretch with a fully open valve (diagnostic only). |
+| `last_learned` | End of the last stretch that moved the factor. |
+
+Adjustments are deliberately gradual — expect the model to sharpen over real heating days,
+not to converge instantly. None of these states need any action from you;
 they're diagnostic, useful mainly if a room's behavior seems off and you want to see whether
 it's actively adapting.
 
@@ -142,15 +152,25 @@ for, whatever the model believes the losses are.
   `learned_at_limit`, the measured target stays in `last_target_factor` of the UA learning status).
   A stretch rejected for drift reports the
   drift in `last_drift_c`.
-- **Capacity factor (`capacity_factor`): replay of 30-minute windows.** If the room moved
-  further than the **stationary range** (default 0.2 K between the highest and lowest
-  reading of the window), the window is replayed with the power the radiators gave off
-  and the current heat-loss factor. A room that rose more than the replay, or
-  fell more, is lighter than modelled; one that rose or fell less is heavier. Windows the
-  room barely moved in, or that the replay hardly moves in (below 0.1 K), are skipped.
-- **Sun.** Neither factor learns while the sun is up or within two hours after sunset,
-  when walls still release the afternoon's solar heat. Sunrise and sunset are calculated
-  from the location configured in Home Assistant.
+- **Capacity factor (`capacity_factor`): jump stretches.** A held room hardly moves, so
+  the capacity is learned where it does: after the setpoint jumps by at least 0.5 K
+  (comfort/eco switch, end of frost protection, a window closing). The stretch starts at
+  the jump — or once a window closed or the configuration changed 10 minutes ago — and
+  ends when the room comes within 0.2 K of the new setpoint, the setpoint changes again by
+  0.1 K or more, a flag from the table above appears, or after three hours. Over the
+  stretch the energy balance gives the net heat: the heat the radiators gave off minus the
+  loss with the current heat-loss factor (mean room against outdoor, per interval).
+  Divided by the room's change and the base capacity it is the estimate. A heat-up stretch
+  moves the factor 30 % of the way to it. A cool-down stretch only reports its estimate:
+  the gains, unknown here, are a larger part of its balance. Stretches are judged with
+  heating off as well, so a room cooling down in frost protection shows its estimate too.
+- **Sun.** The heat-loss balance does not run while the sun is up or within two hours after
+  sunset, when walls still release the afternoon's solar heat. Sunrise and sunset are
+  calculated from the location configured in Home Assistant. A jump stretch only counts if
+  the irradiance on each of the room's window surfaces stayed at or below 50 W/m² during the
+  stretch and the two hours before it, so it can be learned at midday on an overcast day.
+  Without irradiance data the sun condition decides at start and end; a room without window
+  surfaces skips the check.
 - **Pause.** Both factors pause, and a window that started before the pause ended is
   discarded since part of its samples were taken while paused:
   - while the room's optional **block learning entity** is on — a reason only this room
@@ -168,9 +188,11 @@ for, whatever the model believes the losses are.
 
 The heat-loss factor may end up well below 1: room heat loads usually come from a design
 calculation for the worst case (neighbouring rooms unheated, full air change), which a room
-in operation rarely sees. It is limited to 0.1–2.
+in operation rarely sees. It is limited to 0.1–2. The capacity factor is limited to
+0.15–3: the effective capacity a room shows on a jump is mostly its air and furniture,
+far below the construction value.
 
-The stationary range is set on the hub, the block learning entity per room.
+The block learning entity is set per room.
 
 ### Recalibrating
 
@@ -190,8 +212,8 @@ data:
 ```
 
 A factor that is left out stays as it is, so a reset needs an explicit `1.0`; at least one
-value (or a reset) is required. The call discards the measurement window in progress,
-because its prediction was made with the old factors. `reset_gains: true` forgets the
+value (or a reset) is required. The call discards the heat-loss stretch and any jump
+stretch in progress, because they were measured with the old factors. `reset_gains: true` forgets the
 learned steady gain, day profile and sun terms (see [Gains and sun](#gains-and-sun)).
 `reset_valve_curves: true` forgets the samples of every TRV's valve curve in the room, also
 one still open; the profile's starting value applies until new bins fill (see
@@ -293,7 +315,7 @@ per square metre of its **construction class** (ISO 13790, table 12):
 | Heavy | 260 | Solid masonry or concrete with the mass facing the room (exterior insulation) |
 | Very heavy | 370 | Massive concrete walls and floors |
 
-The learned capacity factor (0.5–3) scales this base for furniture, open doors and heat
+The learned capacity factor (0.15–3) scales this base for furniture, open doors and heat
 exchange with neighbouring rooms. Both values are required in the room's design step.
 
 The capacity also drives the valve demand and the recovery flow temperature: a lighter
@@ -384,7 +406,7 @@ the radiator.
 A TRV is a thermostat, not a valve positioner: the controller sets its target temperature,
 and the TRV opens its valve by its own reading at the radiator. A small demand can thus open
 a valve almost fully. Where the TRV's device profile names a valve opening entity (Danfoss
-Ally: `pi_heating_demand`), the observer, the heat balance and the capacity replay then use the heat the radiator gives
+Ally: `pi_heating_demand`), the observer, the heat balance and the jump stretches then use the heat the radiator gives
 off at that opening instead of the requested power (sensor `measured_heating_power`).
 
 The opening is taken as proportional to the flow. With less water the radiator cools it
@@ -733,7 +755,9 @@ window ended. A cycle survives a restart. The circulation gets a continuous-run 
 when it starts and loses it when it fails.
 
 **Circulation**: evaluated on every change of its sensors and every 15 seconds, by the
-rules of the thermostatic blueprint: continuous run (released once the return held the
+rules of the thermostatic blueprint, behind a main switch (off: pump off, nothing else
+evaluated, also no continuous run of a legionella cycle, whose return check then fails):
+continuous run (released once the return held the
 release temperature for the release time), blocked heater states and presence/day-mode
 gates, a fixed interval without return value, stop when hot or after the maximum run,
 start after the minimum pause when the loop cooled below the peak or off-peak threshold
@@ -755,7 +779,7 @@ The minimum flow temperature is the larger of two requirements:
 
 Both take the radiator output at the design spread of the configured system (mean water
 temperature = flow − 5 K for 55/45), the same assumption as the valve power, the heat balance
-and the capacity replay. The learned heat-loss factor fits that assumption, so the hold flow
+and the jump stretches. The learned heat-loss factor fits that assumption, so the hold flow
 is the flow at which the open valves give off exactly the modelled loss. An earlier version
 shrank the spread with the load (design spread × power / heat load) for the flow requirement
 only; with learned factors well below 1 that read about 4 K below the flow a room was seen to

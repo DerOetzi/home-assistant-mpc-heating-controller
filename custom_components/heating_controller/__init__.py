@@ -178,7 +178,9 @@ def _async_track_room_devices(
         ):
             hass.config_entries.async_schedule_reload(entry.entry_id)
 
-    return hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, _handle_device_update)
+    return hass.bus.async_listen(
+        dr.EVENT_DEVICE_REGISTRY_UPDATED, _handle_device_update
+    )
 
 
 async def _async_setup_room(

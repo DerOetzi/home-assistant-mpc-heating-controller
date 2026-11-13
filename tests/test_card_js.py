@@ -740,7 +740,10 @@ def test_curve_card_recommendation_takes_the_highest_lead_room(ctx) -> None:
         " {name: 'C', lead: false, flow_c: [50, 35]}]"
     )
     assert _json(ctx, f"recommendationSeries({rooms}, 1)") == [43, 31]
-    assert _json(ctx, "recommendationSeries([{name: 'C', lead: false, flow_c: [1]}], 1)") == []
+    assert (
+        _json(ctx, "recommendationSeries([{name: 'C', lead: false, flow_c: [1]}], 1)")
+        == []
+    )
     # The envelope over any room choice, lead or not, for the trial curve's ends.
     assert _json(ctx, f"envelopeSeries({rooms}, 1)") == [51, 36]
     assert _json(ctx, "envelopeSeries([], 1)") == []

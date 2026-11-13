@@ -61,7 +61,6 @@ from .const import (
     CONF_ROOM_HEAT_LOAD,
     CONF_ROOM_NAME,
     CONF_ROOM_SENSOR_ENTITY,
-    CONF_STATIONARY_RANGE,
     CONF_TARGET_BAND,
     CONF_TRV_COUNT,
     CONF_TRV_DEVICE_ID,
@@ -84,21 +83,17 @@ from .const import (
     DEFAULT_MAX_WRITES_PER_DAY,
     DEFAULT_RATE_LIMIT_RESERVE,
     DEFAULT_ROOF_TILT_DEG,
-    DEFAULT_STATIONARY_RANGE_C,
     DEFAULT_TARGET_BAND_C,
     DEFAULT_TRV_SETPOINT_MODE,
     DOMAIN,
-    HUB_VERSION,
     FACADES,
     FLOW_TITLE,
     HOT_WATER_TITLE,
     HUB_TITLE,
-    MAX_STATIONARY_RANGE_C,
+    HUB_VERSION,
     MAX_TARGET_BAND_C,
     MAX_TRV_COUNT,
-    MIN_STATIONARY_RANGE_C,
     MIN_TARGET_BAND_C,
-    STATIONARY_RANGE_STEP_C,
     SUBENTRY_TYPE_FLOW,
     SUBENTRY_TYPE_HOT_WATER,
     SUBENTRY_TYPE_ROOM,
@@ -283,12 +278,6 @@ def _hub_control_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_MAX_SENSOR_AGE, default=defaults.get(CONF_MAX_SENSOR_AGE, 1800.0)
             ): vol.Coerce(float),
-            vol.Required(
-                CONF_STATIONARY_RANGE,
-                default=defaults.get(CONF_STATIONARY_RANGE, DEFAULT_STATIONARY_RANGE_C),
-            ): _kelvin(
-                MIN_STATIONARY_RANGE_C, MAX_STATIONARY_RANGE_C, STATIONARY_RANGE_STEP_C
-            ),
             vol.Required(
                 CONF_TARGET_BAND,
                 default=defaults.get(CONF_TARGET_BAND, DEFAULT_TARGET_BAND_C),

@@ -66,8 +66,9 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   hours after sunset, while the outdoor temperature is missing or the flow temperature has
   had no reading for over 16 minutes, and while a room's optional *block learning* entity is
   on (e.g. an extra heater in that room). The heat-loss factor comes from a heat balance
-  over each usable night stretch (four to eight hours) of the requested heating power, the capacity factor from replaying 30-minute
-  windows with that power. See [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
+  over each usable night stretch (four to eight hours) of the requested heating power, the capacity factor from the
+  energy balance of the stretch after each setpoint jump (heating up learns, cooling down
+  only estimates), as long as no sun reaches the room's windows. See [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
 - **Gains and sun (learning only, not yet used by the control)** — over several nights a
   regression separates a steady gain from the heat-loss factor; every hour a second one
   learns a day profile (8 blocks of 3 hours, workdays and other days apart) and the sun on
@@ -110,8 +111,7 @@ once per house. It holds everything that applies to the whole house:
    writes, own writes per day at most).
 2. **Control and design** — design outdoor temperature and system flow/return temperatures
    (used to size the emitter curves), demand-control hysteresis/hold-time/max-step tuning,
-   surplus gate, sensor age, the stationary range that decides which factor a measurement
-   window trains, target band and TRV target mode.
+   surplus gate, sensor age, target band and TRV target mode.
 3. **Sun and workdays** — how the house is turned (the bearing of its north facade, e.g.
    −15° for a house turned 15° west), which way the roof surfaces face and their pitch, and
    an optional workday entity (on = workday; without it Monday to Friday). For the surfaces
@@ -179,8 +179,8 @@ The device *Warmwasser* holds the targets of each phase as numbers (normal, surp
 boost, night, charge window, legionella), a mode select (automatic, or normal/surplus by
 hand for the manual hold time), a boost switch, *Hot water target* and *Hot water phase*,
 *Hot water charging* (rooms treat it as a pause), and — when chosen — legionella status,
-a *failed* problem sensor, a start button, the circulation's continuous-run switch and
-its reason. See [Hot water](docs/mpc-guide.md#hot-water).
+a *failed* problem sensor, a start button, the circulation's main switch (off keeps the
+pump off, e.g. for a repair), its continuous-run switch and its reason. See [Hot water](docs/mpc-guide.md#hot-water).
 
 **Reconfigure** on a room re-runs steps 2–5 pre-filled (the name stays: the room's
 learning files are keyed by it). Deleting a room removes its entities and its learning

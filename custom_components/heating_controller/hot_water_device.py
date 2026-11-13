@@ -162,6 +162,7 @@ class HotWaterDevice:
         self.circulation = CirculationController(self._circulation_config())
         self.boost_on = False
         self.continuous_request = False
+        self.circulation_main = True
         self.decision: HotWaterDecision | None = None
         self.circulation_decision: CirculationDecision | None = None
         self.last_written: float | None = None
@@ -268,6 +269,7 @@ class HotWaterDevice:
         self.controller.mode = HotWaterMode(stored.get("mode", HotWaterMode.NORMAL))
         self.controller.mode_changed_ts = float(stored.get("mode_changed_ts", 0.0))
         self.continuous_request = bool(stored.get("continuous_request", False))
+        self.circulation_main = bool(stored.get("circulation_main", True))
         if self.circulation_enabled:
             d = self.data
             tracked = [
@@ -309,6 +311,7 @@ class HotWaterDevice:
             "mode": self.controller.mode.value,
             "mode_changed_ts": self.controller.mode_changed_ts,
             "continuous_request": self.continuous_request,
+            "circulation_main": self.circulation_main,
         }
 
     # --- Readings ----------------------------------------------------------
@@ -369,6 +372,11 @@ class HotWaterDevice:
 
     def set_continuous_request(self, on: bool) -> None:
         self.continuous_request = on
+        self._store.async_delay_save(self._export, 10)
+        self._schedule_circulation()
+
+    def set_circulation_main(self, on: bool) -> None:
+        self.circulation_main = on
         self._store.async_delay_save(self._export, 10)
         self._schedule_circulation()
 
@@ -528,6 +536,7 @@ class HotWaterDevice:
         decision = self.circulation.decide(
             CirculationInputs(
                 now=now,
+                enabled=self.circulation_main,
                 pump_on=pump_on,
                 pump_minutes=(now - pump.last_changed).total_seconds() / 60,
                 return_c=self._float(d.get("circ_return_entity")),

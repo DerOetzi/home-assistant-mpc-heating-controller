@@ -4,7 +4,7 @@ from ....const import CONSTRUCTION_CAPACITY_KJ_PER_M2K
 from ..math_helper import clamp
 from ..types import RoomThermalConfig
 
-MIN_LEARNED_CAPACITY_FACTOR = 0.5
+MIN_LEARNED_CAPACITY_FACTOR = 0.15
 MAX_LEARNED_CAPACITY_FACTOR = 3.0
 
 
@@ -36,6 +36,10 @@ class ThermalCapacityModel:
         self._learned_capacity_factor = clamp(
             value, MIN_LEARNED_CAPACITY_FACTOR, MAX_LEARNED_CAPACITY_FACTOR
         )
+
+    @property
+    def base_capacity_j_per_k(self) -> float:
+        return self._base_capacity_j_per_k
 
     @property
     def effective_capacity_j_per_k(self) -> float:

@@ -7,7 +7,7 @@ from math import ceil
 
 from ...const import CapacityOutcome, TrvSetpointMode
 from .hot_water import HotWaterChargeDetector
-from .learner import LearnerPrediction, RoomMpcModelLearner
+from .learner import RoomMpcModelLearner
 from .math_helper import clamp
 from .models.capacity import ThermalCapacityModel
 from .models.emitter import HeatEmitterModel, below_activation
@@ -24,6 +24,7 @@ from .results import (
 )
 from .sensors import RoomMpcSensors
 from .types import (
+    CapacityStretchInfo,
     FlowGateState,
     LearningFactors,
     RoomModelLearningState,
@@ -272,6 +273,9 @@ class RoomMpcController:
     def get_capacity_outcome(self) -> CapacityOutcome:
         return self._learner.get_capacity_outcome()
 
+    def get_capacity_info(self) -> CapacityStretchInfo:
+        return self._learner.get_capacity_info()
+
     @property
     def effective_capacity_j_per_k(self) -> float:
         return self._capacity_model.effective_capacity_j_per_k
@@ -501,10 +505,7 @@ class RoomMpcController:
                 demand_pct=effective_opening_pct if water_flowing else 0.0,
             )
             self._record_learning_telemetry(
-                mpc_input,
-                requested_heating_power_w,
-                optimal_demand.predicted_temperature_c,
-                estimate,
+                mpc_input, requested_heating_power_w, estimate
             )
 
         result = RoomMpcResult(
@@ -880,20 +881,12 @@ class RoomMpcController:
         self,
         mpc_input: RoomMpcInput,
         requested_heating_power_w: float,
-        predicted_room_temperature_c: float,
         estimate: ObserverEstimate,
     ) -> None:
         self._learner.append_history(
             mpc_input,
             requested_heating_power_w,
             radiator_power_w=estimate.radiator_power_w,
-        )
-        self._learner.set_prediction(
-            LearnerPrediction(
-                timestamp=mpc_input.now_ts,
-                predicted_room_temperature_c=predicted_room_temperature_c,
-                prediction_horizon_s=MPC_PREDICTION_HORIZON_S,
-            )
         )
 
     def run_learning_cycle(self) -> None:
@@ -924,14 +917,14 @@ class RoomMpcController:
     ) -> None:
         self._learner.suppress_for_interval(ua_duration_s, capacity_duration_s)
 
-    def set_stationary_range_c(self, stationary_range_c: float) -> None:
-        self._learner.set_stationary_range_c(stationary_range_c)
-
     def set_learning_paused(self, paused: bool, now_ts: float) -> None:
         self._learner.set_learning_paused(paused, now_ts)
 
     def set_window_open(self, window_open: bool, now_ts: float) -> None:
         self._learner.set_window_open(window_open, now_ts)
+
+    def set_window_unknown(self, unknown: bool) -> None:
+        self._learner.set_window_unknown(unknown)
 
     def set_sun_condition(self, sun_condition: Callable[[float], bool]) -> None:
         self._learner.set_sun_condition(sun_condition)

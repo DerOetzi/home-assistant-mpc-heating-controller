@@ -33,7 +33,7 @@ recalibrate:
       example: 1.0
       selector:
         number:
-          min: 0.5
+          min: 0.15
           max: 3.0
           step: 0.001
           mode: box

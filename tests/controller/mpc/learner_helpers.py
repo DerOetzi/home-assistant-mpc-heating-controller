@@ -87,3 +87,83 @@ def feed_night(
             radiator_power_w=power_w,
         )
     return start_ts + (count - 1) * STEP_S
+
+
+def jump_samples(
+    *,
+    true_capacity_j_per_k,
+    ua_w_per_k,
+    start_room_c,
+    old_target_c,
+    new_target_c,
+    power_w,
+    outdoor_temp_c=0.0,
+    start_ts,
+    step_s=STEP_S,
+    max_steps=40,
+):
+    """A setpoint jump and a room of the given capacity following it.
+
+    Two samples at the old setpoint, then the jump and one sample per step
+    until the room is near its new setpoint (or max_steps), plus one more.
+    Each is (timestamp, room reading rounded to 0.1 K like a real sensor,
+    setpoint, power). Returns the samples and the timestamp after them.
+    """
+    heat_up = new_target_c > old_target_c
+    samples = [
+        (start_ts, round(start_room_c, 1), old_target_c, power_w),
+        (start_ts + step_s, round(start_room_c, 1), old_target_c, power_w),
+    ]
+    ts = start_ts + 2 * step_s
+    room_c = start_room_c
+    for _ in range(max_steps):
+        reading_c = round(room_c, 1)
+        samples.append((ts, reading_c, new_target_c, power_w))
+        ts += step_s
+        if (heat_up and reading_c >= new_target_c - 0.2) or (
+            not heat_up and reading_c <= new_target_c + 0.2
+        ):
+            break
+        room_c += (
+            (power_w - ua_w_per_k * (room_c - outdoor_temp_c))
+            * step_s
+            / true_capacity_j_per_k
+        )
+    samples.append((ts, round(room_c, 1), new_target_c, power_w))
+    return samples, ts + step_s
+
+
+def feed_samples(learner, samples, outdoor_temp_c=0.0, **flags):
+    for ts, reading_c, target_c, power_w in samples:
+        learner.append_history(
+            make_input(
+                ts,
+                room_temp_c=reading_c,
+                outdoor_temp_c=outdoor_temp_c,
+                target_temp_c=target_c,
+                **flags,
+            ),
+            applied_heating_power_w=power_w,
+            radiator_power_w=power_w,
+        )
+
+
+def feed_jump(learner, *, outdoor_temp_c=0.0, **kwargs):
+    """Feed a whole jump stretch (see jump_samples); flags go to make_input.
+
+    Returns the timestamp after the stretch.
+    """
+    flags = {
+        key: kwargs.pop(key)
+        for key in (
+            "room_sensor_fallback",
+            "valve_position_missing",
+            "trv_adapting",
+            "radiator_not_heating",
+            "valve_positions_pct",
+        )
+        if key in kwargs
+    }
+    samples, next_ts = jump_samples(outdoor_temp_c=outdoor_temp_c, **kwargs)
+    feed_samples(learner, samples, outdoor_temp_c=outdoor_temp_c, **flags)
+    return next_ts
