@@ -1,3 +1,4 @@
+import math
 import time
 
 import pytest
@@ -10,6 +11,7 @@ from heating_controller.const import (
 from heating_controller.controller.mpc import learner as learner_module
 from heating_controller.controller.mpc.learner import (
     CAPACITY_JUMP_WEIGHT,
+    LEARNER_SETPOINT_TOLERANCE_C,
     UA_BALANCE_MAX_DRIFT_C,
     UA_BALANCE_MAX_INTERRUPTION_S,
     UA_BALANCE_MAX_WINDOW_S,
@@ -1028,15 +1030,17 @@ def test_an_adapting_trv_blocks_the_heat_balance():
 def test_heat_balance_starts_once_a_room_below_setpoint_has_recovered():
     # Back from a valve calibration that kept the radiator shut, the room
     # climbs back to its setpoint; the stretch starts once it is within the
-    # margin below the target band, not while it still recovers.
+    # tolerance below it, not while it still recovers.
     learner, _, _ = make_learner()
     learner.enable()
 
-    temps = [min(20.4 + 0.05 * index, 21.0) for index in range(NIGHT_COUNT)]
+    temps = [min(round(19.9 + 0.05 * index, 2), 21.0) for index in range(NIGHT_COUNT)]
     feed_night(learner, hours=6, room_temps=temps, target_temp_c=21.0)
     learner.run_learning_cycle()
 
-    recovered_index = next(i for i, t in enumerate(temps) if t >= 20.9 - 1e-9)
+    recovered_index = next(
+        i for i, t in enumerate(temps) if t >= 21.0 - LEARNER_SETPOINT_TOLERANCE_C
+    )
     info = learner.get_ua_balance_info()
     assert info.outcome == UaBalanceOutcome.COLLECTING
     assert info.collecting_since_ts == NIGHT_START_TS + recovered_index * STEP_S
@@ -1545,3 +1549,153 @@ def test_a_room_without_windows_ignores_the_sun():
 )
 def test_without_a_sun_source_the_sun_condition_decides(dark, outcome):
     assert _sun_learner(None, dark=dark) == outcome
+
+
+def test_a_correction_step_does_not_start_a_stretch():
+    # The written setpoint moves by the correction, the mode setpoint stays.
+    learner, capacity_model = make_small_learner()
+    samples, _ = jump_samples(start_ts=JUMP_TS, **HEAT_UP_JUMP)
+    feed_samples(learner, samples, mode_target_temp_c=18.0)
+    learner.run_learning_cycle()
+
+    assert learner.get_capacity_outcome() == CapacityOutcome.WAITING
+    assert capacity_model.learned_capacity_factor == 1.0
+
+
+def test_a_mode_change_starts_a_stretch_whatever_was_written():
+    learner, capacity_model = make_small_learner()
+    samples, _ = jump_samples(start_ts=JUMP_TS, **HEAT_UP_JUMP)
+    for ts, reading_c, mode_target_c, power_w in samples:
+        learner.append_history(
+            make_input(
+                ts,
+                room_temp_c=reading_c,
+                outdoor_temp_c=0.0,
+                target_temp_c=mode_target_c + 0.5,
+                mode_target_temp_c=mode_target_c,
+            ),
+            applied_heating_power_w=power_w,
+            radiator_power_w=power_w,
+        )
+    learner.run_learning_cycle()
+
+    assert learner.get_capacity_outcome() == CapacityOutcome.LEARNED
+    assert capacity_model.learned_capacity_factor < 1.0
+
+
+def test_fully_open_valves_within_the_tolerance_still_learn():
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+
+    feed_night(learner, target_temp_c=20.25, valve_positions_pct=(100.0,))
+    learner.run_learning_cycle()
+
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.LEARNED
+    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
+
+
+AIRING_TS = 3_000_000.0
+AIRING_STEP_S = 60
+AIRING_MASS_FACTOR = 0.3
+AIRING_TRUE_FACTOR = 0.3
+
+
+def _airing(open_min=20, drop_c=1.0, closed_steps=180):
+    """A room at 20.4 °C below 21 °C, aired for open_min minutes losing drop_c.
+
+    While open the TRV writes frost protection, the mode setpoint stays. After
+    closing 400 W heat the room back with the true airing capacity plus a
+    decaying rebound of the walls.
+    """
+    learner, capacity_model = make_small_learner()
+    learner.recalibrate(LearningFactors(1.0, AIRING_MASS_FACTOR))
+    capacity_j_per_k = AIRING_TRUE_FACTOR * BASE_CAPACITY_J_PER_K
+    ts = AIRING_TS
+
+    def feed(room_c, power_w, target_c=21.0):
+        nonlocal ts
+        learner.append_history(
+            make_input(
+                ts,
+                room_temp_c=round(room_c, 1),
+                outdoor_temp_c=0.0,
+                target_temp_c=target_c,
+                mode_target_temp_c=21.0,
+            ),
+            applied_heating_power_w=power_w,
+            radiator_power_w=power_w,
+        )
+        ts += AIRING_STEP_S
+
+    for _ in range(30):
+        feed(20.4, 312.5)
+    learner.set_window_open(True, ts)
+    steps = open_min * 60 // AIRING_STEP_S
+    for index in range(steps):
+        feed(20.4 - drop_c * (index + 1) / steps, 0.0, target_c=5.0)
+    learner.set_window_open(False, ts)
+    room_c = 20.4 - drop_c
+    elapsed_s = 0.0
+    for _ in range(closed_steps):
+        feed(room_c, 400.0)
+        rebound_c_per_s = 0.3 / 180 * math.exp(-elapsed_s / 180)
+        room_c += (
+            (400.0 - SMALL_UA_W_PER_K * room_c) / capacity_j_per_k + rebound_c_per_s
+        ) * AIRING_STEP_S
+        elapsed_s += AIRING_STEP_S
+    learner.run_learning_cycle()
+    return learner, capacity_model, AIRING_TS + 30 * AIRING_STEP_S
+
+
+def test_the_vent_factor_starts_as_a_share_of_the_mass_factor():
+    learner, _ = make_small_learner()
+    learner.recalibrate(LearningFactors(1.0, 0.5))
+    assert learner.learned_vent_capacity_factor is None
+    assert learner.vent_capacity_factor == pytest.approx(0.15)
+
+
+def test_an_airing_learns_the_vent_capacity_after_the_rebound():
+    learner, capacity_model, closed_after_ts = _airing()
+
+    info = learner.get_vent_info()
+    assert info.outcome == CapacityOutcome.LEARNED
+    assert info.kind == "vent"
+    assert info.start_ts > closed_after_ts + 20 * 60
+    assert info.estimate_factor == pytest.approx(AIRING_TRUE_FACTOR, rel=0.25)
+    assert learner.learned_vent_capacity_factor == pytest.approx(
+        # The start, 0.3 of the mass factor, clamps at the lower limit.
+        MIN_LEARNED_CAPACITY_FACTOR
+        + CAPACITY_JUMP_WEIGHT * (info.estimate_factor - MIN_LEARNED_CAPACITY_FACTOR)
+    )
+    # Neither the airing nor the frost protection makes a mass stretch.
+    assert learner.get_capacity_outcome() == CapacityOutcome.WAITING
+    assert capacity_model.learned_capacity_factor == AIRING_MASS_FACTOR
+    assert learner.consume_persisted_learning_factors().vent_capacity_factor == (
+        learner.learned_vent_capacity_factor
+    )
+
+
+def test_a_short_airing_is_too_short():
+    learner, _, _ = _airing(open_min=3)
+    assert learner.get_vent_info().outcome == CapacityOutcome.TOO_SHORT
+    assert learner.learned_vent_capacity_factor is None
+
+
+def test_an_airing_that_barely_cooled_is_too_small():
+    learner, _, _ = _airing(drop_c=0.2)
+    assert learner.get_vent_info().outcome == CapacityOutcome.TOO_SMALL
+    assert learner.learned_vent_capacity_factor is None
+
+
+def test_an_airing_is_running_until_its_stretch_ends():
+    learner, _, _ = _airing(closed_steps=10)
+    assert learner.get_vent_info().outcome == CapacityOutcome.RUNNING
+    assert learner.learned_vent_capacity_factor is None
+
+
+def test_recalibrate_sets_and_clears_the_vent_factor():
+    learner, _ = make_small_learner()
+    learner.recalibrate(LearningFactors(1.0, 1.0, vent_capacity_factor=0.4))
+    assert learner.learned_vent_capacity_factor == 0.4
+    learner.recalibrate(LearningFactors(1.0, 1.0))
+    assert learner.learned_vent_capacity_factor is None

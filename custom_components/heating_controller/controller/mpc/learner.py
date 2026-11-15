@@ -13,7 +13,12 @@ from ...const import (
     LearningStatus,
     UaBalanceOutcome,
 )
-from .models.capacity import ThermalCapacityModel
+from .math_helper import clamp
+from .models.capacity import (
+    MAX_LEARNED_CAPACITY_FACTOR,
+    MIN_LEARNED_CAPACITY_FACTOR,
+    ThermalCapacityModel,
+)
 from .models.gains import HourOutcome, RoomGainModel, SunSource, profile_index
 from .models.loss import RoomLossModel
 from .results import RoomMpcInput
@@ -26,13 +31,20 @@ from .types import (
 
 MIN_HISTORY_SAMPLES = 5
 
-# Capacity is learned from jump stretches: the setpoint steps (heating back
-# after frost protection, a window closed, a mode change) and the room follows
-# over tens of minutes. Held at its setpoint the room hardly moves, and its
-# capacity does not show. Over the stretch the net heat -- radiator heat minus
-# losses -- divided by the room's change is the capacity it showed.
+# The learner judges the room against the setpoint of its mode, not against
+# the setpoint written to the TRVs: the setpoint correction steps that one in
+# 0.5 K steps, and frost protection for an open window is no mode change. The
+# correction leaves an error of up to a quarter kelvin either way, plus a
+# sensor step; a room within this below its mode's setpoint counts as near it.
+LEARNER_SETPOINT_TOLERANCE_C = 0.4
+
+# Capacity is learned from jump stretches: the mode's setpoint steps and the
+# room follows over tens of minutes. Held at its setpoint the room hardly
+# moves, and its capacity does not show. Over the stretch the net heat --
+# radiator heat minus losses -- divided by the room's change is the capacity
+# it showed.
 JUMP_MIN_TARGET_STEP_C = 0.5
-# A later change of the setpoint ends the stretch.
+# A later change of the mode's setpoint ends the stretch.
 JUMP_TARGET_CHANGE_C = 0.1
 # The stretch ends once the room is this close to its new setpoint.
 JUMP_SETTLED_C = 0.2
@@ -53,6 +65,21 @@ JUMP_SUN_LOOKBACK_S = 2 * 3600
 JUMP_SUN_SAMPLE_S = 1800
 HEAT_UP = "heat_up"
 COOL_DOWN = "cool_down"
+VENT = "vent"
+
+# A second capacity is watched after airing: an open window cools mostly the
+# air, which then warms back from walls and furniture faster than the room's
+# mass would allow. The stretch starts once that rebound is over -- the room
+# no longer warms faster than the model expects at the current heat, with the
+# airing capacity -- and is balanced like a jump stretch. It only is
+# observed: nothing uses it yet.
+VENT_MIN_WINDOW_OPEN_S = 5 * 60
+VENT_MIN_COOLING_C = 0.3
+# The rebound is judged on the trend over this long before each sample.
+VENT_REBOUND_WINDOW_S = 15 * 60
+# Until the first airing stretch learns, the airing capacity is this share
+# of the mass capacity.
+VENT_START_SHARE = 0.3
 
 # UA is learned from a heat balance over a long window rather than from single
 # prediction windows: in closed loop the room sits at the setpoint the
@@ -85,7 +112,8 @@ UA_BALANCE_MAX_DRIFT_C = 0.3
 # A room still coasting down from above its setpoint with the valve shut would
 # end the night far below where it started, one recovering from below (after a
 # long valve calibration, say) far above. The stretch starts at the first
-# sample no more than this above the setpoint or below the target band, or
+# sample no more than this above the setpoint or no more than
+# LEARNER_SETPOINT_TOLERANCE_C below it, or
 # once the room has held its temperature for an hour, then from the start of
 # that hour: a room kept above its setpoint by its neighbours never comes down
 # and would otherwise never learn.
@@ -111,7 +139,8 @@ UA_BALANCE_WEIGHT = 0.3
 # that is flow-limited gives off less (study, 28/29 October: target 0.54 with
 # the valve open all night, 0.40-0.41 on nights it held its setpoint). A
 # stretch that spent more than this share with every reported valve at least
-# this open and the room below its target band is not learned from.
+# this open and the room more than LEARNER_SETPOINT_TOLERANCE_C below its
+# setpoint is not learned from.
 VALVE_SATURATED_OPENING_PCT = 95.0
 UA_BALANCE_MAX_SATURATED_SHARE = 0.5
 
@@ -134,6 +163,12 @@ def _default_local_day(timestamp: float) -> int:
     return datetime.fromtimestamp(timestamp, UTC).toordinal()
 
 
+def _mode_target_c(mpc_input: RoomMpcInput) -> float:
+    if mpc_input.mode_target_temp_c is not None:
+        return mpc_input.mode_target_temp_c
+    return mpc_input.target_temp_c
+
+
 @dataclass
 class LearnerHistoryEntry:
     timestamp: float
@@ -152,7 +187,7 @@ class LearnerHistoryEntry:
     # A domestic hot-water charge ran: the radiators got no water.
     hot_water_charge: bool = False
     # All reported valves at least VALVE_SATURATED_OPENING_PCT open with the
-    # room below its target band.
+    # room more than LEARNER_SETPOINT_TOLERANCE_C below its setpoint.
     valve_saturated: bool = False
     window_open: bool = False
     # A window contact reports neither open nor closed.
@@ -173,7 +208,6 @@ class RoomMpcModelLearner:
         self,
         loss_model: RoomLossModel,
         capacity_model: ThermalCapacityModel,
-        target_band_c: float = 0.0,
         gain_model: RoomGainModel | None = None,
     ) -> None:
         self._loss_model = loss_model
@@ -183,7 +217,6 @@ class RoomMpcModelLearner:
         self._profile_index_at: Callable[[float], int] = _default_profile_index
         self._local_day_at: Callable[[float], int] = _default_local_day
         self._sun_source: Callable[[], SunSource | None] = lambda: None
-        self._target_band_c = max(0.0, target_band_c)
 
         self._history: list[LearnerHistoryEntry] = []
 
@@ -198,6 +231,12 @@ class RoomMpcModelLearner:
         # Timestamp of the last setpoint jump already judged.
         self._jump_done_ts = 0.0
         self._capacity_blocked_until_ts = 0.0
+        # Airing capacity: None until a stretch learned it.
+        self._vent_capacity_factor: float | None = None
+        self._vent_info = CapacityStretchInfo()
+        self._window_opened_ts: float | None = None
+        # Airings (opened, closed) not judged yet.
+        self._pending_airings: list[tuple[float, float]] = []
         self._window_unknown = False
         self._learning_paused = False
         self._learning_resumed_ts = 0.0
@@ -284,8 +323,12 @@ class RoomMpcModelLearner:
         if window_open and not self._window_open:
             self._close_ua_balance(now_ts)
             self._pending_persisted_factors = None
+            self._window_opened_ts = now_ts
         if self._window_open and not window_open:
             self._ua_blocked_until_ts = max(self._ua_blocked_until_ts, now_ts)
+            if self._window_opened_ts is not None:
+                self._pending_airings.append((self._window_opened_ts, now_ts))
+            self._window_opened_ts = None
         self._window_open = window_open
         if window_open and self._enabled:
             self._learning_state = self._create_learning_state(
@@ -327,7 +370,7 @@ class RoomMpcModelLearner:
                 flow_temperature_c=mpc_input.flow_temp_c,
                 applied_heating_power_w=applied_heating_power_w,
                 radiator_power_w=radiator_power_w,
-                target_temperature_c=mpc_input.target_temp_c,
+                target_temperature_c=_mode_target_c(mpc_input),
                 room_sensor_fallback=mpc_input.room_sensor_fallback,
                 valve_position_missing=mpc_input.valve_position_missing,
                 trv_adapting=mpc_input.trv_adapting,
@@ -502,6 +545,9 @@ class RoomMpcModelLearner:
         # Jump stretches are judged with heating off as well: the room
         # cooling down in frost protection shows its capacity just the same.
         capacity_learned = self._evaluate_jump_stretches()
+        if self._evaluate_airings():
+            # Observed only: kept, but no learned status.
+            self._pending_persisted_factors = self._get_current_learning_factors()
         if not self._enabled:
             self._run_disabled_heat_balance()
             if capacity_learned:
@@ -655,6 +701,28 @@ class RoomMpcModelLearner:
         self, kind: str, stretch: list[LearnerHistoryEntry]
     ) -> CapacityOutcome:
         info = self._capacity_info
+        rejection = self._estimate_stretch(kind, stretch, info)
+        if rejection is not None:
+            return rejection
+        assert info.estimate_factor is not None
+        if kind == COOL_DOWN:
+            # Cooling down leaves the gains, unknown here, in the balance;
+            # the estimate is kept for comparison only.
+            return CapacityOutcome.ESTIMATED
+        current_factor = self._capacity_model.learned_capacity_factor
+        self._capacity_model.learned_capacity_factor = current_factor + (
+            CAPACITY_JUMP_WEIGHT * (info.estimate_factor - current_factor)
+        )
+        info.last_learned_ts = stretch[-1].timestamp
+        return CapacityOutcome.LEARNED
+
+    def _estimate_stretch(
+        self,
+        kind: str,
+        stretch: list[LearnerHistoryEntry],
+        info: CapacityStretchInfo,
+    ) -> CapacityOutcome | None:
+        """Capacity factor the stretch showed, into info; a rejection or None."""
         if (
             len(stretch) < 2
             or stretch[-1].timestamp - stretch[0].timestamp < JUMP_MIN_S
@@ -700,16 +768,187 @@ class RoomMpcModelLearner:
         info.estimate_factor = estimate
         if not JUMP_MIN_ESTIMATE_FACTOR <= estimate <= JUMP_MAX_ESTIMATE_FACTOR:
             return CapacityOutcome.IMPLAUSIBLE
-        if kind == COOL_DOWN:
-            # Cooling down leaves the gains, unknown here, in the balance;
-            # the estimate is kept for comparison only.
-            return CapacityOutcome.ESTIMATED
-        current_factor = self._capacity_model.learned_capacity_factor
-        self._capacity_model.learned_capacity_factor = (
-            current_factor + CAPACITY_JUMP_WEIGHT * (estimate - current_factor)
+        return None
+
+    @property
+    def vent_capacity_factor(self) -> float:
+        """Airing capacity factor; until learned a share of the mass one."""
+        if self._vent_capacity_factor is not None:
+            return self._vent_capacity_factor
+        return clamp(
+            VENT_START_SHARE * self._capacity_model.learned_capacity_factor,
+            MIN_LEARNED_CAPACITY_FACTOR,
+            MAX_LEARNED_CAPACITY_FACTOR,
+        )
+
+    @property
+    def learned_vent_capacity_factor(self) -> float | None:
+        return self._vent_capacity_factor
+
+    def get_vent_info(self) -> CapacityStretchInfo:
+        return self._vent_info
+
+    def _evaluate_airings(self) -> bool:
+        """Judge every airing not judged yet; True if the factor moved."""
+        learned = False
+        while self._pending_airings:
+            opened_ts, closed_ts = self._pending_airings[0]
+            outcome = self._evaluate_airing(opened_ts, closed_ts)
+            if outcome is None:
+                return learned
+            self._pending_airings.pop(0)
+            learned = learned or outcome == CapacityOutcome.LEARNED
+        return learned
+
+    def _evaluate_airing(
+        self, opened_ts: float, closed_ts: float
+    ) -> CapacityOutcome | None:
+        """Judge the stretch after one airing; None while it is still running."""
+        info = self._vent_info
+        history = self._history
+        before = next(
+            (entry for entry in reversed(history) if entry.timestamp <= opened_ts),
+            None,
+        )
+        if closed_ts - opened_ts < VENT_MIN_WINDOW_OPEN_S:
+            return self._end_airing(closed_ts, None, CapacityOutcome.TOO_SHORT)
+        if before is None:
+            return self._end_airing(closed_ts, None, CapacityOutcome.GAP)
+
+        earliest_ts = max(closed_ts, self._capacity_blocked_until_ts)
+        start = self._rebound_end_index(closed_ts, earliest_ts)
+        if start is None:
+            if history and history[-1].timestamp - closed_ts >= JUMP_MAX_S:
+                # The room kept warming faster than its model the whole time.
+                return self._end_airing(closed_ts, None, CapacityOutcome.IMPLAUSIBLE)
+            self._reset_vent_info(closed_ts, None)
+            info.outcome = CapacityOutcome.RUNNING
+            return None
+        if start < 0:
+            # A flag ended the airing before the rebound was over.
+            entry = history[-start - 1]
+            outcome = self._invalid_entry_outcome(entry)
+            assert outcome is not None
+            return self._end_airing(entry.timestamp, None, outcome)
+
+        coolest_c = min(
+            entry.room_temperature_c
+            for entry in history[: start + 1]
+            if entry.timestamp >= opened_ts
+        )
+        if before.room_temperature_c - coolest_c < VENT_MIN_COOLING_C:
+            return self._end_airing(
+                history[start].timestamp, None, CapacityOutcome.TOO_SMALL
+            )
+
+        target_c = history[start].target_temperature_c
+        end: int | None = None
+        for index in range(start, len(history)):
+            entry = history[index]
+            if self._invalid_entry_outcome(entry) is not None:
+                end = index - 1
+                break
+            if (
+                target_c is None
+                or entry.target_temperature_c is None
+                or abs(entry.target_temperature_c - target_c) >= JUMP_TARGET_CHANGE_C
+            ):
+                end = index - 1
+                break
+            if entry.room_temperature_c >= target_c - JUMP_SETTLED_C:
+                end = index
+                break
+            if entry.timestamp - history[start].timestamp >= JUMP_MAX_S:
+                end = index
+                break
+        if end is None:
+            self._reset_vent_info(history[start].timestamp, None)
+            info.outcome = CapacityOutcome.RUNNING
+            return None
+
+        stretch = history[start : end + 1]
+        self._reset_vent_info(
+            history[start].timestamp, stretch[-1].timestamp if stretch else None
+        )
+        rejection = self._estimate_stretch(VENT, stretch, info)
+        if rejection is not None:
+            info.outcome = rejection
+            return rejection
+        assert info.estimate_factor is not None
+        current_factor = self.vent_capacity_factor
+        self._vent_capacity_factor = clamp(
+            current_factor
+            + CAPACITY_JUMP_WEIGHT * (info.estimate_factor - current_factor),
+            MIN_LEARNED_CAPACITY_FACTOR,
+            MAX_LEARNED_CAPACITY_FACTOR,
         )
         info.last_learned_ts = stretch[-1].timestamp
-        return CapacityOutcome.LEARNED
+        info.outcome = CapacityOutcome.LEARNED
+        return info.outcome
+
+    def _rebound_end_index(self, closed_ts: float, earliest_ts: float) -> int | None:
+        """First sample from earliest_ts on where the rebound is over.
+
+        None while it still runs; -(index + 1) of a flagged sample that ends
+        the airing first.
+        """
+        history = self._history
+        ua_w_per_k = self._loss_model.effective_ua_w_per_k
+        capacity_j_per_k = (
+            self._capacity_model.base_capacity_j_per_k * self.vent_capacity_factor
+        )
+        for index, entry in enumerate(history):
+            if entry.timestamp <= closed_ts:
+                continue
+            if self._invalid_entry_outcome(entry) is not None:
+                return -(index + 1)
+            if entry.timestamp < earliest_ts:
+                continue
+            if (
+                entry.target_temperature_c is not None
+                and entry.room_temperature_c
+                >= entry.target_temperature_c - JUMP_SETTLED_C
+            ):
+                # Back at the setpoint already: the stretch is too short.
+                return index
+            first = bisect_left(
+                history,
+                max(closed_ts, entry.timestamp - VENT_REBOUND_WINDOW_S),
+                hi=index + 1,
+                key=lambda sample: sample.timestamp,
+            )
+            window = history[first : index + 1]
+            if (
+                len(window) < 2
+                or window[-1].timestamp - window[0].timestamp
+                < VENT_REBOUND_WINDOW_S / 2
+            ):
+                continue
+            duration_s = window[-1].timestamp - window[0].timestamp
+            observed_c_per_s = self._trend_drift_c(window) / duration_s
+            expected_c_per_s = (
+                self._balance_point_power_w(entry)
+                - ua_w_per_k * (entry.room_temperature_c - entry.outdoor_temperature_c)
+            ) / capacity_j_per_k
+            if observed_c_per_s <= expected_c_per_s:
+                return index
+        return None
+
+    def _end_airing(
+        self, start_ts: float, end_ts: float | None, outcome: CapacityOutcome
+    ) -> CapacityOutcome:
+        self._reset_vent_info(start_ts, end_ts)
+        self._vent_info.outcome = outcome
+        return outcome
+
+    def _reset_vent_info(self, start_ts: float, end_ts: float | None) -> None:
+        info = self._vent_info
+        info.kind = VENT
+        info.start_ts = start_ts
+        info.end_ts = end_ts
+        info.room_delta_c = None
+        info.estimate_factor = None
+        info.saturated_share = None
 
     def _jump_sun_free(self, kind: str, start_ts: float, end_ts: float) -> bool:
         """No sun worth mentioning on the room's windows during the stretch and
@@ -989,8 +1228,8 @@ class RoomMpcModelLearner:
     def _settled_since_ts(self, start_ts: float) -> float | None:
         """First sample from start_ts on where the room has settled.
 
-        Settled is near the setpoint -- within the margin around the band the
-        controller aims for -- or holding its temperature wherever it is. A
+        Settled is near the setpoint -- within the tolerance below and the
+        margin above it -- or holding its temperature wherever it is. A
         room coasting down from above or recovering from below would book its
         stored heat as a drift. A room found holding still counts from the
         start of the hour it held still: that hour stored next to nothing.
@@ -1005,24 +1244,25 @@ class RoomMpcModelLearner:
                 return stationary_since_ts
         return None
 
-    def _near_setpoint(self, entry: LearnerHistoryEntry) -> bool:
-        """Within the margin around the band the controller aims for."""
+    @staticmethod
+    def _near_setpoint(entry: LearnerHistoryEntry) -> bool:
+        """Within the tolerance below and the margin above the setpoint."""
         return entry.target_temperature_c is None or (
-            entry.target_temperature_c
-            - self._target_band_c
-            - UA_BALANCE_SETTLED_MARGIN_C
+            entry.target_temperature_c - LEARNER_SETPOINT_TOLERANCE_C
             <= entry.room_temperature_c
             <= entry.target_temperature_c + UA_BALANCE_SETTLED_MARGIN_C
         )
 
-    def _valve_saturated(self, mpc_input: RoomMpcInput) -> bool:
+    @staticmethod
+    def _valve_saturated(mpc_input: RoomMpcInput) -> bool:
         openings_pct = [
             opening for opening in mpc_input.valve_positions_pct if opening is not None
         ]
         return (
             bool(openings_pct)
             and min(openings_pct) >= VALVE_SATURATED_OPENING_PCT
-            and mpc_input.room_temp_c < mpc_input.target_temp_c - self._target_band_c
+            and mpc_input.room_temp_c
+            < _mode_target_c(mpc_input) - LEARNER_SETPOINT_TOLERANCE_C
         )
 
     def _stationary_since_ts(self, index: int, start_ts: float) -> float | None:
@@ -1128,8 +1368,18 @@ class RoomMpcModelLearner:
         if self._history:
             self._ua_balance_from_ts = self._history[-1].timestamp
             self._jump_done_ts = self._history[-1].timestamp
+        self._pending_airings = []
         self._loss_model.learned_ua_factor = factors.ua_factor
         self._capacity_model.learned_capacity_factor = factors.capacity_factor
+        self._vent_capacity_factor = (
+            None
+            if factors.vent_capacity_factor is None
+            else clamp(
+                factors.vent_capacity_factor,
+                MIN_LEARNED_CAPACITY_FACTOR,
+                MAX_LEARNED_CAPACITY_FACTOR,
+            )
+        )
         self._learning_state = self._create_learning_state(self._learning_state.status)
 
     def consume_persisted_learning_factors(self) -> LearningFactors | None:
@@ -1146,4 +1396,5 @@ class RoomMpcModelLearner:
         return LearningFactors(
             ua_factor=self._loss_model.learned_ua_factor,
             capacity_factor=self._capacity_model.learned_capacity_factor,
+            vent_capacity_factor=self._vent_capacity_factor,
         )

@@ -33,7 +33,6 @@ def make_controller(flow_gate_config=None):
         trvs=[TrvConfig(name="trv1")],
         max_sensor_age_s=1800,
         room_sensor_configured=False,
-        target_band_c=0.0,
         flow_gate_config=flow_gate_config,
     )
 
@@ -44,7 +43,6 @@ def make_thermal_controller(thermal_config):
         trvs=[TrvConfig(name="trv1")],
         max_sensor_age_s=1800,
         room_sensor_configured=False,
-        target_band_c=0.0,
     )
 
 
@@ -64,7 +62,6 @@ def _valve_controller(trvs=None, flow_gate_config=None):
         or [TrvConfig(name="trv1", width_mm=1000, valve_position_configured=True)],
         max_sensor_age_s=1800,
         room_sensor_configured=False,
-        target_band_c=0.0,
         flow_gate_config=flow_gate_config,
     )
 
@@ -191,7 +188,6 @@ def _esszimmer_controller():
         ],
         max_sensor_age_s=1800,
         room_sensor_configured=False,
-        target_band_c=0.1,
     )
     controller.recalibrate_learning_factors(
         LearningFactors(ua_factor=0.558, capacity_factor=1.0)

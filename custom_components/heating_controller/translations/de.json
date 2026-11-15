@@ -26,8 +26,7 @@
           "flow_gate_close_surplus_c": "Überschuss-Gate: schließen ab Soll + (K)",
           "flow_gate_open_surplus_c": "Überschuss-Gate: öffnen unter Soll + (K)",
           "flow_gate_hold_time_s": "Überschuss-Gate: Haltezeit vor dem Schließen (s)",
-          "max_sensor_age_s": "Max. Sensoralter (s)",
-          "target_band_c": "Zielband unter Sollwert (K)"
+          "max_sensor_age_s": "Max. Sensoralter (s)"
         }
       },
       "sun": {
@@ -684,7 +683,7 @@
         },
         "capacity_factor": {
           "name": "Kapazitätsfaktor",
-          "description": "Gelernter Faktor der Wärmekapazität. 1.0 setzt ihn auf den Auslegungswert zurück."
+          "description": "Gelernter Faktor der Wärmekapazität. 1.0 setzt ihn auf den Auslegungswert zurück. Die Lüften-Kapazität beginnt neu davon."
         },
         "reset_gains": {
           "name": "Gewinne zurücksetzen",

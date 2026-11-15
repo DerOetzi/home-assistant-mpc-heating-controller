@@ -64,7 +64,6 @@ ENTRY_DATA = {
     "room_area_m2": 20.0,
     "construction": "medium",
     "max_sensor_age_s": 1800.0,
-    "target_band_c": 0.1,
     "flow_threshold_entity": "input_number.flow_threshold",
 }
 
@@ -1327,12 +1326,6 @@ async def test_flow_entity_unavailable_since_startup_stays_inactive(
     assert coordinator.trv_active is False
 
     coordinator.async_unload()
-
-
-async def test_target_band_comes_from_the_entry(hass: HomeAssistant) -> None:
-    coordinator = await _setup_coordinator(hass, target_band_c=0.25)
-
-    assert coordinator.mpc._target_band_c == 0.25
 
 
 VALVE_ENTITY = "sensor.heizung_wohnzimmer_pi_heating_demand"

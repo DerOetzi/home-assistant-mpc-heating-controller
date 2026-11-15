@@ -41,7 +41,7 @@ stands:
 | `learned` | The last balance moved the factor 30 % towards its target. |
 | `learned_at_limit` | The target lay below 0.15: the radiators supplied almost nothing and the room lives off its neighbours. The factor moved towards 0.15 only. |
 | `collecting` | A stretch is running. |
-| `coasting` | The room is more than 0.1 K above its setpoint or below its target band; the stretch starts once it is back or has held its temperature for an hour. |
+| `coasting` | The room is more than 0.1 K above its mode setpoint or more than 0.4 K below it; the stretch starts once it is back or has held its temperature for an hour. |
 | `outside_window` | Sun condition not met. A room still moving after sunrise reports this, not `coasting`. |
 | `paused` | Learning enabled entity off. |
 | `too_short` | The stretch ended with fewer than four usable hours. |
@@ -55,7 +55,7 @@ stands:
 | `trv_adapting` | A TRV calibrates its valve and moves it by itself, has no calibrated valve (adaptation status other than found, e.g. `none` after mounting or `lost`), or is in mounting mode. |
 | `radiator_not_heating` | A radiator stays cold although its valve reports open, see [Radiator check](#radiator-check). |
 | `outdoor_temperature_missing` | The outdoor temperature is missing, see [Sensor reliability](#sensor-reliability). The stretch before the outage is balanced; the next one starts once the value is back. |
-| `valve_saturated` | For more than half the stretch every valve was at least 95 % open with the room below its target band. The heat assumed for a full opening is the least certain (a flow-limited radiator gives off less), so the factor is left alone; the target is kept for diagnostics. |
+| `valve_saturated` | For more than half the stretch every valve was at least 95 % open with the room more than 0.4 K below its mode setpoint. The heat assumed for a full opening is the least certain (a flow-limited radiator gives off less), so the factor is left alone; the target is kept for diagnostics. |
 | `window_open` | A window contact in the room is open. |
 
 | Attribute | Meaning |
@@ -105,6 +105,11 @@ it is still judged.
 | `last_stretch_estimate_factor` | Capacity factor the stretch's energy balance points to. |
 | `last_stretch_saturated_share` | Share of the stretch with a fully open valve (diagnostic only). |
 | `last_learned` | End of the last stretch that moved the factor. |
+| `vent_capacity_factor` | Airing capacity factor (observed only, see [When the model learns](#when-the-model-learns)); 0.3 of the capacity factor until learned. |
+| `vent_learned` | Whether an airing has been learned since the last reset. |
+| `vent_outcome` | How the last airing was judged, with the states above. |
+| `vent_stretch_start`, `vent_stretch_end`, `vent_stretch_room_delta_c`, `vent_stretch_estimate_factor` | As above, for the stretch after the last airing. |
+| `vent_last_learned` | End of the last airing stretch that moved the airing factor. |
 
 Adjustments are deliberately gradual — expect the model to sharpen over real heating days,
 not to converge instantly. None of these states need any action from you;
@@ -121,8 +126,9 @@ for, whatever the model believes the losses are.
   stretch the heat the radiators gave off (the requested power, lagged as described in
   [Radiator lag and the room observer](#radiator-lag-and-the-room-observer)) has to equal
   what the room lost plus what it stored. The factor that balances this is the target, and each balance moves the learned
-  factor 30 % of the way there. A stretch starts once the room is near its setpoint — no more than 0.1 K above it or
-  below the target band; a room still coasting down on the evening's heat with the valve
+  factor 30 % of the way there. A stretch starts once the room is near its mode setpoint — no more than 0.1 K above it
+  or 0.4 K below (the setpoint correction moves in 0.5 K steps and leaves up to a
+  quarter kelvin, plus a sensor step); a room still coasting down on the evening's heat with the valve
   shut would end far below where it started, one recovering from below far above (status
   `coasting` until then) — or once it has held its temperature for an
   hour (trend below 0.05 K/h), counted from the start of that hour, so a room its
@@ -153,11 +159,14 @@ for, whatever the model believes the losses are.
   `learned_at_limit`, the measured target stays in `last_target_factor` of the UA learning status).
   A stretch rejected for drift reports the
   drift in `last_drift_c`.
+- **Mode setpoint.** The learner judges against the setpoint of the room's mode
+  (comfort, eco …), not the value written to the TRV: neither the setpoint correction nor
+  frost protection on an open window count as a setpoint change.
 - **Capacity factor (`capacity_factor`): jump stretches.** A held room hardly moves, so
-  the capacity is learned where it does: after the setpoint jumps by at least 0.5 K
-  (comfort/eco switch, end of frost protection, a window closing). The stretch starts at
+  the capacity is learned where it does: after the mode setpoint jumps by at least 0.5 K
+  (comfort/eco switch). The stretch starts at
   the jump — or once a window closed or the configuration changed 10 minutes ago — and
-  ends when the room comes within 0.2 K of the new setpoint, the setpoint changes again by
+  ends when the room comes within 0.2 K of the new setpoint, the mode setpoint changes again by
   0.1 K or more, a flag from the table above appears, or after three hours. Over the
   stretch the energy balance gives the net heat: the heat the radiators gave off minus the
   loss with the current heat-loss factor (mean room against outdoor, per interval).
@@ -165,6 +174,14 @@ for, whatever the model believes the losses are.
   moves the factor 30 % of the way to it. A cool-down stretch only reports its estimate:
   the gains, unknown here, are a larger part of its balance. Stretches are judged with
   heating off as well, so a room cooling down in frost protection shows its estimate too.
+- **Airing capacity (`vent_capacity_factor`), observed only.** After airing, the room
+  air comes back quickly while walls and furniture stayed warm, so it shows a smaller
+  capacity than a jump. The value has no effect on control yet. An airing counts if the
+  window was open at least 5 minutes and the room cooled by at least 0.3 K. The stretch
+  starts once the rebound is over — the room no longer warms faster over 15 minutes than
+  the model expects with the current heat — at the earliest when the capacity block after
+  closing ends, and is balanced and ended like a heat-up stretch. Until the first airing
+  is learned the factor is 0.3 of the capacity factor, within the same limits.
 - **Sun.** The heat-loss balance does not run while the sun is up or within two hours after
   sunset, when walls still release the afternoon's solar heat. Sunrise and sunset are
   calculated from the location configured in Home Assistant. A jump stretch only counts if
@@ -213,7 +230,7 @@ data:
 
 A factor that is left out stays as it is, so a reset needs an explicit `1.0`; at least one
 value (or a reset) is required. The call discards the heat-loss stretch and any jump
-stretch in progress, because they were measured with the old factors. `reset_gains: true` forgets the
+stretch in progress, because they were measured with the old factors. A new capacity factor also resets the airing factor to its start value. `reset_gains: true` forgets the
 learned steady gain, day profile and sun terms (see [Gains and sun](#gains-and-sun)).
 
 ## Gains and sun
@@ -446,21 +463,6 @@ Each room runs its model alongside the room as a state observer (sensor
   room whose radiators are still hot closes earlier. The demand that holds the setpoint is
   the valve opening at which the radiators give off the loss at the setpoint. The hold and recovery flow
   temperatures use the lag as well; the flow requirement stays weather-driven.
-
-## Target band
-
-Each cycle the controller tries every target valve opening from 0 to 100 % in 5 % steps and
-predicts the room 30 minutes ahead, with the power the radiators give off at that opening
-(see [Valve position](#valve-position-the-heat-the-radiators-really-get)). A prediction between the setpoint minus the **target band** (default
-0.1 K, one step of the usual room sensor) and the setpoint counts as on target; among
-those, the demand nearest the one that holds the setpoint wins. Below the band the
-demand that comes closest wins, above the setpoint the lowest one.
-
-Without the band a heavy room with little radiator reserve at a low flow temperature
-cannot climb the last 0.1 K within 30 minutes at any demand, and the valve stayed fully
-open for hours over one sensor step. With it the room settles within the band, a few
-hundredths to a tenth of a kelvin below the setpoint. A band of 0 aims at the exact
-setpoint. The band is set on the hub for all rooms.
 
 ## Demand smoothing
 

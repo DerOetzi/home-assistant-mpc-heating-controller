@@ -1064,9 +1064,11 @@ class CapacityLearningStatusSensor(_DiagnosticSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        info = self._coordinator.mpc.get_capacity_info()
+        mpc = self._coordinator.mpc
+        info = mpc.get_capacity_info()
+        vent = mpc.get_vent_info()
         return {
-            "capacity_j_per_k": round(self._coordinator.mpc.effective_capacity_j_per_k),
+            "capacity_j_per_k": round(mpc.effective_capacity_j_per_k),
             "last_stretch_kind": info.kind,
             "last_stretch_start": _iso(info.start_ts),
             "last_stretch_end": _iso(info.end_ts),
@@ -1074,6 +1076,15 @@ class CapacityLearningStatusSensor(_DiagnosticSensor):
             "last_stretch_estimate_factor": _rounded(info.estimate_factor, 3),
             "last_stretch_saturated_share": _rounded(info.saturated_share, 2),
             "last_learned": _iso(info.last_learned_ts),
+            # Airing capacity after a window closed: observed only.
+            "vent_capacity_factor": _rounded(mpc.vent_capacity_factor, 4),
+            "vent_learned": mpc.learned_vent_capacity_factor is not None,
+            "vent_outcome": vent.outcome.value,
+            "vent_stretch_start": _iso(vent.start_ts),
+            "vent_stretch_end": _iso(vent.end_ts),
+            "vent_stretch_room_delta_c": _rounded(vent.room_delta_c, 2),
+            "vent_stretch_estimate_factor": _rounded(vent.estimate_factor, 3),
+            "vent_last_learned": _iso(vent.last_learned_ts),
         }
 
 

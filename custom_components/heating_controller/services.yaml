@@ -29,7 +29,9 @@ recalibrate:
           mode: box
     capacity_factor:
       name: Capacity factor
-      description: Learned thermal-capacity factor. 1.0 resets it to the design value.
+      description: >-
+        Learned thermal-capacity factor. 1.0 resets it to the design value.
+        The airing capacity starts afresh from it.
       example: 1.0
       selector:
         number:

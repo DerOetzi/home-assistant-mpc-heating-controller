@@ -80,6 +80,8 @@ _REMOVED_PLANNER_KEYS = frozenset(
         "mpc_max_demand_step_pct",
     }
 )
+# Minor version 3: the learner's tolerance is a constant.
+_REMOVED_TARGET_BAND_KEY = "target_band_c"
 
 RECALIBRATE_SCHEMA = vol.All(
     vol.Schema(
@@ -236,12 +238,11 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entry.version,
         )
         return False
-    if entry.minor_version < 2:
-        data = {
-            key: value
-            for key, value in entry.data.items()
-            if key not in _REMOVED_PLANNER_KEYS
-        }
+    if entry.minor_version < HUB_MINOR_VERSION:
+        removed = {_REMOVED_TARGET_BAND_KEY}
+        if entry.minor_version < 2:
+            removed |= _REMOVED_PLANNER_KEYS
+        data = {key: value for key, value in entry.data.items() if key not in removed}
         hass.config_entries.async_update_entry(
             entry, data=data, minor_version=HUB_MINOR_VERSION
         )

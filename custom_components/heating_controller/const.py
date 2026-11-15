@@ -8,7 +8,7 @@ DOMAIN = "heating_controller"
 # subentries.
 HUB_VERSION = 8
 # 2: the demand planner's options are gone.
-HUB_MINOR_VERSION = 2
+HUB_MINOR_VERSION = 3
 
 DEFAULT_COMFORT_TEMPERATURE_C = 22.0
 DEFAULT_ECO_TEMPERATURE_OFFSET_C = -2.0
@@ -17,13 +17,6 @@ DEFAULT_FLOW_THRESHOLD_C = 30.0
 DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C = 0.5
 DEFAULT_FLOW_GATE_OPEN_SURPLUS_C = 0.2
 DEFAULT_FLOW_GATE_HOLD_TIME_S = 900.0
-
-# Band below the setpoint the learner counts as near target: one step of the
-# usual 0.1 K room sensor.
-DEFAULT_TARGET_BAND_C = 0.1
-MIN_TARGET_BAND_C = 0.0
-MAX_TARGET_BAND_C = 0.5
-TARGET_BAND_STEP_C = 0.05
 
 MAX_TRV_COUNT = 3
 
@@ -89,7 +82,6 @@ CONF_FLOW_GATE_CLOSE_SURPLUS = "flow_gate_close_surplus_c"
 CONF_FLOW_GATE_OPEN_SURPLUS = "flow_gate_open_surplus_c"
 CONF_FLOW_GATE_HOLD_TIME = "flow_gate_hold_time_s"
 CONF_MAX_SENSOR_AGE = "max_sensor_age_s"
-CONF_TARGET_BAND = "target_band_c"
 # Sun on the building: how the house is turned, its roof, and which day
 # counts as a workday for the gain profile.
 CONF_BUILDING_ROTATION = "building_rotation_deg"
@@ -139,7 +131,6 @@ HUB_KEYS = (
     CONF_FLOW_GATE_OPEN_SURPLUS,
     CONF_FLOW_GATE_HOLD_TIME,
     CONF_MAX_SENSOR_AGE,
-    CONF_TARGET_BAND,
     CONF_BUILDING_ROTATION,
     CONF_ROOF_ORIENTATION,
     CONF_ROOF_TILT,

@@ -128,11 +128,8 @@ class RoomMpcController:
         trvs: list[TrvConfig],
         max_sensor_age_s: float,
         room_sensor_configured: bool,
-        target_band_c: float,
         flow_gate_config: FlowGateConfig | None = None,
     ) -> None:
-        self._target_band_c = max(0.0, target_band_c)
-
         gate_config = flow_gate_config or FlowGateConfig()
         self._live_flow_gate = _SurplusFlowGate(gate_config)
         self._preview_flow_gate = _SurplusFlowGate(gate_config)
@@ -150,7 +147,6 @@ class RoomMpcController:
         self._learner = RoomMpcModelLearner(
             self._loss_model,
             self._capacity_model,
-            target_band_c=self._target_band_c,
             gain_model=self._gain_model,
         )
         self._observer = RoomStateObserver(
@@ -226,6 +222,18 @@ class RoomMpcController:
         return self._learner.get_capacity_info()
 
     @property
+    def vent_capacity_factor(self) -> float:
+        return self._learner.vent_capacity_factor
+
+    @property
+    def learned_vent_capacity_factor(self) -> float | None:
+        """None until an airing stretch learned it."""
+        return self._learner.learned_vent_capacity_factor
+
+    def get_vent_info(self) -> CapacityStretchInfo:
+        return self._learner.get_vent_info()
+
+    @property
     def effective_capacity_j_per_k(self) -> float:
         return self._capacity_model.effective_capacity_j_per_k
 
@@ -257,11 +265,13 @@ class RoomMpcController:
         self,
         target_temperature_c: float,
         apply_side_effects: bool = True,
+        mode_target_temperature_c: float | None = None,
     ) -> RoomMpcComputeResult:
         """Compute the flow requirements and feed the learner.
 
         The TRVs regulate the room themselves; the demand is what their
-        valves report.
+        valves report. The learner judges the room on the mode's setpoint,
+        target_temperature_c where none is given.
         """
         now_ts = time.time()
         if apply_side_effects:
@@ -278,6 +288,7 @@ class RoomMpcController:
             return RoomMpcComputeResult(valid=False, error=input_result.error)
 
         mpc_input = input_result.input
+        mpc_input.mode_target_temp_c = mode_target_temperature_c
         if apply_side_effects:
             self._hot_water.update(
                 mpc_input.now_ts, mpc_input.flow_temp_c, self._heat_available

@@ -58,7 +58,6 @@ from .const import (
     CONF_ROOM_HEAT_LOAD,
     CONF_ROOM_NAME,
     CONF_ROOM_SENSOR_ENTITY,
-    CONF_TARGET_BAND,
     CONF_TRV_EMITTER_TYPE,
     CONF_TRV_HEIGHT_MM,
     CONF_TRV_NOMINAL_POWER_W,
@@ -292,7 +291,6 @@ class HeatingRoomCoordinator:
             trvs=_build_trv_configs(trvs),
             max_sensor_age_s=self.data[CONF_MAX_SENSOR_AGE],
             room_sensor_configured=bool(self.data.get(CONF_ROOM_SENSOR_ENTITY)),
-            target_band_c=self.data[CONF_TARGET_BAND],
             flow_gate_config=flow_gate_config,
         )
         self.mpc.set_sun_condition(self.is_sun_condition_met)
@@ -789,6 +787,12 @@ class HeatingRoomCoordinator:
                 if capacity_factor is None
                 else capacity_factor
             ),
+            # A new mass capacity starts the airing one afresh from it.
+            vent_capacity_factor=(
+                self.mpc.learned_vent_capacity_factor
+                if capacity_factor is None
+                else None
+            ),
         )
         self.mpc.recalibrate_learning_factors(factors)
         await self.store.async_save(factors)
@@ -897,7 +901,11 @@ class HeatingRoomCoordinator:
         normal_compute = self.mpc.compute(normal_target, apply_side_effects=False)
         self.normal_result = normal_compute.result if normal_compute.valid else None
 
-        actual_compute = self.mpc.compute(mode_target)
+        # Frost protection for an open window is no mode change for the
+        # learner.
+        actual_compute = self.mpc.compute(
+            mode_target, mode_target_temperature_c=normal_target
+        )
         if actual_compute.valid:
             self.last_result = actual_compute.result
         else:

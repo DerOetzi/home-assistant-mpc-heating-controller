@@ -30,7 +30,6 @@ HUB_CONTROL = {
     "design_outdoor_temperature_c": -12.0,
     "design_temperature_system": "system_55_45",
     "max_sensor_age_s": 1800.0,
-    "target_band_c": 0.15,
 }
 ROOM_SIGNALS = {
     "room_sensor_entity": "sensor.wohnzimmer_temperatur",

@@ -50,6 +50,8 @@ class RoomThermalConfig:
 class LearningFactors:
     ua_factor: float = 1.0
     capacity_factor: float = 1.0
+    # Airing capacity, observed only; None until learned.
+    vent_capacity_factor: float | None = None
 
 
 @dataclass

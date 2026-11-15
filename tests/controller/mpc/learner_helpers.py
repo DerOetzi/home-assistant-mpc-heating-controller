@@ -25,6 +25,7 @@ def make_input(
     valve_positions_pct=(),
     radiator_not_heating_since_ts=None,
     hot_water_charge=False,
+    mode_target_temp_c=None,
 ):
     return RoomMpcInput(
         now_ts=now_ts,
@@ -45,6 +46,7 @@ def make_input(
         radiator_not_heating_since_ts=radiator_not_heating_since_ts,
         hot_water_charge=hot_water_charge,
         valve_positions_pct=list(valve_positions_pct),
+        mode_target_temp_c=mode_target_temp_c,
     )
 
 

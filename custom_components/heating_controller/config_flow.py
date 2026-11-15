@@ -57,7 +57,6 @@ from .const import (
     CONF_ROOM_HEAT_LOAD,
     CONF_ROOM_NAME,
     CONF_ROOM_SENSOR_ENTITY,
-    CONF_TARGET_BAND,
     CONF_TRV_COUNT,
     CONF_TRV_DEVICE_ID,
     CONF_TRV_EMITTER_TYPE,
@@ -78,7 +77,6 @@ from .const import (
     DEFAULT_MAX_WRITES_PER_DAY,
     DEFAULT_RATE_LIMIT_RESERVE,
     DEFAULT_ROOF_TILT_DEG,
-    DEFAULT_TARGET_BAND_C,
     DOMAIN,
     FACADES,
     FLOW_TITLE,
@@ -86,13 +84,10 @@ from .const import (
     HUB_MINOR_VERSION,
     HUB_TITLE,
     HUB_VERSION,
-    MAX_TARGET_BAND_C,
     MAX_TRV_COUNT,
-    MIN_TARGET_BAND_C,
     SUBENTRY_TYPE_FLOW,
     SUBENTRY_TYPE_HOT_WATER,
     SUBENTRY_TYPE_ROOM,
-    TARGET_BAND_STEP_C,
     Construction,
     DesignTemperatureSystem,
     HeatEmitterType,
@@ -142,18 +137,6 @@ def _merge(
 def _temperature_sensor() -> selector.EntitySelector:
     return selector.EntitySelector(
         selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
-    )
-
-
-def _kelvin(minimum: float, maximum: float, step: float) -> selector.NumberSelector:
-    return selector.NumberSelector(
-        selector.NumberSelectorConfig(
-            min=minimum,
-            max=maximum,
-            step=step,
-            mode=selector.NumberSelectorMode.BOX,
-            unit_of_measurement="K",
-        )
     )
 
 
@@ -257,10 +240,6 @@ def _hub_control_schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_MAX_SENSOR_AGE, default=defaults.get(CONF_MAX_SENSOR_AGE, 1800.0)
             ): vol.Coerce(float),
-            vol.Required(
-                CONF_TARGET_BAND,
-                default=defaults.get(CONF_TARGET_BAND, DEFAULT_TARGET_BAND_C),
-            ): _kelvin(MIN_TARGET_BAND_C, MAX_TARGET_BAND_C, TARGET_BAND_STEP_C),
         }
     )
 

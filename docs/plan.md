@@ -53,21 +53,7 @@ Wenige Tage, Moduswechsel selten (nur Dani, Urlaub) — Ergebnis eher Plausibili
 
 ## 2. Umbau TRV-Ansteuerung (Neustart A)
 
-Ein Neustart für 2a–2g zusammen. 2a (Sollwert, Fenster, Wärmeangebot, Korrektur) und 2b (Planer, Kennlinie) umgesetzt, warten auf Neustart A; weiter mit 2c, dann 2d–2g.
-
-### 2c. Lerner: Sollsprung, Toleranz, Kapazität Lüften
-
-**Ist-Stand (`MPC/learner.py`):** Sprungstrecke startet bei Soll-Anhebung ≥ `JUMP_MIN_TARGET_STEP_C` = 0,5 (Z. 34), `JUMP_TARGET_CHANGE_C` = 0,1 (Z. 36) beendet laufende Strecke. `_near_setpoint` und `_valve_saturated` nutzen `target_band_c` (Z. 1008–1026, Standard 0,1 K). Nach Fenster-zu sperrt `WINDOW_CLOSED_SUPPRESS_CAPACITY_LEARNING_S` (Koordinator Z. 142) Kapazität.
-
-**Neu:**
-- Lerner bekommt **Modus-Soll** getrennt vom geschriebenen Sollwert. Sprungstart, Strecken-Ende (`JUMP_TARGET_CHANGE_C`) und Nähe-zu-Soll beziehen sich nur auf Modus-Soll; Korrekturschritte beenden keine Strecke.
-- `target_band_c` im Lerner durch eigene Konstante ersetzen (`LEARNER_SETPOINT_TOLERANCE_C`, Vorschlag 0,4 K: Restfehler der 0,5-K-Korrektur bis ±0,25 K plus Sensorschritt). Bestehende Lerner-Tests, die am Band hängen, auf neue Konstante anpassen — nur diese. Danach Option `CONF_TARGET_BAND` ganz weg: `CC/const.py` (auch `MAX_TARGET_BAND_C`), `CC/config_flow.py`, Übersetzungen, Parameter `target_band_c` an `RoomMpcController`, Migration (Schlüssel in `_REMOVED_PLANNER_KEYS`-Art entfernen, Hub-Minor-Version 3).
-- **Kapazität Masse** (`capacity_factor`): wie heute, Sprungstrecken nach Moduswechsel.
-- **Kapazität Lüften** (`vent_capacity_factor`, neu, **nur beobachtet, keine Wirkung**): Strecke nach Fenster-zu, Start erst nach Rückprall (Raumtemperatur steigt nicht mehr schneller als Modell bei aktueller Heizleistung erwartet, frühestens nach `WINDOW_CLOSED_SUPPRESS_CAPACITY_LEARNING_S`). Bilanz und Abbruchregeln wie Sprungstrecke. Startwert = Masse × 0,3, Untergrenze wie Masse. Fenster kürzer als Mindestdauer (Konstante, Vorschlag 5 min) oder Raum nicht ≥ 0,3 K abgekühlt → keine Strecke. Sperre nach Fenster-zu bleibt für Masse und UA.
-- Lernstatus für Lüften als Attribute am Kapazitäts-Lernstatus (`vent_*`), Store, `recalibrate` setzt beide zurück.
-- Beobachter (`MPC/observer.py`) bleibt, nur für Lerner (Heizkörperleistung mit Verzug, `learner.py:1077`).
-
-Tests (`test_learner.py`): Korrekturschritt 0,5 K → keine Sprungstrecke, laufende Strecke läuft weiter; Absenkung → Komfort → Masse-Strecke; Fenster 20 min, Raum −1 K → Lüften-Strecke nach Rückprall, Masse unverändert; kurze Lüftung → keine Strecke; Raum 0,25 K unter Soll stationär → gilt als nahe Soll.
+Ein Neustart für 2a–2g zusammen. 2a (Sollwert, Fenster, Wärmeangebot, Korrektur), 2b (Planer, Kennlinie) und 2c (Lerner: Modus-Soll, Toleranz, Lüften-Kapazität) umgesetzt, warten auf Neustart A; weiter mit 2d–2g.
 
 ### 2d. Heizkörper-Check neu
 

@@ -32,7 +32,9 @@ class LearningFactorsStore:
         if data is None:
             return None
         return LearningFactors(
-            ua_factor=data["ua_factor"], capacity_factor=data["capacity_factor"]
+            ua_factor=data["ua_factor"],
+            capacity_factor=data["capacity_factor"],
+            vent_capacity_factor=data.get("vent_capacity_factor"),
         )
 
     async def async_save(self, factors: LearningFactors) -> None:
@@ -41,6 +43,7 @@ class LearningFactorsStore:
                 "room_name": self._room_name,
                 "ua_factor": factors.ua_factor,
                 "capacity_factor": factors.capacity_factor,
+                "vent_capacity_factor": factors.vent_capacity_factor,
             }
         )
 

@@ -110,7 +110,7 @@ once per house. It holds everything that applies to the whole house:
    writes, own writes per day at most).
 2. **Control and design** — design outdoor temperature and system flow/return temperatures
    (used to size the emitter curves), demand-control hysteresis/hold-time/max-step tuning,
-   surplus gate, sensor age and target band.
+   surplus gate and sensor age.
 3. **Sun and workdays** — how the house is turned (the bearing of its north facade, e.g.
    −15° for a house turned 15° west), which way the roof surfaces face and their pitch, and
    an optional workday entity (on = workday; without it Monday to Friday). For the surfaces

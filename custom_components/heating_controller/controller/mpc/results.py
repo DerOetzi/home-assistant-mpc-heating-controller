@@ -32,6 +32,8 @@ class RoomTemperatureResult:
 @dataclass
 class RoomMpcInput:
     now_ts: float
+    # The setpoint the room is controlled for: frost protection while a
+    # window is open.
     target_temp_c: float
     room_temp_c: float
     outdoor_temp_c: float
@@ -57,6 +59,10 @@ class RoomMpcInput:
     # A domestic hot-water charge runs: the radiators get no water, and
     # flow_temp_c is the heating flow from before it.
     hot_water_charge: bool = False
+    # The setpoint of the room's mode, without frost protection for an open
+    # window and without the setpoint correction; the learner judges the
+    # room on it. None: target_temp_c.
+    mode_target_temp_c: float | None = None
 
 
 @dataclass
