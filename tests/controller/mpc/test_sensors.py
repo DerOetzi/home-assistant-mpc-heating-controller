@@ -1,6 +1,9 @@
 from heating_controller.const import RoomTemperatureStrategy
 from heating_controller.controller.mpc.results import RoomMpcErrorCode
-from heating_controller.controller.mpc.sensors import RoomMpcSensors
+from heating_controller.controller.mpc.sensors import (
+    VALVE_POSITION_MAX_AGE_S,
+    RoomMpcSensors,
+)
 from heating_controller.controller.mpc.types import TrvConfig
 
 
@@ -189,3 +192,18 @@ def test_a_trv_without_valve_entity_next_to_one_with_is_not_missing():
 def test_a_stale_valve_entity_counts_as_missing():
     trvs = [TrvConfig(name="trv0", valve_position_configured=True)]
     assert _valve_input(trvs, [None]).valve_position_missing is True
+
+
+def test_a_valve_opening_reported_half_an_hour_ago_is_unknown():
+    trvs = [TrvConfig(name="trv0", valve_position_configured=True)]
+    sensors = RoomMpcSensors(trvs, 1800, room_sensor_configured=False)
+    sensors.set_trv_temperature(0, 20.0, 5000.0)
+    sensors.set_outdoor_temperature(5.0, 5000.0)
+    sensors.set_flow_temperature(40.0, 5000.0)
+    sensors.set_valve_position(0, 100.0, 5000.0 - VALVE_POSITION_MAX_AGE_S)
+    assert sensors.create_input(21.0, 5000.0).input.valve_positions_pct == [100.0]
+
+    sensors.set_valve_position(0, 100.0, 5000.0 - VALVE_POSITION_MAX_AGE_S - 60)
+    result = sensors.create_input(21.0, 5000.0).input
+    assert result.valve_positions_pct == [None]
+    assert result.valve_position_missing is True

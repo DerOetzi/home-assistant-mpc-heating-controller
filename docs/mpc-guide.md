@@ -434,7 +434,11 @@ further and its output stays high: at a 40 °C flow a 10 % opening still gives a
 full output, 50 % about 87 %. A TRV without such an entity counts with the room's highest
 reported opening. If the entity goes stale or
 unavailable, the room's learning stops (status
-`valve_position_missing`) until it reports again. A room none of whose TRVs has such an
+`valve_position_missing`) until it reports again. The same holds once the TRV reported
+nothing for 30 minutes, neither its opening nor its own temperature (an unchanged opening is
+not reported again). The room's demand is the highest opening among the TRVs with a
+current one; with none it is unknown, and the setpoint correction moves without its demand
+check and the radiators are not checked. A room none of whose TRVs has such an
 entity never learns: without a measured opening it has no heat to balance.
 
 ## Radiator lag and the room observer

@@ -238,7 +238,10 @@ What the controller does with each entity:
 - **climate** — reads the TRV's own temperature and writes the target temperature.
 - **Valve opening** — the heat the radiator really gives off, see
   [docs/mpc-guide.md](docs/mpc-guide.md#valve-position-the-heat-the-radiators-really-get).
-  The highest opening of the room is its demand.
+  The highest opening of the room is its demand. An opening counts as unknown once the
+  TRV reported nothing for 30 minutes, neither its opening nor its temperature: an unchanged
+  opening is not reported again, and a Zigbee battery device that hangs stays available
+  with its last values.
 - **Heat available** — switched on while the heat source delivers heat, so the TRV knows
   whether opening its valve can help. A flow dip below the threshold (e.g. a defrost)
   switches it off only after 20 minutes.

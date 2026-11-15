@@ -245,8 +245,11 @@ class RoomMpcController:
     def set_room_sensor_temperature(self, value: float | None) -> None:
         self._sensors.set_room_sensor_temperature(value)
 
-    def set_valve_position(self, index: int, value: float | None) -> None:
-        self._sensors.set_valve_position(index, value)
+    def set_valve_position(
+        self, index: int, value: float | None, reported_ts: float | None = None
+    ) -> None:
+        """reported_ts: when the TRV last reported, now if not given."""
+        self._sensors.set_valve_position(index, value, reported_ts)
 
     def set_trv_adapting(self, adapting: bool) -> None:
         self._sensors.set_trv_adapting(adapting)

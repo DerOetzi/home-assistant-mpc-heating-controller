@@ -1366,6 +1366,35 @@ async def test_unavailable_valve_position_is_reported_missing(
     coordinator.async_unload()
 
 
+async def test_a_trv_silent_for_half_an_hour_has_no_known_demand(
+    hass: HomeAssistant, freezer
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set(VALVE_ENTITY, "100")
+    coordinator = await _setup_coordinator(hass, trvs=[_trv_with_valve()])
+
+    for _ in range(5):
+        await _poll(hass, freezer, 5)
+    # An unchanged opening is not reported again; the TRV is still current.
+    assert coordinator.room_demand_pct == 100.0
+
+    for _ in range(2):
+        await _poll(hass, freezer, 5)
+    assert coordinator.room_demand_pct is None
+    assert coordinator.trv_valve_positions == {"climate.heizung_wohnzimmer": None}
+    assert coordinator.last_result.input.valve_position_missing is True
+
+    # The TRV reports its temperature again: the opening is current again.
+    hass.states.async_set(
+        "climate.heizung_wohnzimmer", "heat", {"current_temperature": 18.1}
+    )
+    await _poll(hass, freezer, 5)
+    assert coordinator.room_demand_pct == 100.0
+    assert coordinator.last_result.input.valve_position_missing is False
+
+    coordinator.async_unload()
+
+
 async def test_without_valve_position_the_room_reports_no_demand(
     hass: HomeAssistant,
 ) -> None:

@@ -85,6 +85,7 @@ from .controller.mpc.controller import FlowGateConfig, RoomMpcController
 from .controller.mpc.math_helper import clamp, round_to_step
 from .controller.mpc.models.gains import GainBreakdown, profile_index
 from .controller.mpc.results import RoomMpcResult
+from .controller.mpc.sensors import VALVE_POSITION_MAX_AGE_S
 from .controller.mpc.types import (
     FlowGateState,
     LearningFactors,
@@ -491,9 +492,8 @@ class HeatingRoomCoordinator:
             self.mpc.set_trv_temperature(
                 index, self._climate_temperature_from_state(state)
             )
-        for index, entity_id in enumerate(self._valve_position_entities):
-            if entity_id:
-                self.mpc.set_valve_position(index, self._float_state(entity_id))
+        for index in range(len(self._valve_position_entities)):
+            self._update_valve_position(index)
 
         room_sensor_entity = self.data.get(CONF_ROOM_SENSOR_ENTITY)
         if room_sensor_entity:
@@ -645,6 +645,39 @@ class HeatingRoomCoordinator:
             blocking=False,
         )
 
+    def _trv_reported_ts(self, index: int) -> float | None:
+        """When the TRV last reported its temperature or valve opening."""
+        reported = [
+            state.last_reported.timestamp()
+            for entity_id in (
+                self._trv_entity_ids[index],
+                self._valve_position_entities[index],
+            )
+            if entity_id
+            and (state := self.hass.states.get(entity_id)) is not None
+            and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+        ]
+        return max(reported, default=None)
+
+    def _update_valve_position(self, index: int) -> None:
+        entity_id = self._valve_position_entities[index]
+        if entity_id:
+            self.mpc.set_valve_position(
+                index, self._float_state(entity_id), self._trv_reported_ts(index)
+            )
+
+    def _trv_demand_pct(self, index: int) -> float | None:
+        """The TRV's valve opening; None if unknown or reported too long ago."""
+        entity_id = self._valve_position_entities[index]
+        reported_ts = self._trv_reported_ts(index)
+        if (
+            not entity_id
+            or reported_ts is None
+            or time.time() - reported_ts > VALVE_POSITION_MAX_AGE_S
+        ):
+            return None
+        return self._float_state(entity_id)
+
     def _is_on(self, entity_id: str) -> bool:
         return self._bool_from_state(self.hass.states.get(entity_id))
 
@@ -714,12 +747,11 @@ class HeatingRoomCoordinator:
             self.mpc.set_trv_temperature(
                 index, self._climate_temperature_from_state(new_state)
             )
+            # The TRV reported: its unchanged valve opening is still current.
+            self._update_valve_position(index)
 
         elif entity_id in self._valve_position_entities:
-            self.mpc.set_valve_position(
-                self._valve_position_entities.index(entity_id),
-                self._float_from_state(new_state),
-            )
+            self._update_valve_position(self._valve_position_entities.index(entity_id))
 
         elif entity_id == self.data.get(CONF_ROOM_SENSOR_ENTITY):
             room_sensor_temp_c = self._float_from_state(new_state)
@@ -1112,14 +1144,13 @@ class HeatingRoomCoordinator:
     def trv_valve_positions(self) -> dict[str, float | None]:
         """The valve opening each TRV reports (pi_heating_demand), in percent.
 
-        None for a TRV whose profile has no valve-position entity or whose
-        entity has no number right now.
+        None for a TRV whose profile has no valve-position entity, whose
+        entity has no number right now, or that reported nothing for
+        VALVE_POSITION_MAX_AGE_S.
         """
         return {
-            climate: self._float_state(valve) if valve else None
-            for climate, valve in zip(
-                self._trv_entity_ids, self._valve_position_entities, strict=True
-            )
+            climate: self._trv_demand_pct(index)
+            for index, climate in enumerate(self._trv_entity_ids)
         }
 
     @property

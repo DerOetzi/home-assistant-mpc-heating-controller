@@ -28,6 +28,11 @@ SENSOR_OUTLIER_DRIFT_MATCH_DELTA_C = 1.0
 # state every SENSOR_POLL_INTERVAL_MINUTES, and with an equal window any jitter
 # expires the drift candidate before it can be confirmed.
 SENSOR_OUTLIER_DRIFT_MAX_INTERVAL_S = 2 * SENSOR_POLL_INTERVAL_MINUTES * 60
+# A valve opening counts as unknown once its TRV reported nothing for this
+# long, neither the opening nor its own temperature. An unchanged opening is
+# not reported again, so the age runs from the TRV's last report; a Zigbee
+# battery device that hangs stays available with its last values.
+VALVE_POSITION_MAX_AGE_S = 30 * 60
 
 
 class SensorEntry:
@@ -164,7 +169,9 @@ class RoomMpcSensors:
             for index, _ in enumerate(trvs[:MAX_TRV_COUNT])
         ]
         self._valve_positions = [
-            SensorEntry(max_age_s, name=f"valve{index}", outlier_filter=False)
+            SensorEntry(
+                VALVE_POSITION_MAX_AGE_S, name=f"valve{index}", outlier_filter=False
+            )
             if trv.valve_position_configured
             else None
             for index, trv in enumerate(trvs[:MAX_TRV_COUNT])

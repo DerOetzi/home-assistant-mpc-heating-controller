@@ -53,11 +53,7 @@ Wenige Tage, Moduswechsel selten (nur Dani, Urlaub) — Ergebnis eher Plausibili
 
 ## 2. Umbau TRV-Ansteuerung (Neustart A)
 
-Ein Neustart für 2a–2g zusammen. 2a (Sollwert, Fenster, Wärmeangebot, Korrektur), 2b (Planer, Kennlinie), 2c (Lerner: Modus-Soll, Toleranz, Lüften-Kapazität), 2d (Heizkörper-Check) und 2e (Geräteprofil) umgesetzt, warten auf Neustart A; weiter mit 2f–2g.
-
-### 2f. Demand-Eingang
-
-Gemessener Demand je TRV mit Altersgrenze (Konstante, Vorschlag 30 min ohne neuen Wert → unbekannt; Z2M-Batteriegeräte bleiben „verfügbar", siehe `diagnose.md`). Raum-Demand = Max über TRVs mit gültigem Wert. Unbekannt → Raum zählt nicht für Rückkopplung/Anti-Windup/Heizkörper-Check.
+Ein Neustart für 2a–2g zusammen. 2a (Sollwert, Fenster, Wärmeangebot, Korrektur), 2b (Planer, Kennlinie), 2c (Lerner: Modus-Soll, Toleranz, Lüften-Kapazität), 2d (Heizkörper-Check), 2e (Geräteprofil) und 2f (Demand-Eingang) umgesetzt, warten auf Neustart A; weiter mit 2g.
 
 ### 2g. Doku
 
