@@ -161,3 +161,31 @@ def test_stale_room_sensor_is_a_fallback():
     result = sensors.get_room_temperature(now_ts=2900)
     assert result.used_strategy == RoomTemperatureStrategy.TRV_AVERAGE
     assert result.room_sensor_fallback is True
+
+
+def _valve_input(trvs, positions, now_ts=1000.0):
+    sensors = RoomMpcSensors(trvs, 1800, room_sensor_configured=False)
+    for index, position in enumerate(positions):
+        sensors.set_trv_temperature(index, 20.0, now_ts)
+        sensors.set_valve_position(index, position, now_ts)
+    sensors.set_outdoor_temperature(5.0, now_ts)
+    sensors.set_flow_temperature(40.0, now_ts)
+    return sensors.create_input(21.0, now_ts).input
+
+
+def test_a_room_without_any_valve_entity_counts_as_valve_position_missing():
+    trvs = [TrvConfig(name="trv0")]
+    assert _valve_input(trvs, [None]).valve_position_missing is True
+
+
+def test_a_trv_without_valve_entity_next_to_one_with_is_not_missing():
+    trvs = [
+        TrvConfig(name="trv0", valve_position_configured=True),
+        TrvConfig(name="trv1"),
+    ]
+    assert _valve_input(trvs, [40.0, None]).valve_position_missing is False
+
+
+def test_a_stale_valve_entity_counts_as_missing():
+    trvs = [TrvConfig(name="trv0", valve_position_configured=True)]
+    assert _valve_input(trvs, [None]).valve_position_missing is True

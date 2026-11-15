@@ -107,9 +107,6 @@ def _trvs(**overrides) -> list[TrvBinding]:
         TrvBinding(
             **{
                 "climate_entity": "climate.heizung_wohnzimmer",
-                "min_target_temperature_c": 5.0,
-                "max_target_temperature_c": 28.0,
-                "target_temperature_step_c": 0.5,
                 "emitter": TRV_EMITTER,
                 "heat_available_entity": "switch.heizung_wohnzimmer_trv_active",
                 **overrides,
@@ -1377,7 +1374,8 @@ async def test_without_valve_position_the_room_reports_no_demand(
 
     result = coordinator.last_result
     assert result.input.valve_positions_pct == [None]
-    assert result.input.valve_position_missing is False
+    # Without any measured demand the room has no heat to learn from.
+    assert result.input.valve_position_missing is True
     assert coordinator.trv_valve_positions == {"climate.heizung_wohnzimmer": None}
     assert coordinator.room_demand_pct is None
     assert result.measured_heating_power_w == 0

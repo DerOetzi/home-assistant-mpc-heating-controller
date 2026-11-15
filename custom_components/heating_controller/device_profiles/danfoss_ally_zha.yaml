@@ -9,10 +9,6 @@ match:
     - eTRV0100
     - eTRV0101
     - eTRV0103
-target_temperature:
-  min: 5
-  max: 35
-  step: 0.5
 entities:
   climate:
     domain: climate

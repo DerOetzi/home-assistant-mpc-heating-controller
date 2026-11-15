@@ -218,8 +218,8 @@ The hub's device *Heizung* reports the lead rooms:
 ## Supported devices
 
 A TRV is picked as a device. A device profile for its model then names the entities the
-controller uses — found by their unique ID, so renaming them breaks nothing — and the
-target temperature range and step:
+controller uses — found by their unique ID, so renaming them breaks nothing. The target
+temperature range and step come from the climate entity:
 
 | Device | Integration | Entities used |
 |---|---|---|
@@ -247,6 +247,15 @@ What the controller does with each entity:
   protection; the room does not learn meanwhile. Nor does it learn while the TRV has no
   calibrated valve (status other than `found`).
 - **Mounted mode** — while the TRV is in mounting mode the room learns nothing.
+
+A room none of whose TRVs reports a valve opening has no measured demand: it learns nothing
+(status `valve_position_missing`), its setpoint correction moves only while the room holds
+still, and its radiators are not checked.
+
+**Danfoss Ally:** set the algorithm scale factor on the device to 1 (Zigbee2MQTT:
+`algorithm_scale_factor`), the quickest response of the TRV's own regulation. The controller
+leaves the regulation to the TRV and only corrects its setpoint slowly; it does not write
+this setting.
 
 ## Dashboard card
 

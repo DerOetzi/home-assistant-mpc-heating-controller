@@ -77,11 +77,6 @@ PROFILE_SCHEMA = vol.Schema(
                 msg="match needs models or model_ids",
             ),
         ),
-        vol.Required("target_temperature"): {
-            vol.Required("min"): vol.Coerce(float),
-            vol.Required("max"): vol.Coerce(float),
-            vol.Required("step"): vol.Coerce(float),
-        },
         vol.Required("entities"): {
             vol.Required(ROLE_CLIMATE): _ENTITY_SCHEMA,
             vol.Optional(ROLE_VALVE_POSITION): _ENTITY_SCHEMA,
@@ -145,9 +140,6 @@ class DeviceProfile:
     manufacturer: str
     models: frozenset[str]
     model_ids: frozenset[str]
-    min_target_temperature_c: float
-    max_target_temperature_c: float
-    target_temperature_step_c: float
     entities: Mapping[str, EntityMatch]
     adaptation_busy: StatusMatch | None = None
     adaptation_ready: StatusMatch | None = None
@@ -165,9 +157,6 @@ class TrvBinding:
     """A configured TRV with the entities its device profile resolved."""
 
     climate_entity: str
-    min_target_temperature_c: float
-    max_target_temperature_c: float
-    target_temperature_step_c: float
     # The radiator settings stored for this TRV (emitter type, dimensions).
     emitter: Mapping[str, Any] = field(default_factory=dict)
     valve_position_entity: str | None = None
@@ -208,9 +197,6 @@ def _profile_from_config(key: str, config: dict[str, Any]) -> DeviceProfile:
         manufacturer=config["match"]["manufacturer"],
         models=frozenset(config["match"]["models"]),
         model_ids=frozenset(config["match"]["model_ids"]),
-        min_target_temperature_c=config["target_temperature"]["min"],
-        max_target_temperature_c=config["target_temperature"]["max"],
-        target_temperature_step_c=config["target_temperature"]["step"],
         entities={
             role: EntityMatch(
                 domain=match["domain"],
@@ -336,9 +322,6 @@ def resolve_trv(
 
     return TrvBinding(
         climate_entity=entity_ids[ROLE_CLIMATE],
-        min_target_temperature_c=profile.min_target_temperature_c,
-        max_target_temperature_c=profile.max_target_temperature_c,
-        target_temperature_step_c=profile.target_temperature_step_c,
         emitter={key: value for key, value in trv.items() if key != CONF_TRV_DEVICE_ID},
         valve_position_entity=entity_ids.get(ROLE_VALVE_POSITION),
         heat_available_entity=entity_ids.get(ROLE_HEAT_AVAILABLE),

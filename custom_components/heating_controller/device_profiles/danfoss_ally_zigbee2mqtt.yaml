@@ -7,10 +7,6 @@ match:
   manufacturer: Danfoss
   model_ids:
     - 014G2461
-target_temperature:
-  min: 5
-  max: 35
-  step: 0.5
 entities:
   climate:
     domain: climate

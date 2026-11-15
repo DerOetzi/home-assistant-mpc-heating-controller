@@ -29,7 +29,6 @@ def test_every_shipped_profile_is_valid() -> None:
     assert set(profiles) == {"danfoss_ally_zha", "danfoss_ally_zigbee2mqtt"}
     z2m = profiles["danfoss_ally_zigbee2mqtt"]
     assert z2m.model_ids == {"014G2461"}
-    assert z2m.max_target_temperature_c == 35.0
 
 
 def test_the_device_picker_offers_only_profiled_models() -> None:
@@ -68,7 +67,6 @@ async def test_a_zigbee2mqtt_ally_binds_all_its_entities(hass: HomeAssistant) ->
     assert trv.adaptation_ready.matches(State("sensor.a", "found"))
     assert not trv.adaptation_ready.matches(State("sensor.a", "none"))
     assert trv.emitter == TRV_EMITTER
-    assert (trv.min_target_temperature_c, trv.target_temperature_step_c) == (5.0, 0.5)
 
 
 async def test_renamed_entities_are_still_found(hass: HomeAssistant) -> None:
@@ -188,7 +186,6 @@ match:
   integration: mqtt
   manufacturer: Test
   models: [T1]
-target_temperature: {min: 5, max: 30, step: 0.5}
 entities:
   climate: {domain: climate}
 """
@@ -200,6 +197,16 @@ def test_a_minimal_profile_is_valid(tmp_path) -> None:
     [profile] = load_profiles(tmp_path)
 
     assert profile.name == "Test TRV"
+
+
+def test_a_profile_with_target_temperature_limits_is_rejected(tmp_path) -> None:
+    # The limits come from the climate entity.
+    (tmp_path / "test.yaml").write_text(
+        _MINIMAL_PROFILE + "target_temperature: {min: 5, max: 30, step: 0.5}\n"
+    )
+
+    with pytest.raises(vol.Invalid):
+        load_profiles(tmp_path)
 
 
 def test_a_profile_with_a_valve_curve_seed_is_rejected(tmp_path) -> None:

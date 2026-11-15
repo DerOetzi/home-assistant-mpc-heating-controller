@@ -53,11 +53,7 @@ Wenige Tage, Moduswechsel selten (nur Dani, Urlaub) — Ergebnis eher Plausibili
 
 ## 2. Umbau TRV-Ansteuerung (Neustart A)
 
-Ein Neustart für 2a–2g zusammen. 2a (Sollwert, Fenster, Wärmeangebot, Korrektur), 2b (Planer, Kennlinie), 2c (Lerner: Modus-Soll, Toleranz, Lüften-Kapazität) und 2d (Heizkörper-Check) umgesetzt, warten auf Neustart A; weiter mit 2e–2g.
-
-### 2e. Geräteprofil
-
-`algorithm_scale_factor` kommt im Repo nicht vor — Nutzer stellt ihn am Gerät auf 1 (Hinweis in README/`mpc-guide.md`, kein Code). Profil: Block `target_temperature` aus beiden YAML, `CC/profiles.py` (min/max/step in `TrvBinding`) und `tests/test_profiles.py` entfernen. Profile bleiben für Demand, `heat_available`, Adaption, Montagemodus. Profil ohne `valve_position`-Rolle: Raum ohne gemessenen Demand → zählt nicht für Rückkopplung (3) und Korrektur-Anti-Windup (Schritte dann nur bei stationärem Raum), Heizkörper-Check aus, Lernstatus `valve_position_missing` (prüfen, ob Lerner heute schon so einen Status hat).
+Ein Neustart für 2a–2g zusammen. 2a (Sollwert, Fenster, Wärmeangebot, Korrektur), 2b (Planer, Kennlinie), 2c (Lerner: Modus-Soll, Toleranz, Lüften-Kapazität), 2d (Heizkörper-Check) und 2e (Geräteprofil) umgesetzt, warten auf Neustart A; weiter mit 2f–2g.
 
 ### 2f. Demand-Eingang
 

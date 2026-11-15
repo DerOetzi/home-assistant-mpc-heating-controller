@@ -51,7 +51,7 @@ stands:
 | `storage_dominated` | The heat stored in or released by the room was more than half of the radiator heat. |
 | `implausible_target` | The balance pointed at a factor above 2. |
 | `room_sensor_fallback` | The configured room sensor is stale or unavailable and the TRVs stand in. |
-| `valve_position_missing` | A linked valve position entity is stale or unavailable. |
+| `valve_position_missing` | A linked valve position entity is stale or unavailable, or none of the room's TRVs has one. |
 | `trv_adapting` | A TRV calibrates its valve and moves it by itself, has no calibrated valve (adaptation status other than found, e.g. `none` after mounting or `lost`), or is in mounting mode. |
 | `radiator_not_heating` | A TRV asks for nearly full heat and the room does not get it, see [Radiator check](#radiator-check). |
 | `outdoor_temperature_missing` | The outdoor temperature is missing, see [Sensor reliability](#sensor-reliability). The stretch before the outage is balanced; the next one starts once the value is back. |
@@ -434,7 +434,8 @@ further and its output stays high: at a 40 °C flow a 10 % opening still gives a
 full output, 50 % about 87 %. A TRV without such an entity counts with the room's highest
 reported opening. If the entity goes stale or
 unavailable, the room's learning stops (status
-`valve_position_missing`) until it reports again.
+`valve_position_missing`) until it reports again. A room none of whose TRVs has such an
+entity never learns: without a measured opening it has no heat to balance.
 
 ## Radiator lag and the room observer
 

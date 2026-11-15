@@ -278,7 +278,11 @@ class RoomMpcSensors:
             entry.get_fresh_value(now_ts) if entry is not None else None
             for entry in self._valve_positions
         ]
-        valve_position_missing = any(
+        # A room whose TRVs report no valve opening at all has no measured
+        # heat to learn from.
+        valve_position_missing = all(
+            entry is None for entry in self._valve_positions
+        ) or any(
             entry is not None and position is None
             for entry, position in zip(self._valve_positions, valve_positions_pct)
         )
