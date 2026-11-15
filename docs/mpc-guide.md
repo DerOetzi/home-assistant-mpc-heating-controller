@@ -53,7 +53,7 @@ stands:
 | `room_sensor_fallback` | The configured room sensor is stale or unavailable and the TRVs stand in. |
 | `valve_position_missing` | A linked valve position entity is stale or unavailable. |
 | `trv_adapting` | A TRV calibrates its valve and moves it by itself, has no calibrated valve (adaptation status other than found, e.g. `none` after mounting or `lost`), or is in mounting mode. |
-| `radiator_not_heating` | A radiator stays cold although its valve reports open, see [Radiator check](#radiator-check). |
+| `radiator_not_heating` | A TRV asks for nearly full heat and the room does not get it, see [Radiator check](#radiator-check). |
 | `outdoor_temperature_missing` | The outdoor temperature is missing, see [Sensor reliability](#sensor-reliability). The stretch before the outage is balanced; the next one starts once the value is back. |
 | `valve_saturated` | For more than half the stretch every valve was at least 95 % open with the room more than 0.4 K below its mode setpoint. The heat assumed for a full opening is the least certain (a flow-limited radiator gives off less), so the factor is left alone; the target is kept for diagnostics. |
 | `window_open` | A window contact in the room is open. |
@@ -397,28 +397,27 @@ to heat.
 
 ## Radiator check
 
-Air in a radiator or a valve stuck shut looks the same to the controller: the TRV reports
-its valve open, yet the radiator stays cold. Per TRV, once the valve has reported at least
-90 % for an hour with heating available and a flow warm enough for the fully open radiator
-to give off at least 30 % of its design output (from the design system and the radiator's
-exponent; a 55/45 radiator in a 21 °C room needs about 34 °C), the radiator counts as not
-heating if over that hour the TRV's reading neither rose by 0.3 K nor sits 1 K above the
-room, and it never warmed during that opening. The rise counts from the lowest reading of
-the 15 minutes before the valve opened: a radiator that gets water warms its TRV within one
-controller cycle. A room that rose by 0.3 K over the hour holds off the verdict for that
-hour as well — where a radiator fan blows room air past the TRV, it reads close to the room
-even next to a warm radiator — but unlike a warm TRV it does not clear the whole opening:
-sun or a neighbour may lift a room too, and room sensors step in 0.1 K. Below that flow even
-a sound radiator stays barely warm, so the hour starts over. A hot-water charge (see
-[Hot-water charges](#hot-water-charges)) starts the hour over. A verdict needs a cold start:
-the valve at no more than 15 % for at least 30 minutes, and the opening within 15 minutes of
-that. A TRV already warm from a partly open valve shows neither rise nor lead at a low flow,
-so such an hour stays without a verdict. A radiator whose valve never closes is not judged.
-The verdict holds while the valve is shut and clears as soon as an open valve warms the TRV
-again or the room rises by 0.3 K over the hour.
+Air in a radiator or a valve stuck shut looks the same to the controller: the TRV asks for
+heat, yet the room does not get it. Per TRV the radiator counts as not heating once all of
+these held for two hours without a break:
 
-Meanwhile the room learns nothing (status `radiator_not_heating`). The running heat-balance stretch ends where the valve opened for the hour that led to
-the verdict: that hour's heat is in doubt as well. `binary_sensor.<room>_radiator_not_heating` (problem) is on, its attribute
+- the TRV's demand (its reported valve opening) is at least 80 %,
+- the room is at least 0.5 K below its mode setpoint,
+- heating is available and the flow lets the fully open radiator give off at least 30 % of
+  its design output (from the design system and the radiator's exponent; a 55/45 radiator
+  in a 21 °C room needs about 34 °C),
+- the model expects the room to rise: its output with the valves fully open exceeds the
+  loss at the current room and outdoor temperature by at least 20 % of its design heat
+  load,
+- the room did not rise by 0.3 K; a room that does starts the two hours over.
+
+A hot-water charge (see [Hot-water charges](#hot-water-charges)), an open window or an
+adapting TRV (calibrating, uncalibrated or in mounting mode) starts the two hours over. The
+verdict holds while there is nothing to test and clears once the room rises by 0.3 K or the
+TRV's demand falls below 50 %.
+
+Meanwhile the room learns nothing (status `radiator_not_heating`). The running heat-balance stretch ends where the two hours that led to the verdict
+started: their heat is in doubt as well. `binary_sensor.<room>_radiator_not_heating` (problem) is on, its attribute
 `trv_entities` names the TRVs: an automation can send a notification to check — bleed —
 the radiator.
 

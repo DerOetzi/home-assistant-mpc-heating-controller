@@ -53,22 +53,7 @@ Wenige Tage, Moduswechsel selten (nur Dani, Urlaub) — Ergebnis eher Plausibili
 
 ## 2. Umbau TRV-Ansteuerung (Neustart A)
 
-Ein Neustart für 2a–2g zusammen. 2a (Sollwert, Fenster, Wärmeangebot, Korrektur), 2b (Planer, Kennlinie) und 2c (Lerner: Modus-Soll, Toleranz, Lüften-Kapazität) umgesetzt, warten auf Neustart A; weiter mit 2d–2g.
-
-### 2d. Heizkörper-Check neu
-
-**Ist-Stand:** `MPC/radiator_monitor.py` (Kalt-Start, TRV-Anstieg, Abstand TRV–Raum, `RADIATOR_CHECK_MIN_OUTPUT_FRACTION` Z. 37).
-
-**Neu:** Urteil „heizt nicht", wenn über `RADIATOR_CHECK_WINDOW_S` = 2 h am Stück **alle** gelten:
-- Demand des TRVs ≥ 80 %,
-- Raum durchgehend ≥ 0,5 K unter Modus-Soll,
-- Vorlauf über Vorlaufschwelle und Leistungsanteil bei voller Öffnung ≥ `RADIATOR_CHECK_MIN_OUTPUT_FRACTION` (bleibt),
-- Modell erwartet Anstieg: Heizleistung bei 100 % − UA·(Raum − außen) > 0 deutlich (Konstante, Vorschlag ≥ 20 % Norm-Heizlast),
-- Raumtemperatur nicht um ≥ `RADIATOR_CHECK_MIN_ROOM_RISE_C` gestiegen.
-
-Ausschlüsse (Fenster beginnt neu): WW-Ladung, `heat_available` aus, Fenster offen, TRV-Adaption, Montagemodus. Urteil zurücknehmen, wenn Raum ≥ `RADIATOR_CHECK_MIN_ROOM_RISE_C` steigt oder Demand < 50 % fällt. Kalt-Start-Kriterium, TRV-Anstieg, Abstand entfallen. Konstanten-Kommentare ohne Daten neu.
-
-Tests `test_radiator_monitor.py` neu: Urteil nach 2 h; Raum auf Soll bei 85 % → kein Urteil; Raum steigt → kein Urteil; Vorlauf zu niedrig für Leistungsanteil → kein Urteil; WW-Ladung → Fenster neu; Urteil zurück nach Anstieg.
+Ein Neustart für 2a–2g zusammen. 2a (Sollwert, Fenster, Wärmeangebot, Korrektur), 2b (Planer, Kennlinie), 2c (Lerner: Modus-Soll, Toleranz, Lüften-Kapazität) und 2d (Heizkörper-Check) umgesetzt, warten auf Neustart A; weiter mit 2e–2g.
 
 ### 2e. Geräteprofil
 

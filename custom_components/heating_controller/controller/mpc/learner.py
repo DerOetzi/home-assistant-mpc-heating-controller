@@ -506,8 +506,8 @@ class RoomMpcModelLearner:
                 mpc_input.radiator_not_heating
                 and mpc_input.radiator_not_heating_since_ts is not None
             ):
-                # The radiator is judged an hour after its valve opened; that
-                # hour's heat is in doubt as well.
+                # The radiator is judged two hours after its check window
+                # started; that window's heat is in doubt as well.
                 end_ts = min(end_ts, mpc_input.radiator_not_heating_since_ts)
             self._close_ua_balance(end_ts)
         if was_degraded and not degraded:

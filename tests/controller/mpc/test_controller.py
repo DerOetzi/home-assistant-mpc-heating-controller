@@ -708,3 +708,35 @@ def test_hold_flow_at_other_outdoor_values_follows_the_same_calculation():
     warm_c = controller.calculate_hold_flow_temperature_c(21.0, 18.0)
     assert warm_c < result.hold_flow_temperature_c < cold_c
     assert controller.calculate_hold_flow_temperature_c(21.0, 22.0) == 0.0
+
+
+def _cold_radiator_hours(controller, clock, hours=2.5, mode_target_c=21.0):
+    for _ in range(int(hours * 12) + 1):
+        _feed(controller, 19.0, opening=100.0)
+        controller.compute(
+            target_temperature_c=mode_target_c,
+            mode_target_temperature_c=mode_target_c,
+        )
+        clock.advance(300)
+
+
+def test_a_cold_radiator_is_reported_after_two_hours(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _valve_controller()
+    _cold_radiator_hours(controller, clock)
+    assert controller.radiators_not_heating == [True]
+
+
+def test_an_open_window_keeps_the_radiator_check_from_judging(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _valve_controller()
+    controller.set_window_open(True, clock.now_ts)
+    _cold_radiator_hours(controller, clock)
+    assert controller.radiators_not_heating == [False]
+
+
+def test_a_room_near_its_mode_setpoint_is_not_judged(monkeypatch):
+    clock = _Clock(monkeypatch)
+    controller = _valve_controller()
+    _cold_radiator_hours(controller, clock, mode_target_c=19.3)
+    assert controller.radiators_not_heating == [False]

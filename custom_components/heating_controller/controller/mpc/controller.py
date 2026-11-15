@@ -14,7 +14,7 @@ from .models.emitter import HeatEmitterModel
 from .models.gains import RoomGainModel, SunSource
 from .models.loss import RoomLossModel
 from .observer import ObserverEstimate, RoomStateObserver, step_radiator_power_w
-from .radiator_monitor import RadiatorDeliveryMonitor
+from .radiator_monitor import RadiatorCheckSample, RadiatorDeliveryMonitor
 from .results import (
     RoomMpcError,
     RoomMpcInput,
@@ -158,6 +158,8 @@ class RoomMpcController:
         # adds to the detection on the flow.
         self._external_hot_water_charge = False
         self._radiator_monitors = [RadiatorDeliveryMonitor() for _ in trvs]
+        self._room_heat_load_w = thermal_config.room_heat_load_w
+        self._window_open = False
         self._outdoor_temperature_missing = False
 
     def destroy(self) -> None:
@@ -300,23 +302,7 @@ class RoomMpcController:
             if self._hot_water.heating_flow_c is not None:
                 mpc_input.flow_temp_c = self._hot_water.heating_flow_c
         if apply_side_effects:
-            for monitor, opening_pct, trv_temperature_c, output_fraction in zip(
-                self._radiator_monitors,
-                mpc_input.valve_positions_pct or [None] * len(self._radiator_monitors),
-                mpc_input.trv_temperatures,
-                self._emitter_model.full_output_fractions(
-                    mpc_input.flow_temp_c, mpc_input.room_temp_c
-                ),
-            ):
-                monitor.update(
-                    mpc_input.now_ts,
-                    opening_pct,
-                    trv_temperature_c,
-                    mpc_input.room_temp_c,
-                    self._heat_available,
-                    output_fraction,
-                    hot_water_charge=mpc_input.hot_water_charge,
-                )
+            self._update_radiator_monitors(mpc_input)
         mpc_input.radiator_not_heating = any(self.radiators_not_heating)
         mpc_input.radiator_not_heating_since_ts = min(
             (
@@ -560,7 +546,48 @@ class RoomMpcController:
         self._learner.set_learning_paused(paused, now_ts)
 
     def set_window_open(self, window_open: bool, now_ts: float) -> None:
+        self._window_open = window_open
         self._learner.set_window_open(window_open, now_ts)
+
+    def _update_radiator_monitors(self, mpc_input: RoomMpcInput) -> None:
+        room_c = mpc_input.room_temp_c
+        surplus_share = (
+            (
+                self._emitter_model.calculate_available_heating_power_w(
+                    room_c, mpc_input.flow_temp_c
+                )
+                - self._loss_model.effective_ua_w_per_k
+                * (room_c - mpc_input.outdoor_temp_c)
+            )
+            / self._room_heat_load_w
+            if mpc_input.flow_temp_c is not None and self._room_heat_load_w > 0
+            else None
+        )
+        mode_target_c = (
+            mpc_input.mode_target_temp_c
+            if mpc_input.mode_target_temp_c is not None
+            else mpc_input.target_temp_c
+        )
+        excluded = (
+            mpc_input.hot_water_charge or self._window_open or mpc_input.trv_adapting
+        )
+        for monitor, demand_pct, output_fraction in zip(
+            self._radiator_monitors,
+            mpc_input.valve_positions_pct or [None] * len(self._radiator_monitors),
+            self._emitter_model.full_output_fractions(mpc_input.flow_temp_c, room_c),
+        ):
+            monitor.update(
+                RadiatorCheckSample(
+                    now_ts=mpc_input.now_ts,
+                    demand_pct=demand_pct,
+                    room_temperature_c=room_c,
+                    mode_target_c=mode_target_c,
+                    heat_available=self._heat_available,
+                    full_output_fraction=output_fraction,
+                    surplus_share=surplus_share,
+                    excluded=excluded,
+                )
+            )
 
     def set_window_unknown(self, unknown: bool) -> None:
         self._learner.set_window_unknown(unknown)

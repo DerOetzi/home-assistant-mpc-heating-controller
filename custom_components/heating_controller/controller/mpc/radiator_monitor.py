@@ -1,182 +1,125 @@
 from __future__ import annotations
 
-# A TRV reports its valve wide open for this long before the radiator is
-# judged. A radiator that gets water warms its TRV within minutes.
-RADIATOR_CHECK_WINDOW_S = 3600
-RADIATOR_CHECK_MIN_OPENING_PCT = 90.0
-# Over that hour the TRV's reading must have risen this much, or sit this far
-# above the room. A Danfoss Ally next to a radiator that heats reads 1-2 K
-# above the room; next to one full of air (bedroom, 28 and 29 October) it
-# stayed within 0.5 K for hours at 94-100 % valve.
-RADIATOR_CHECK_MIN_RISE_C = 0.3
-RADIATOR_CHECK_MIN_LEAD_C = 1.0
-# The rise counts from the lowest reading over this time before the valve
-# opened: the controller runs every five minutes, and a radiator that gets
-# water warms its TRV within those (dining room, 31 October: 21.01 at the
-# opening, already 21.13 at the next cycle, 21.36 a quarter of an hour on).
-RADIATOR_CHECK_BASELINE_S = 15 * 60
-# A verdict needs a TRV that started out cold: the valve nearly shut for this
-# long, and the opening no more than the baseline time after that. A TRV
-# already warm from a partly open valve has nothing left to show at a low flow
-# (Rebekka, 37-39 °C flow: 0.13-0.25 K rise, 0.4-0.6 K above the room after an
-# hour wide open; the same radiator from a shut valve rose 0.58 K).
-RADIATOR_CHECK_COLD_MAX_OPENING_PCT = 15.0
-RADIATOR_CHECK_COLD_MIN_S = 30 * 60
-# A room rising this much over the hour gets heat from its radiator. Where a
-# radiator fan blows room air past the TRV it reads close to the room even
-# next to a warm radiator (bedroom, 30 October: TRV +0.22 K, room +0.4 K).
-# Room sensors step in 0.1 K: next to the radiator full of air (bedroom,
-# 28 October) the room still swung by 0.2 K within an hour. A rising room
-# only holds off the verdict for that hour; unlike a warm TRV it does not
-# clear the opening, sun or a neighbour may lift a room too.
+from dataclasses import dataclass
+
+# Every condition below has to hold this long without a break before a
+# radiator counts as not heating. Long enough that a sound radiator, even a
+# slow one at a low flow, lifts its room by a sensor step or more.
+RADIATOR_CHECK_WINDOW_S = 2 * 3600
+# The TRV asks for nearly all the heat its radiator can give.
+RADIATOR_CHECK_MIN_DEMAND_PCT = 80.0
+# A verdict clears once the TRV no longer asks for much heat: the room is
+# near its setpoint or got its heat elsewhere.
+RADIATOR_CHECK_CLEAR_DEMAND_PCT = 50.0
+# The room stays clearly below its mode setpoint, beyond what the setpoint
+# correction leaves and a sensor step.
+RADIATOR_CHECK_MIN_SHORTFALL_C = 0.5
+# A room rising this much gets heat from somewhere; room sensors step in
+# 0.1 K and swing by a step or two on their own.
 RADIATOR_CHECK_MIN_ROOM_RISE_C = 0.3
 # Only judged while the flow lets a fully open radiator give off at least this
-# share of its design output. Below it even a sound radiator stays barely warm
-# and its TRV hardly notices (study, 30 October: 30 °C flow at a 20.9 °C room,
-# about a fifth of design output, after the heating curve was lowered).
+# share of its design output. Below it even a sound radiator stays barely warm.
 RADIATOR_CHECK_MIN_OUTPUT_FRACTION = 0.3
+# The model has to expect the room to rise clearly: the room's full output
+# exceeds its loss by at least this share of its design heat load. Otherwise a
+# room that stays put is what the model expects, not a radiator that fails.
+RADIATOR_CHECK_MIN_SURPLUS_SHARE = 0.2
+
+
+@dataclass
+class RadiatorCheckSample:
+    """One controller cycle as the radiator check sees it, for one TRV."""
+
+    now_ts: float
+    demand_pct: float | None
+    room_temperature_c: float
+    mode_target_c: float
+    heat_available: bool
+    # Output of the fully open radiator as a share of its design output.
+    full_output_fraction: float | None
+    # Room output with the valves fully open minus its loss, as a share of
+    # its design heat load.
+    surplus_share: float | None
+    # Hot-water charge, open window, adapting TRV or mounting mode: nothing
+    # can be told, the window starts over.
+    excluded: bool = False
 
 
 class RadiatorDeliveryMonitor:
-    """Watches whether a radiator gives off heat while its valve is open.
+    """Watches whether a radiator gives off heat while its TRV asks for it.
 
     Air in the radiator or a valve stuck shut looks the same from here: the
-    TRV reports its valve open, yet its own reading stays near the room's
-    and the room does not rise. Only judged while the flow is warm enough
-    for a sound radiator to warm its TRV, and only after an opening from a
-    nearly shut valve: without that cold start a steady reading says nothing.
-    The verdict holds while the valve is shut, heating is off or the flow too
-    low -- there is nothing to test then -- and clears as soon as an open
-    valve warms the TRV again.
+    TRV asks for nearly full heat, the room stays well below its setpoint,
+    the model expects it to rise with the heat available, and it does not.
+    The verdict holds while there is nothing to test and clears once the room
+    rises or the TRV no longer asks for much heat.
     """
 
     def __init__(self) -> None:
-        self._open_since_ts: float | None = None
-        # (time, TRV reading, room temperature) while the valve is open, and
-        # over the last minutes before it opened.
-        self._readings: list[tuple[float, float, float]] = []
-        self._before_opening: list[tuple[float, float, float]] = []
-        # Once the radiator warmed during an opening, a steady reading later
-        # on is a radiator that holds its output, not one that fails.
-        self._heated_this_opening = False
-        # Since when the valve is nearly shut, and when the last long enough
-        # shut spell ended.
-        self._cold_since_ts: float | None = None
-        self._cold_until_ts: float | None = None
-        self._cold_start = False
+        self._since_ts: float | None = None
+        self._lowest_room_c: float | None = None
         self.not_heating = False
-        # When the valve opened for the hour that led to the verdict.
+        # Start of the window that led to the verdict.
         self.not_heating_since_ts: float | None = None
 
-    def update(
-        self,
-        now_ts: float,
-        opening_pct: float | None,
-        trv_temperature_c: float | None,
-        room_temperature_c: float,
-        heat_available: bool,
-        full_output_fraction: float | None = None,
-        hot_water_charge: bool = False,
-    ) -> None:
-        self._track_cold_valve(now_ts, opening_pct)
-        if (
-            not heat_available
-            or opening_pct is None
-            or trv_temperature_c is None
-            or opening_pct < RADIATOR_CHECK_MIN_OPENING_PCT
-            or (
-                full_output_fraction is not None
-                and full_output_fraction < RADIATOR_CHECK_MIN_OUTPUT_FRACTION
-            )
-        ):
+    def update(self, sample: RadiatorCheckSample) -> None:
+        if self.not_heating:
+            self._check_clear(sample)
+            return
+        if sample.excluded or not self._conditions_hold(sample):
             self._restart()
-            if trv_temperature_c is not None:
-                self._before_opening = [
-                    reading
-                    for reading in self._before_opening
-                    if now_ts - reading[0] <= RADIATOR_CHECK_BASELINE_S
-                ]
-                self._before_opening.append(
-                    (now_ts, trv_temperature_c, room_temperature_c)
-                )
             return
-        if hot_water_charge:
-            # The radiators get no water: the hour starts over once it is
-            # done.
-            self._open_since_ts = None
-            self._readings = []
+        room_c = sample.room_temperature_c
+        if self._since_ts is None or self._lowest_room_c is None:
+            self._since_ts = sample.now_ts
+            self._lowest_room_c = room_c
             return
-
-        if self._open_since_ts is None:
-            self._open_since_ts = now_ts
-            self._cold_start = self._cold_start or (
-                self._cold_until_ts is not None
-                and now_ts - self._cold_until_ts <= RADIATOR_CHECK_BASELINE_S
-            )
-            baseline = [
-                reading
-                for reading in self._before_opening
-                if now_ts - reading[0] <= RADIATOR_CHECK_BASELINE_S
-            ]
-            if baseline:
-                # Stamped with the opening, so it stays in the hour judged.
-                self._readings = [
-                    (
-                        now_ts,
-                        min(trv_c for _, trv_c, _ in baseline),
-                        min(room_c for _, _, room_c in baseline),
-                    )
-                ]
-        self._before_opening = []
-        self._readings = [
-            reading
-            for reading in self._readings
-            if now_ts - reading[0] <= RADIATOR_CHECK_WINDOW_S
-        ]
-        self._readings.append((now_ts, trv_temperature_c, room_temperature_c))
-
-        rise_c = trv_temperature_c - min(trv_c for _, trv_c, _ in self._readings)
-        room_rise_c = room_temperature_c - min(
-            room_c for _, _, room_c in self._readings
-        )
-        lead_c = trv_temperature_c - room_temperature_c
-        heating = (
-            rise_c >= RADIATOR_CHECK_MIN_RISE_C or lead_c >= RADIATOR_CHECK_MIN_LEAD_C
-        )
-        if heating:
-            self._heated_this_opening = True
-            self._clear_verdict()
-        elif room_rise_c >= RADIATOR_CHECK_MIN_ROOM_RISE_C:
-            self._clear_verdict()
-        elif (
-            self._cold_start
-            and not self._heated_this_opening
-            and now_ts - self._open_since_ts >= RADIATOR_CHECK_WINDOW_S
-        ):
-            if not self.not_heating:
-                self.not_heating_since_ts = self._open_since_ts
+        if room_c - self._lowest_room_c >= RADIATOR_CHECK_MIN_ROOM_RISE_C:
+            # The room rises: the radiator heats, the window starts over.
+            self._since_ts = sample.now_ts
+            self._lowest_room_c = room_c
+            return
+        self._lowest_room_c = min(self._lowest_room_c, room_c)
+        if sample.now_ts - self._since_ts >= RADIATOR_CHECK_WINDOW_S:
             self.not_heating = True
+            self.not_heating_since_ts = self._since_ts
+            self._lowest_room_c = room_c
 
-    def _track_cold_valve(self, now_ts: float, opening_pct: float | None) -> None:
-        if opening_pct is None:
-            return
-        if opening_pct <= RADIATOR_CHECK_COLD_MAX_OPENING_PCT:
-            if self._cold_since_ts is None:
-                self._cold_since_ts = now_ts
-            return
+    @staticmethod
+    def _conditions_hold(sample: RadiatorCheckSample) -> bool:
+        return (
+            sample.heat_available
+            and sample.demand_pct is not None
+            and sample.demand_pct >= RADIATOR_CHECK_MIN_DEMAND_PCT
+            and sample.room_temperature_c
+            <= sample.mode_target_c - RADIATOR_CHECK_MIN_SHORTFALL_C
+            and sample.full_output_fraction is not None
+            and sample.full_output_fraction >= RADIATOR_CHECK_MIN_OUTPUT_FRACTION
+            and sample.surplus_share is not None
+            and sample.surplus_share >= RADIATOR_CHECK_MIN_SURPLUS_SHARE
+        )
+
+    def _check_clear(self, sample: RadiatorCheckSample) -> None:
         if (
-            self._cold_since_ts is not None
-            and now_ts - self._cold_since_ts >= RADIATOR_CHECK_COLD_MIN_S
+            sample.demand_pct is not None
+            and sample.demand_pct < RADIATOR_CHECK_CLEAR_DEMAND_PCT
         ):
-            self._cold_until_ts = now_ts
-        self._cold_since_ts = None
+            self._clear()
+            return
+        assert self._lowest_room_c is not None
+        if (
+            sample.room_temperature_c - self._lowest_room_c
+            >= RADIATOR_CHECK_MIN_ROOM_RISE_C
+        ):
+            self._clear()
+            return
+        self._lowest_room_c = min(self._lowest_room_c, sample.room_temperature_c)
 
-    def _clear_verdict(self) -> None:
+    def _clear(self) -> None:
         self.not_heating = False
         self.not_heating_since_ts = None
+        self._restart()
 
     def _restart(self) -> None:
-        self._open_since_ts = None
-        self._readings = []
-        self._heated_this_opening = False
-        self._cold_start = False
+        self._since_ts = None
+        self._lowest_room_c = None
