@@ -49,10 +49,6 @@ from .const import (
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
     CONF_LEARNING_BLOCK_ENTITY,
     CONF_MAX_SENSOR_AGE,
-    CONF_MPC_DEMAND_HYSTERESIS_PCT,
-    CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT,
-    CONF_MPC_HOLD_TIME,
-    CONF_MPC_MAX_DEMAND_STEP_PCT,
     CONF_OPAQUE_SURFACES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PV_BOOST_ENABLED,
@@ -67,7 +63,6 @@ from .const import (
     CONF_TRV_HEIGHT_MM,
     CONF_TRV_NOMINAL_POWER_W,
     CONF_TRV_RADIATOR_TYPE,
-    CONF_TRV_SETPOINT_MODE,
     CONF_TRV_WIDTH_MM,
     CONF_USE_HOUSE_COMFORT_CONDITIONS,
     CONF_WINDOW_CONTACT_ENTITIES,
@@ -86,13 +81,8 @@ from .const import (
     HeatEmitterType,
     HeatMode,
     PanelRadiatorType,
-    TrvSetpointMode,
 )
-from .controller.mpc.controller import (
-    FlowGateConfig,
-    MpcRateLimitConfig,
-    RoomMpcController,
-)
+from .controller.mpc.controller import FlowGateConfig, RoomMpcController
 from .controller.mpc.math_helper import clamp, round_to_step
 from .controller.mpc.models.gains import GainBreakdown, profile_index
 from .controller.mpc.results import RoomMpcResult
@@ -102,6 +92,7 @@ from .controller.mpc.types import (
     RoomThermalConfig,
     TrvConfig,
 )
+from .controller.setpoint_correction import SetpointCorrection
 from .controller.state import HeatingStateConfig, HeatingStateController
 from .irradiance import IrradianceProvider, SunSeries
 from .profiles import TrvBinding
@@ -109,7 +100,8 @@ from .store import (
     FlowGateStateStore,
     GainStore,
     LearningFactorsStore,
-    ValveCurveStore,
+    SetpointCorrectionStore,
+    async_remove_valve_curve_store,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -126,9 +118,15 @@ TARGET_TEMPERATURE_TOLERANCE_C = 0.01
 # write. Within this window the written target counts as the TRV's target, so
 # the echo neither triggers a second write nor moves a relative target.
 TARGET_WRITE_SETTLE_S = 120.0
-# A TRV switches between shut (minimum target) and open at most this often,
-# unless frost protection is forced: every switch wakes it twice.
-TRV_SWITCH_MIN_INTERVAL_S = 15 * 60
+# Without a target_temp_step attribute the TRV takes setpoints in this step.
+DEFAULT_TARGET_TEMPERATURE_STEP_C = 0.5
+# The setpoint correction waits this long after a window closed or the mode's
+# target changed: the room is still on its way back.
+CORRECTION_WINDOW_CLOSED_S = 3600
+CORRECTION_TARGET_SETTLED_S = 2 * 3600
+# Heat stays available while the flow dips below the threshold for less than
+# this: a defrost drops the flow by about 10 K for one 10-minute report.
+FLOW_DIP_TOLERANCE_S = 20 * 60
 # A write aborts a TRV's adaptation run, so nothing is written to a TRV while
 # its profile reports one running -- but no longer than this, so a status that
 # never clears cannot leave the room uncontrolled.
@@ -137,10 +135,6 @@ ADAPTATION_MAX_HOLD_S = 3 * 3600
 
 WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S = 30 * 60
 WINDOW_CLOSED_SUPPRESS_CAPACITY_LEARNING_S = 10 * 60
-# Valve curve samples finish every few minutes per TRV; one delayed write
-# bundles what finished within this time and spares the disk. HA flushes a
-# pending write on shutdown.
-VALVE_CURVE_SAVE_DELAY_S = 10 * 60
 
 SUNSET_LEARNING_DELAY = timedelta(hours=2)
 
@@ -150,11 +144,9 @@ SUNSET_LEARNING_DELAY = timedelta(hours=2)
 # the room sensor before accepting the fallback.
 ROOM_SENSOR_STARTUP_GRACE_S = 5 * 60
 
-# Right after startup the outdoor entity and the heat source may not have
-# reported yet. Without the heat source state the room reads as unheated and
-# would force frost protection; without the outdoor temperature it would hand
-# the TRVs an absolute fallback. Either is overwritten seconds later and costs
-# TRV and switch writes on every restart. So both wait until the input was
+# Right after startup the heat source may not have reported yet, and the room
+# would read as unheated. That is overwritten seconds later and costs switch
+# writes on every restart, so heat_available waits until the heat source was
 # read once, or has been missing for a full poll cycle.
 STARTUP_GRACE_S = SENSOR_POLL_INTERVAL_MINUTES * 60
 
@@ -169,9 +161,6 @@ def _build_trv_configs(trvs: list[TrvBinding]) -> list[TrvConfig]:
         TrvConfig(
             name=trv.climate_entity,
             emitter_type=HeatEmitterType(trv.emitter[CONF_TRV_EMITTER_TYPE]),
-            min_target_temperature_c=trv.min_target_temperature_c,
-            max_target_temperature_c=trv.max_target_temperature_c,
-            target_temperature_step_c=trv.target_temperature_step_c,
             radiator_type=(
                 PanelRadiatorType(trv.emitter[CONF_TRV_RADIATOR_TYPE])
                 if CONF_TRV_RADIATOR_TYPE in trv.emitter
@@ -181,7 +170,6 @@ def _build_trv_configs(trvs: list[TrvBinding]) -> list[TrvConfig]:
             height_mm=trv.emitter.get(CONF_TRV_HEIGHT_MM),
             nominal_power_w=trv.emitter.get(CONF_TRV_NOMINAL_POWER_W),
             valve_position_configured=trv.valve_position_entity is not None,
-            valve_characteristic_seed=trv.valve_characteristic_seed,
         )
         for trv in trvs
     ]
@@ -226,6 +214,10 @@ class HeatingRoomCoordinator:
         # The heat source drops out for a few polls at a time while it keeps
         # running; its last known state bridges that.
         self._last_heat_source_state: str | None = None
+        # Whether the flow has reached the threshold since the heat source
+        # last stopped heating, and since when it has been below it.
+        self._flow_heating = False
+        self._flow_dip_since_ts: float | None = None
         # Same for the flow temperature entity, which drops out for a moment
         # whenever its template is reloaded.
         self._flow_temperature_c: float | None = None
@@ -284,12 +276,6 @@ class HeatingRoomCoordinator:
             window_surfaces=tuple(self.data.get(CONF_WINDOW_SURFACES) or ()),
             opaque_surfaces=tuple(self.data.get(CONF_OPAQUE_SURFACES) or ()),
         )
-        rate_limit_config = MpcRateLimitConfig(
-            demand_hysteresis_pct=self.data[CONF_MPC_DEMAND_HYSTERESIS_PCT],
-            hold_time_s=self.data[CONF_MPC_HOLD_TIME],
-            hold_override_demand_pct=self.data[CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT],
-            max_demand_step_pct=self.data[CONF_MPC_MAX_DEMAND_STEP_PCT],
-        )
         flow_gate_config = FlowGateConfig(
             close_surplus_c=self.data.get(
                 CONF_FLOW_GATE_CLOSE_SURPLUS, DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C
@@ -304,11 +290,9 @@ class HeatingRoomCoordinator:
         self.mpc = RoomMpcController(
             thermal_config=thermal_config,
             trvs=_build_trv_configs(trvs),
-            rate_limit_config=rate_limit_config,
             max_sensor_age_s=self.data[CONF_MAX_SENSOR_AGE],
             room_sensor_configured=bool(self.data.get(CONF_ROOM_SENSOR_ENTITY)),
             target_band_c=self.data[CONF_TARGET_BAND],
-            trv_setpoint_mode=TrvSetpointMode(self.data[CONF_TRV_SETPOINT_MODE]),
             flow_gate_config=flow_gate_config,
         )
         self.mpc.set_sun_condition(self.is_sun_condition_met)
@@ -319,15 +303,10 @@ class HeatingRoomCoordinator:
         self.store = LearningFactorsStore(hass, self.room_name, room_id)
         self.flow_gate_store = FlowGateStateStore(hass, self.room_name, room_id)
         self._persisted_flow_gate_state: FlowGateState | None = None
-        self.valve_curve_store = ValveCurveStore(hass, self.room_name, room_id)
         self.gain_store = GainStore(hass, self.room_name, room_id)
         # Set by the hub when some room has sun surfaces.
         self.sun_provider: IrradianceProvider | None = None
         self.workday_entity: str | None = None
-        # When the pending delayed write is due. HA's delayed save moves a
-        # pending write out on every call, so samples finishing more often
-        # than the delay would postpone it until shutdown.
-        self._valve_curve_save_due_ts: float | None = None
         self._awaiting_room_sensor = bool(self.data.get(CONF_ROOM_SENSOR_ENTITY))
 
         self.blocked = False
@@ -336,16 +315,19 @@ class HeatingRoomCoordinator:
         # Target writes per TRV since setup: every write wakes the TRV.
         self.trv_setpoint_writes: dict[str, int] = {}
         self._written_targets: dict[str, tuple[float, float]] = {}
-        self._trv_switched_at: dict[str, float] = {}
         self._adaptation_since: dict[str, float] = {}
         self.normal_result: RoomMpcResult | None = None
         self.normal_heat_mode: HeatMode | None = None
         self.normal_target_temperature_c: float | None = None
-        # Without an outdoor temperature the TRVs get the room's target as an
-        # absolute setpoint and regulate on their own reading.
-        self.outdoor_fallback_since_ts: float | None = None
-        self.outdoor_fallback_target_c: float | None = None
-        self._outdoor_seen = False
+        # The setpoint of the active mode, and since when it holds.
+        self.mode_target_temperature_c: float | None = None
+        self._mode_target_since_ts = 0.0
+        # Since when every window has been closed; None while one is open.
+        self._windows_closed_since_ts: float | None = None
+        self.setpoint_correction = SetpointCorrection(time.time())
+        self.setpoint_correction_store = SetpointCorrectionStore(
+            hass, self.room_name, room_id
+        )
         self._started_ts = 0.0
 
         self._unsub: list[Callable[[], None]] = []
@@ -421,13 +403,18 @@ class HeatingRoomCoordinator:
             self.mpc.restore_flow_gate_state(flow_gate_state)
             self._persisted_flow_gate_state = flow_gate_state
 
-        valve_curves = await self.valve_curve_store.async_load()
-        if valve_curves is not None:
-            self.mpc.restore_valve_curves(valve_curves)
+        await async_remove_valve_curve_store(self.hass, self.room_name, self.room_id)
+
+        correction_c = await self.setpoint_correction_store.async_load()
+        self.setpoint_correction = SetpointCorrection(
+            self._started_ts, correction_c or 0.0
+        )
 
         for entity_id in self.data.get(CONF_WINDOW_CONTACT_ENTITIES, []):
             self.state.update_window_state(entity_id, self._is_on(entity_id))
         self.mpc.set_window_open(self.state.is_window_open, time.time())
+        if not self.state.is_window_open:
+            self._windows_closed_since_ts = self._started_ts
         self._update_window_unknown()
 
         if self._learning_block_entity:
@@ -506,7 +493,6 @@ class HeatingRoomCoordinator:
             self.mpc.set_trv_temperature(
                 index, self._climate_temperature_from_state(state)
             )
-            self.mpc.set_trv_target(index, self._climate_target_from_state(state))
         for index, entity_id in enumerate(self._valve_position_entities):
             if entity_id:
                 self.mpc.set_valve_position(index, self._float_state(entity_id))
@@ -570,9 +556,10 @@ class HeatingRoomCoordinator:
             self._learning_paused = paused
             self.mpc.set_learning_paused(paused, now_ts)
 
-    def _compute_trv_active(self) -> bool:
+    def _compute_trv_active(self, now_ts: float) -> bool:
         if not self._heat_source_climate_entity:
-            return False
+            # Nothing tells when the heat is gone; the TRVs find out themselves.
+            return True
         climate_state = self.hass.states.get(self._heat_source_climate_entity)
         if climate_state is not None and climate_state.state not in (
             STATE_UNAVAILABLE,
@@ -580,9 +567,24 @@ class HeatingRoomCoordinator:
         ):
             self._last_heat_source_state = climate_state.state
         if self._last_heat_source_state != HEAT_SOURCE_ACTIVE_STATE:
+            self._flow_heating = False
+            self._flow_dip_since_ts = None
             return False
         flow_temp_c = self.current_flow_temperature_c
-        return flow_temp_c is not None and flow_temp_c >= self.flow_threshold_c
+        if flow_temp_c is not None and flow_temp_c >= self.flow_threshold_c:
+            self._flow_heating = True
+            self._flow_dip_since_ts = None
+            return True
+        if not self._flow_heating or flow_temp_c is None:
+            self._flow_heating = False
+            return False
+        if self._flow_dip_since_ts is None:
+            self._flow_dip_since_ts = now_ts
+        if now_ts - self._flow_dip_since_ts < FLOW_DIP_TOLERANCE_S:
+            return True
+        self._flow_heating = False
+        self._flow_dip_since_ts = None
+        return False
 
     def _adaptation_running(self, trv: TrvBinding, now_ts: float) -> bool:
         """Whether the TRV runs an adaptation that a write would abort."""
@@ -714,7 +716,6 @@ class HeatingRoomCoordinator:
             self.mpc.set_trv_temperature(
                 index, self._climate_temperature_from_state(new_state)
             )
-            self.mpc.set_trv_target(index, self._climate_target_from_state(new_state))
 
         elif entity_id in self._valve_position_entities:
             self.mpc.set_valve_position(
@@ -741,6 +742,10 @@ class HeatingRoomCoordinator:
             )
             self.mpc.set_window_open(is_open, time.time())
             self._update_window_unknown()
+            if is_open:
+                self._windows_closed_since_ts = None
+            elif was_open:
+                self._windows_closed_since_ts = time.time()
             if was_open and not is_open:
                 self.mpc.suppress_learning_for_interval(
                     WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S,
@@ -767,7 +772,6 @@ class HeatingRoomCoordinator:
         ua_factor: float | None,
         capacity_factor: float | None,
         reset_gains: bool = False,
-        reset_valve_curves: bool = False,
     ) -> None:
         """Set the factors; one left out keeps its learned value."""
         if reset_gains:
@@ -775,12 +779,6 @@ class HeatingRoomCoordinator:
             await self.gain_store.async_save(self.mpc.gain_model.export())
             self.mpc.gain_model.consume_changed()
             _LOGGER.info("Reset learned gains for room %s", self.room_name)
-        if reset_valve_curves:
-            self.mpc.reset_valve_curves()
-            # Replaces a pending delayed write, which would read the same.
-            self._valve_curve_save_due_ts = None
-            await self.valve_curve_store.async_save(self.mpc.export_valve_curves())
-            _LOGGER.info("Reset learned valve curves for room %s", self.room_name)
         if ua_factor is None and capacity_factor is None:
             self._notify_listeners()
             return
@@ -863,7 +861,7 @@ class HeatingRoomCoordinator:
                 for trv in self._trvs
             )
         )
-        self.trv_active = self._compute_trv_active()
+        self.trv_active = self._compute_trv_active(now_ts)
         heat_source_pending = self._heat_source_pending()
         self.state.set_trv_active(self.trv_active)
         self.mpc.set_heat_available(self.trv_active)
@@ -872,16 +870,22 @@ class HeatingRoomCoordinator:
         else:
             self.mpc.disable_learning()
 
+        display_mode = self.state.resolve_display_mode(self.blocked)
+        mode_target = self.state.effective_target_temperature(
+            self.state.determine_base_target_temperature(display_mode)
+        )
+        if mode_target != self.mode_target_temperature_c:
+            self.mode_target_temperature_c = mode_target
+            self._mode_target_since_ts = now_ts
+        frost_protection = display_mode is HeatMode.FROST_PROTECTION
+        await self._async_update_setpoint_correction(now_ts, frost_protection)
+        await self._async_write_setpoints(
+            mode_target, apply_correction=not frost_protection
+        )
+
         if self._awaiting_room_sensor:
             if not heat_source_pending:
                 await self._async_apply_trv_active_switches(self.trv_active)
-            self._notify_listeners()
-            return
-
-        # The room reads as unheated only because the heat source has not
-        # reported yet: no forced frost protection, nothing to write. A real
-        # reason (open window, a mode the user picked) still goes through.
-        if heat_source_pending and not self.blocked and not self.state.is_window_open:
             self._notify_listeners()
             return
 
@@ -890,33 +894,12 @@ class HeatingRoomCoordinator:
             self.state.determine_base_target_temperature(self.normal_heat_mode)
         )
         self.normal_target_temperature_c = normal_target
-        self.mpc.set_current_trv_targets(
-            [self._current_trv_target(entity_id) for entity_id in self._trv_entity_ids]
-        )
         normal_compute = self.mpc.compute(normal_target, apply_side_effects=False)
         self.normal_result = normal_compute.result if normal_compute.valid else None
 
-        display_mode = self.state.resolve_display_mode(self.blocked)
-        actual_target = self.state.effective_target_temperature(
-            self.state.determine_base_target_temperature(display_mode)
-        )
-        actual_compute = self.mpc.compute(
-            actual_target,
-            skip_demand_smoothing=self.state.should_force_frost_protection(
-                self.blocked
-            ),
-        )
-        forced = self.state.should_force_frost_protection(self.blocked)
-        if not self.mpc.outdoor_temperature_missing:
-            self._outdoor_seen = True
+        actual_compute = self.mpc.compute(mode_target)
         if actual_compute.valid:
-            self._end_outdoor_fallback()
             self.last_result = actual_compute.result
-            await self._async_write_trv_targets(
-                actual_compute.result.trv_targets, forced=forced
-            )
-        elif self.mpc.outdoor_temperature_missing and self._outdoor_fallback_due():
-            await self._async_apply_outdoor_fallback(actual_target, forced)
         else:
             _LOGGER.debug(
                 "MPC compute failed for room %s: %s",
@@ -928,7 +911,6 @@ class HeatingRoomCoordinator:
             await self._async_apply_trv_active_switches(self.trv_active)
         await self._async_persist_learning_factors()
         await self._async_persist_flow_gate_state()
-        self._schedule_valve_curve_save()
         self._notify_listeners()
 
     async def _async_persist_flow_gate_state(self) -> None:
@@ -938,75 +920,76 @@ class HeatingRoomCoordinator:
         await self.flow_gate_store.async_save(flow_gate_state)
         self._persisted_flow_gate_state = flow_gate_state
 
-    async def async_flush_valve_curves(self) -> None:
-        """Write a pending delayed valve-curve save now.
+    @property
+    def trv_target_temperatures(self) -> dict[str, float | None]:
+        """Each TRV's target as last written or reported."""
+        return {
+            entity_id: self._current_trv_target(entity_id)
+            for entity_id in self._trv_entity_ids
+        }
 
-        On unload: an awaited save replaces the pending delayed write, so it
-        cannot fire after the entry is removed and recreate the file, and a
-        reload keeps the samples.
+    @property
+    def room_demand_pct(self) -> float | None:
+        """The highest valve opening any TRV of the room reports."""
+        openings = [
+            opening
+            for opening in self.trv_valve_positions.values()
+            if opening is not None
+        ]
+        return max(openings) if openings else None
+
+    def _correction_room_temperature_c(self) -> float | None:
+        """The room sensor's reading; the TRVs' own does not count.
+
+        A TRV regulates on its own reading, so correcting for it would chase
+        nothing. A room without a room sensor stays uncorrected.
         """
-        if self._valve_curve_save_due_ts is None:
-            return
-        self._valve_curve_save_due_ts = None
-        await self.valve_curve_store.async_save(self.mpc.export_valve_curves())
+        room = self.mpc.get_room_temperature_result()
+        if not room.valid or room.room_sensor_fallback:
+            return None
+        return room.room_sensor_temp_c
 
-    def _schedule_valve_curve_save(self) -> None:
-        if not self.mpc.consume_valve_curves_changed():
-            return
-        now_ts = time.time()
-        if (
-            self._valve_curve_save_due_ts is not None
-            and now_ts < self._valve_curve_save_due_ts
-        ):
-            # The pending write reads the samples when it runs.
-            return
-        self.valve_curve_store.async_delay_save(
-            self.mpc.export_valve_curves, VALVE_CURVE_SAVE_DELAY_S
-        )
-        self._valve_curve_save_due_ts = now_ts + VALVE_CURVE_SAVE_DELAY_S
-
-    async def _async_apply_outdoor_fallback(
-        self, target_temperature_c: float, forced: bool
-    ) -> None:
-        """Hand the room to the TRVs while the outdoor temperature is missing.
-
-        The model cannot plan without it, and keeping the last relative target
-        would leave the valves where they happened to stand. The TRVs get the
-        target of the active mode as an absolute setpoint instead and regulate
-        on their own reading; the MPC takes over again once the value is back.
-        Learning pauses meanwhile (the controller tells the learner).
-        """
-        if self.outdoor_fallback_since_ts is None:
-            self.outdoor_fallback_since_ts = time.time()
-            _LOGGER.warning(
-                "Outdoor temperature missing for room %s; TRVs hold %s °C on "
-                "their own until it is back",
-                self.room_name,
-                target_temperature_c,
-            )
-        self.outdoor_fallback_target_c = target_temperature_c
-        # The planned values no longer apply; showing them would pass stale
-        # numbers off as current.
-        self.last_result = None
-        await self._async_write_trv_targets(
-            [
-                clamp(
-                    round_to_step(target_temperature_c, trv.target_temperature_step_c),
-                    trv.min_target_temperature_c,
-                    trv.max_target_temperature_c,
-                )
+    def _correction_allowed(self, now_ts: float) -> bool:
+        """Whether the room is settled enough to judge its error."""
+        return (
+            self._windows_closed_since_ts is not None
+            and now_ts - self._windows_closed_since_ts >= CORRECTION_WINDOW_CLOSED_S
+            and now_ts - self._mode_target_since_ts >= CORRECTION_TARGET_SETTLED_S
+            and self.trv_active
+            and not self.mpc.hot_water_charging
+            and not any(
+                self._adaptation_running(trv, now_ts) or self._trv_uncalibrated(trv)
                 for trv in self._trvs
-            ],
-            forced=forced,
+            )
+            # The night's heat balance needs the setpoint to stay put.
+            and not self.is_sun_condition_met(now_ts)
         )
 
-    def _outdoor_fallback_due(self) -> bool:
-        """Whether a missing outdoor temperature is an outage, not a startup.
-
-        Until then nothing is written, as for any other missing input;
-        learning pauses all the same (the controller tells the learner).
-        """
-        return self._outdoor_seen or not self._in_startup_grace()
+    async def _async_update_setpoint_correction(
+        self, now_ts: float, frost_protection: bool
+    ) -> None:
+        room_temperature_c = self._correction_room_temperature_c()
+        if room_temperature_c is not None:
+            self.setpoint_correction.add_sample(
+                now_ts, room_temperature_c, self.room_demand_pct
+            )
+        target_c = self.mode_target_temperature_c
+        if (
+            frost_protection
+            or target_c is None
+            or not self.setpoint_correction.due(now_ts)
+            or not self._correction_allowed(now_ts)
+        ):
+            return
+        if self.setpoint_correction.evaluate(now_ts, target_c):
+            _LOGGER.info(
+                "Setpoint correction for room %s now %+.1f K",
+                self.room_name,
+                self.setpoint_correction.correction_c,
+            )
+            await self.setpoint_correction_store.async_save(
+                self.setpoint_correction.correction_c
+            )
 
     def _in_startup_grace(self) -> bool:
         return time.time() - self._started_ts < STARTUP_GRACE_S
@@ -1027,65 +1010,53 @@ class HeatingRoomCoordinator:
         )
         return not known and self._in_startup_grace()
 
-    def _end_outdoor_fallback(self) -> None:
-        if self.outdoor_fallback_since_ts is None:
-            return
-        _LOGGER.info(
-            "Outdoor temperature back for room %s; the MPC takes over again",
-            self.room_name,
-        )
-        self.outdoor_fallback_since_ts = None
-        self.outdoor_fallback_target_c = None
+    @staticmethod
+    def _trv_setpoint_c(state: State, target_c: float) -> float:
+        """The target as the TRV's climate entity takes it."""
+        attributes = state.attributes
+        step_c = attributes.get("target_temp_step") or DEFAULT_TARGET_TEMPERATURE_STEP_C
+        setpoint_c = round_to_step(target_c, step_c)
+        min_c = attributes.get("min_temp")
+        max_c = attributes.get("max_temp")
+        if min_c is not None and max_c is not None:
+            setpoint_c = clamp(setpoint_c, min_c, max_c)
+        return setpoint_c
 
-    @property
-    def outdoor_fallback_active(self) -> bool:
-        return self.outdoor_fallback_since_ts is not None
-
-    async def _async_write_trv_targets(
-        self, trv_targets: list[float], forced: bool = False
+    async def _async_write_setpoints(
+        self, mode_target_c: float, apply_correction: bool
     ) -> None:
-        for trv, target_temperature_c in zip(self._trvs, trv_targets, strict=True):
+        """Hand every TRV the room's setpoint; it regulates on its own."""
+        target_c = mode_target_c + (
+            self.setpoint_correction.correction_c if apply_correction else 0.0
+        )
+        now_ts = time.time()
+        for trv in self._trvs:
             entity_id = trv.climate_entity
-            # Every write wakes the TRV and can abort a running adaptation run,
+            # Every write wakes the TRV and aborts a running adaptation run,
             # so only send a target the TRV does not already report, none to a
-            # TRV that cannot take it, and none while it adapts unless frost
-            # protection is forced.
+            # TRV that cannot take it, and none while it adapts.
             state = self.hass.states.get(entity_id)
             if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
                 continue
-            now_ts = time.time()
-            if not forced and self._adaptation_running(trv, now_ts):
+            if self._adaptation_running(trv, now_ts):
                 continue
+            setpoint_c = self._trv_setpoint_c(state, target_c)
             current_target_c = self._current_trv_target(entity_id)
             if (
                 current_target_c is not None
-                and abs(current_target_c - target_temperature_c)
-                < TARGET_TEMPERATURE_TOLERANCE_C
-            ):
-                continue
-            min_target_c = trv.min_target_temperature_c
-            switches = (
-                current_target_c is None or current_target_c <= min_target_c
-            ) != (target_temperature_c <= min_target_c)
-            if (
-                switches
-                and not forced
-                and now_ts - self._trv_switched_at.get(entity_id, 0.0)
-                < TRV_SWITCH_MIN_INTERVAL_S
+                and abs(current_target_c - setpoint_c) < TARGET_TEMPERATURE_TOLERANCE_C
             ):
                 continue
             await self.hass.services.async_call(
                 "climate",
                 "set_temperature",
-                {"entity_id": entity_id, "temperature": target_temperature_c},
+                {"entity_id": entity_id, "temperature": setpoint_c},
                 blocking=False,
             )
             self.trv_setpoint_writes[entity_id] = (
                 self.trv_setpoint_writes.get(entity_id, 0) + 1
             )
-            self._written_targets[entity_id] = (target_temperature_c, now_ts)
-            if switches:
-                self._trv_switched_at[entity_id] = now_ts
+            self._written_targets[entity_id] = (setpoint_c, now_ts)
 
     def _current_trv_target(self, entity_id: str) -> float | None:
         """The TRV's target, or the one just written while its echo settles."""

@@ -24,6 +24,7 @@ export const TRANSLATIONS = {
     window_open: "Open",
     window_closed: "Closed",
     row_min_flow: "Minimum flow temperature",
+    row_setpoint_correction: "Setpoint correction",
     row_additional_heat: "Additional heat",
     row_additional_heat_learning: "{value} (learning: {ungated})",
 
@@ -127,6 +128,7 @@ export const TRANSLATIONS = {
     window_open: "Offen",
     window_closed: "Geschlossen",
     row_min_flow: "Mindestvorlauftemperatur",
+    row_setpoint_correction: "Sollwert-Korrektur",
     row_additional_heat: "Zusatzwärme",
     row_additional_heat_learning: "{value} (lernt: {ungated})",
 

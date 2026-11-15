@@ -23,16 +23,11 @@
         "data": {
           "design_outdoor_temperature_c": "Design outdoor temperature (°C)",
           "design_temperature_system": "Radiator design temperature system",
-          "mpc_demand_hysteresis_pct": "Demand hysteresis (%)",
-          "mpc_hold_time_s": "Hold time (s)",
-          "mpc_hold_override_demand_pct": "Hold override demand (%)",
-          "mpc_max_demand_step_pct": "Max demand step per 5 minutes (%)",
           "flow_gate_close_surplus_c": "Surplus gate: close above setpoint + (K)",
           "flow_gate_open_surplus_c": "Surplus gate: reopen below setpoint + (K)",
           "flow_gate_hold_time_s": "Surplus gate: hold time before closing (s)",
           "max_sensor_age_s": "Max sensor age (s)",
-          "target_band_c": "Target band below setpoint (K)",
-          "trv_setpoint_mode": "TRV target mode"
+          "target_band_c": "Target band below setpoint (K)"
         }
       },
       "sun": {
@@ -292,12 +287,6 @@
         "very_heavy": "Very heavy (370 kJ/m²K)"
       }
     },
-    "trv_setpoint_mode": {
-      "options": {
-        "absolute": "Absolute (spread over the TRV range)",
-        "relative": "Relative (above the TRV's own reading)"
-      }
-    },
     "roof_orientation": {
       "options": {
         "none": "None / flat",
@@ -361,9 +350,6 @@
       },
       "radiator_not_heating": {
         "name": "Radiator not heating"
-      },
-      "outdoor_temperature_missing": {
-        "name": "Outdoor temperature missing"
       },
       "lead_heating_demand": {
         "name": "Lead rooms heating demand"
@@ -477,10 +463,7 @@
         "name": "Hold flow temperature"
       },
       "heating_demand": {
-        "name": "Target valve opening"
-      },
-      "requested_heating_power": {
-        "name": "Requested heating power"
+        "name": "Valve opening"
       },
       "available_heating_power": {
         "name": "Available heating power"
@@ -546,9 +529,6 @@
           "radiator_not_heating": "Radiator not heating",
           "paused": "Paused"
         }
-      },
-      "valve_curve": {
-        "name": "Valve curve"
       },
       "lead_hold_flow_temperature": {
         "name": "Lead rooms hold flow temperature"
@@ -696,7 +676,7 @@
     },
     "recalibrate": {
       "name": "Recalibrate",
-      "description": "Set the learned UA and capacity factors of one or more rooms, or reset their learned gains or valve curves. A factor left out stays unchanged; pass 1.0 to reset it. Admin only.",
+      "description": "Set the learned UA and capacity factors of one or more rooms, or reset their learned gains. A factor left out stays unchanged; pass 1.0 to reset it. Admin only.",
       "fields": {
         "ua_factor": {
           "name": "UA factor",
@@ -709,10 +689,6 @@
         "reset_gains": {
           "name": "Reset gains",
           "description": "Forget the learned steady gain, gain profile and sun terms of the room and learn them anew."
-        },
-        "reset_valve_curves": {
-          "name": "Reset valve curves",
-          "description": "Forget the samples of the valve curve each TRV of the room learned (setpoint offset to opening); the profile's starting value applies until new samples come in."
         }
       }
     }

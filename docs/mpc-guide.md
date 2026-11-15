@@ -15,9 +15,10 @@ what the fields of the hub and the rooms actually do, see below.
   normal comfort.
 - **Frost protection** — a fixed floor temperature, independent of the comfort setpoint.
   This one is also **enforced automatically**, regardless of the selected mode, whenever a
-  configured window contact in the room is open or its TRVs report as inactive — you'll see
-  "Frost protection enforced" in the card's header, and it clears itself as soon as the
-  window closes or the TRVs are active again. No action needed on your part.
+  configured window contact in the room is open — you'll see "Frost protection enforced" in
+  the card's header, and it clears itself as soon as the window closes. No action needed on
+  your part. Without heat from the heat source the mode stays; only the TRVs'
+  heat-available switches go off.
 - **PV boost** — if enabled and the hub's PV-surplus switch is on, adds a further fixed
   offset on top of whichever mode is currently active.
 
@@ -53,7 +54,7 @@ stands:
 | `valve_position_missing` | A linked valve position entity is stale or unavailable. |
 | `trv_adapting` | A TRV calibrates its valve and moves it by itself, has no calibrated valve (adaptation status other than found, e.g. `none` after mounting or `lost`), or is in mounting mode. |
 | `radiator_not_heating` | A radiator stays cold although its valve reports open, see [Radiator check](#radiator-check). |
-| `outdoor_temperature_missing` | The outdoor temperature is missing and the TRVs hold the target on their own, see [Sensor reliability](#sensor-reliability). The stretch before the outage is balanced; the next one starts once the value is back. |
+| `outdoor_temperature_missing` | The outdoor temperature is missing, see [Sensor reliability](#sensor-reliability). The stretch before the outage is balanced; the next one starts once the value is back. |
 | `valve_saturated` | For more than half the stretch every valve was at least 95 % open with the room below its target band. The heat assumed for a full opening is the least certain (a flow-limited radiator gives off less), so the factor is left alone; the target is kept for diagnostics. |
 | `window_open` | A window contact in the room is open. |
 
@@ -208,17 +209,12 @@ data:
   ua_factor: 1.0
   capacity_factor: 1.0
   reset_gains: true
-  reset_valve_curves: true
 ```
 
 A factor that is left out stays as it is, so a reset needs an explicit `1.0`; at least one
 value (or a reset) is required. The call discards the heat-loss stretch and any jump
 stretch in progress, because they were measured with the old factors. `reset_gains: true` forgets the
 learned steady gain, day profile and sun terms (see [Gains and sun](#gains-and-sun)).
-`reset_valve_curves: true` forgets the samples of every TRV's valve curve in the room, also
-one still open; the profile's starting value applies until new bins fill (see
-[Valve curve](#valve-curve)) — for instance after a change to how samples are taken, a new
-pre-setting or a hydraulic change. The reset is written at once.
 
 ## Gains and sun
 
@@ -323,52 +319,60 @@ room reaches its setpoint faster in the prediction, so the controller asks for l
 preheating and backs off earlier. After changing a room's area or construction, watch for
 overshoot or demand that switches back and forth before tuning the demand smoothing below.
 
-## TRV target mode
+## TRV setpoints
 
-The controller's demand is the **target valve opening** (sensor `heating_demand`, named
-"Target valve opening"), and it turns that into a target temperature for each TRV; the TRV
-opens its valve by its own reading at the radiator. **Relative** (default) sets the target a
-step above that reading. A TRV with a valve curve (see [Valve curve](#valve-curve): its
-learned curve, until then the profile's starting value) gets the offset its curve needs for
-the target opening —
-every TRV of the room the same opening, whatever its radiator's size — rounded to the
-nearest step of the TRV, but at least the first step above reading plus 0.1 K. Rounding up
-instead moved a small offset by up to a whole step, and a Danfoss Ally already opens about
-45 % at 0.5 K. Only a TRV with neither (no valve entity, or a TRV model whose profile has no
-starting value and that has not learned its curve yet) falls back, as a last resort, to a demand-dependent step weighted by its
-radiator's share of the room's power — 0.1 K at the smallest active demand up to 3 K at full
-demand, rounded up to the TRV's step — so a small demand opens the valve only partly.
-(A Danfoss Ally freshly opened about 55 % at 1.1–1.5 K above its reading and about 90 % from
-2.4 K on.)
-The current target is kept while it is still above the reading and within one step of the
-new one, since every write wakes the TRV. **Absolute** spreads the target over the TRV's
-range (18 °C up to its maximum) by demand; there even a few percent of demand ask for 20 °C
-or more and the valve opens almost fully. A TRV without a reading falls back to absolute.
-The mode is set on the hub for all rooms; the attribute `trv_setpoint_writes` of the
-target valve opening sensor counts the target writes per TRV since setup, and its attribute
-`trv_valve_positions` lists the opening each TRV reports right now (`pi_heating_demand`,
-`null` without a valve-position entity). The recorder keeps only `trv_setpoint_writes`; the
-history of targets and openings is on the TRV entities.
+Each TRV regulates the room on its own: its PI opens the valve by its own reading. The room
+only hands it three things:
 
-Every write wakes the TRV, so a valve switches between shut and open sparingly: a shut
-valve opens from 10 % target opening on, an open one stays open down to 5 %, and a TRV switches
-at most every 15 minutes — except when frost protection is forced (open window, heat
-source off), which shuts it at once. On the valve curve these openings are much more heat
-than their number suggests: at a 40 °C flow 10 % opening gives about 44 % of full output,
-5 % about 27 %. The planner therefore never plans an opening below the threshold that
-applies — while any TRV of the room is shut, nothing between 0 and 10 % — since the TRV
-would get its minimum target and none of the planned heat. A room whose hold opening lies
-below the threshold thus alternates between shut and the threshold opening. On top, the
-TRV's 0.5 K step and the 0.1 K floor above its reading make even a small offset open it
-noticeably, so a room near its hold opening may still pulse in a PWM-like way; worth
-watching in the live evaluation.
+- **Setpoint** — the active mode's target (comfort, eco, boost, frost protection, plus a PV
+  boost if on) plus the room's setpoint correction (below), always through
+  `climate.set_temperature`. Rounded to the climate entity's `target_temp_step` (0.5 K
+  without one) and clamped to its `min_temp`/`max_temp`. It does not depend on the model:
+  the setpoint goes out without an outdoor temperature, without a room sensor reading and
+  while the heat source has not reported yet. A target the TRV already reports is not
+  written again, since every write wakes it.
+- **Heat available** — the profile's heat-available switch, on while the heat source heats
+  and the flow is above the threshold (see
+  [Flow temperature and an unreachable heat source](#flow-temperature-and-an-unreachable-heat-source)).
+  Without heat the setpoint stays; only the switch goes off.
+- **Window open** — the setpoint drops to frost protection while a window contact of the
+  room is open and returns to the mode target as soon as all are closed. The TRV's own
+  open-window flag (Danfoss Ally: `window_open_external`) is not written by the
+  integration; set it from an automation if wanted.
+
+The attribute `trv_setpoint_writes` of the target valve opening sensor counts the setpoint
+writes per TRV since setup, `trv_target_temps` the target each TRV has, `setpoint_correction`
+the room's correction and `trv_valve_positions` the opening each TRV reports right now
+(`pi_heating_demand`, `null` without a valve-position entity). The recorder keeps
+`trv_setpoint_writes` and `setpoint_correction`; the history of targets and openings is on
+the TRV entities.
+
+### Setpoint correction
+
+The TRV measures at the radiator, warmer than the room, so a room sensor reading below the
+setpoint is common. Every two hours the room compares the mode's target with the room
+sensor's time-weighted mean over the last hour and moves the correction by 0.5 K, up to
+±2 K, when the error is 0.3 K or more. One value per room, for all its TRVs; it is stored and
+survives a restart. A step needs a settled room:
+
+- the room sensor's own reading (not the TRVs standing in for it), with at least two values
+  in the hour and one near its start, spanning no more than 0.3 K;
+- windows closed for at least an hour, the mode's target unchanged for two hours;
+- heat available, no hot-water charge, no TRV adapting or uncalibrated;
+- not during the night's heat-loss stretch (two hours after sunset to sunrise), which needs
+  the setpoint to stay put.
+
+A step up waits while the room's valves (the highest opening, averaged over the hour) are at
+90 % or more — more setpoint would only wind up; a step down waits while they are shut. A
+room without a valve reading steps on its temperature alone. The correction stays across mode
+changes and is left out in frost protection. A room without a room sensor stays uncorrected.
 
 While a TRV calibrates its valve (adaptation run, reported by the device profile's
-adaptation status entity) nothing is written to it, neither target nor heat-available
-switch: a Danfoss Ally aborts the run on any write. The hold ends with the run, after three
-hours at the latest (a run took about 1 h 50 min), and forced frost protection still goes
-through. As the TRV moves its valve by itself meanwhile, the room learns nothing then (status
-`trv_adapting`). The room learns nothing either while a TRV has no calibrated valve — its
+adaptation status entity) no setpoint and no heat-available switch is written to it: a
+Danfoss Ally aborts the run on any write. The hold ends with the run, after three hours at
+the latest (a run took about 1 h 50 min). A frost protection setpoint for an open window
+follows after the run. As the TRV moves its valve by itself meanwhile,
+the room learns nothing then (status `trv_adapting`). The room learns nothing either while a TRV has no calibrated valve — its
 profile's ready status does not match, as a Danfoss Ally reports `none` from mounting until
 its next adaptation run and `lost` after losing the curve — or while it is in mounting mode
 (profile's mounted-mode binary sensor on). Writes go on then: an uncalibrated TRV still has
@@ -411,66 +415,10 @@ off at that opening instead of the requested power (sensor `measured_heating_pow
 
 The opening is taken as proportional to the flow. With less water the radiator cools it
 further and its output stays high: at a 40 °C flow a 10 % opening still gives about 44 % of
-full output, 50 % about 87 %. A TRV without such an entity counts with the demand, linearly.
-The planner uses the same curve: it searches the target opening, and the power it expects
-at an opening (sensor `requested_heating_power`) is what this curve gives there. Planned as
-a linear share of the available power, a small demand opened the valves far more than
-planned (a bathroom at 15 % demand got 50 % opening and 130–190 W instead of about 32 W)
-and the room cycled hourly. If the entity goes stale or
+full output, 50 % about 87 %. A TRV without such an entity counts with the room's highest
+reported opening. If the entity goes stale or
 unavailable, the room's learning stops (status
 `valve_position_missing`) until it reports again.
-
-## Valve curve
-
-Each TRV that reports its valve opening learns how far the valve opens for a setpoint
-offset (setpoint minus the TRV's own reading). The Danfoss PI behind it differs from valve
-to valve — pre-setting, insert, how the TRV sits — so one curve per TRV. In relative mode the
-control sets each TRV's offset from its curve (see [TRV target mode](#trv-target-mode)), read
-anew on every calculation: the learned curve once `learned`, until then — and for a
-`scattered` TRV — the profile's starting value. The planner counts in openings, and the
-starting value maps them to offsets far closer than the power-weighted fallback, which only
-a TRV without starting value and learned curve gets. One or two learned bins are not merged
-in before `learned`: they say nothing about the rest of the range.
-
-A sample starts whenever the TRV reports a new setpoint: the offset is that setpoint minus
-the TRV's reading at that moment. Only a heating offset of the relative mode starts one —
-0.1 to 4.0 K (the largest relative offset of 3 K plus a rounding step, with margin) and a
-setpoint above the TRV's minimum target. An off write (the minimum target, some 15 K below
-the reading), an absolute or eco jump starts none and ends any open sample. A Danfoss
-Ally ramps its valve after a new setpoint, about +10 % every 5 minutes for up to half an
-hour, so the sample waits for the ramp to end: from 10 minutes on the opening is read
-every 5 minutes (a reading up to 30 s early counts), and the first one within 2
-percentage points of the reading before is the sample — at the earliest 15 minutes after
-the setpoint. A sample is dropped if another setpoint comes first, if the valve still
-moves 45 minutes after the setpoint, if the opening is missing, or if at any cycle
-meanwhile the TRV adapted its valve, had no calibrated valve or was in mounting mode, a hot-water charge ran, a window was open, the radiator check
-flagged this radiator, frost protection was forced, or the valve entity reported nothing.
-Preview calculations feed nothing.
-
-Samples go into bins 0.5 K wide; each keeps its last 20. A bin counts from 3 samples, its
-point is the median offset and the median opening. The curve is the learned points; points
-of the profile's starting value (`valve_characteristic_seed`, see the README) fill in only
-more than 0.25 K below or above the learned ones, and the openings are made monotone.
-Without a starting value and no learned point from 2.5 K on, 3.0 K counts as fully open.
-
-| Status | Meaning |
-|---|---|
-| `seed` | No bin has 3 samples yet: the starting value (if any) is the curve. |
-| `learning` | Bins count, but fewer than 3 or none at 2.0 K or more: still the starting value (if any); the bins are not merged yet. |
-| `learned` | At least 3 bins count, one of them at 2.0 K or more: the learned points, the starting value filling in beyond the learned span. |
-| `scattered` | A bin with at least 5 samples spreads more than 30 percentage points (p90−p10): the TRV's PI integrates too much for a fixed curve, so the starting value (if any) is used. |
-
-Without a starting value a TRV has no curve until `learned` (and none while `scattered`); it
-then gets the weighted fallback.
-
-The diagnostic sensor `sensor.<room>_valve_curve` (the entity id follows the HA language:
-on a German install `sensor.<raum>_ventilkennlinie`) counts the TRVs with status `learned`. Its
-attributes name each TRV with a valve entity, with `status` and `bins`
-(`[offset °C, opening %, samples, spread %]`). One delayed write per room bundles the samples
-that finish within 10 minutes; a pending one is written at once when the room unloads
-(reload, removal) and when Home Assistant shuts down, so finished samples survive a restart. A sample still open at the restart is lost.
-`heating_controller.recalibrate` with `reset_valve_curves: true` clears them (see
-[Recalibrating](#recalibrating)).
 
 ## Radiator lag and the room observer
 
@@ -524,8 +472,8 @@ heating power from chattering cycle to cycle:
 - **Hold time (s)** / **hold override demand (%)** — once demand has changed, further
   changes are held back for this long unless they're large enough (past the override
   threshold) to cut through immediately regardless of the hold.
-- **Max demand step per 5 minutes (%)** — caps how much requested demand can rise or fall
-  per 5 minutes, even for a large, genuine change — smooths out the transition instead of
+- **Max demand step per 5 minutes (%)** — caps how much requested demand can rise or
+  fall per 5 minutes, even for a large, genuine change — smooths out the transition instead of
   jumping straight there. The cap scales with the time since the previous calculation, so
   several calculations within seconds (state changes arrive in bursts) allow only a
   proportionally small step in total; the first calculation after a start allows the full step.
@@ -566,27 +514,17 @@ The flow temperature is exempt from that filter. Its jumps are physical —
 compressor start, defrost, or a hot-water charge showing up on a shared leaving-water sensor
 — and it only feeds the valve demand, never the minimum flow temperature (see below).
 
-Without an outdoor temperature the model cannot plan. The room then hands control to its
-TRVs: each gets the target of the active mode (comfort, eco, boost, frost protection, plus a
-PV boost if on) as an absolute setpoint, rounded to its step, and regulates on its own
-reading. Learning pauses for both factors (status `outdoor_temperature_missing`) and the
-planned values (demand, powers, flow requirements) read
-unknown. `binary_sensor.<room>_outdoor_temperature_missing` (problem) is on meanwhile, with
-the attributes `since` and `fallback_target_temperature_c`. Once the outdoor temperature is
-back, the MPC takes over on the next calculation; the heat balance starts a new stretch from
-then. Feed the outdoor entity a measured value or nothing: an estimate during an outage would
-be learned from as if it were measured.
+Without an outdoor temperature the model cannot calculate, but the TRVs need nothing from
+it: they keep getting the mode's setpoint (see [TRV setpoints](#trv-setpoints)). Learning
+pauses for both factors (status `outdoor_temperature_missing`) and the model's values
+(powers, flow requirements) keep their last result. Once the outdoor temperature is back
+the heat balance starts a new stretch. Feed the outdoor entity a measured value or nothing:
+an estimate during an outage would be learned from as if it were measured.
 
-Right after startup the outdoor entity and the heat source may not have reported yet. Until
-the outdoor temperature has been read once, or has been missing for a full poll cycle (5
-minutes), the room hands the TRVs no fallback and the binary sensor stays off; learning
-pauses all the same. Likewise, until the heat source entity has reported a known state
-*and* a valid flow temperature has come in, or for at most those 5 minutes, the room does
-not count as unheated: it forces no frost protection, writes no TRV target and leaves the
-heat-available switches alone. The mode shown meanwhile reads frost protection. Frost
-protection for a real reason — an open window, a mode the user picked — still applies at
-once, only the switches wait. If the heat source is still unknown after the 5 minutes, the
-room forces frost protection as before.
+Right after startup the heat source may not have reported yet. Until the heat source entity
+has reported a known state *and* a valid flow temperature has come in, or for at most 5
+minutes, the room leaves the heat-available switches alone; setpoints go out at once. If the heat source is still unknown after the 5 minutes, the switches go
+off.
 
 ### Hot-water charges
 
@@ -804,6 +742,11 @@ The flow threshold is not a number in the room's configuration but an entity lin
 heat source publishes it on. The rooms read it live, so trying out a different lower limit
 on the heat pump means changing one helper instead of reconfiguring every room. Without a
 linked entity, or while it reports nothing usable, 30 °C applies.
+
+Once the flow has reached the threshold, heat counts as available until the flow has been
+below it for 20 minutes without a break. A defrost drops the flow by about 10 K for one
+report; without the tolerance every room would shut and reopen. The heat source leaving
+`heat` ends it at once, and before the flow first reaches the threshold no tolerance applies.
 
 ## The surplus gate
 

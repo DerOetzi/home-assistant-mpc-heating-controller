@@ -35,7 +35,6 @@ from .control.flow import ActuatorMode
 from .control.hot_water import HotWaterPhase
 from .control.legionella import LegionellaState
 from .controller.mpc.learner import UA_BALANCE_MIN_WINDOW_S
-from .controller.mpc.valve_curve import ValveCurveStatus
 from .coordinator import HeatingRoomCoordinator
 from .entity import (
     FlowEntity,
@@ -114,7 +113,6 @@ async def async_setup_entry(
             CurveHoldFlowTemperatureSensor(coordinator, CurveEnd.COLD),
             CurveHoldFlowTemperatureSensor(coordinator, CurveEnd.WARM),
             HeatingDemandSensor(coordinator),
-            RequestedHeatingPowerSensor(coordinator),
             AvailableHeatingPowerSensor(coordinator),
             RadiatorHeatingPowerSensor(coordinator),
             MeasuredHeatingPowerSensor(coordinator),
@@ -124,7 +122,6 @@ async def async_setup_entry(
             CapacityLearningStatusSensor(coordinator),
             UaFactorSensor(coordinator),
             CapacityFactorSensor(coordinator),
-            ValveCurveSensor(coordinator),
             AdditionalHeatSensor(coordinator),
         ],
     )
@@ -809,36 +806,16 @@ class HeatingDemandSensor(_DiagnosticSensor):
 
     @property
     def native_value(self) -> float | None:
-        result = self._coordinator.last_result
-        return result.demand_pct if result else None
+        return self._coordinator.room_demand_pct
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        result = self._coordinator.last_result
-        if result is None:
-            return {}
         return {
-            "trv_target_temps": dict(
-                zip(self._coordinator.trv_entity_ids, result.trv_targets, strict=True)
-            ),
+            "trv_target_temps": self._coordinator.trv_target_temperatures,
+            "setpoint_correction": self._coordinator.setpoint_correction.correction_c,
             "trv_setpoint_writes": dict(self._coordinator.trv_setpoint_writes),
             "trv_valve_positions": self._coordinator.trv_valve_positions,
         }
-
-
-class RequestedHeatingPowerSensor(_DiagnosticSensor):
-    _attr_translation_key = "requested_heating_power"
-    _attr_device_class = SensorDeviceClass.POWER
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfPower.WATT
-
-    def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
-        super().__init__(coordinator, "requested_heating_power")
-
-    @property
-    def native_value(self) -> float | None:
-        result = self._coordinator.last_result
-        return result.requested_heating_power_w if result else None
 
 
 class AdditionalHeatSensor(_DiagnosticSensor):
@@ -1134,45 +1111,3 @@ class CapacityFactorSensor(_DiagnosticSensor):
     @property
     def native_value(self) -> float:
         return self._coordinator.mpc.learned_capacity_factor
-
-
-class ValveCurveSensor(_DiagnosticSensor):
-    """How far each TRV has learned its valve curve.
-
-    The state counts the TRVs whose curve is learned; per TRV the attributes
-    show its status and the bins (offset °C, opening %, samples, p90-p10
-    spread in percentage points), keyed by the TRV's climate entity. TRVs
-    without a valve entity learn nothing and are left out.
-    """
-
-    _attr_translation_key = "valve_curve"
-
-    def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
-        super().__init__(coordinator, "valve_curve")
-
-    @property
-    def native_value(self) -> int:
-        return sum(
-            status is ValveCurveStatus.LEARNED
-            for status, _ in self._coordinator.mpc.valve_curve_report().values()
-        )
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        return {
-            name: {
-                "status": status.value,
-                "bins": [
-                    [
-                        round(bin_.offset_c, 2),
-                        round(bin_.opening_pct, 1),
-                        bin_.samples,
-                        round(bin_.spread_pct, 1),
-                    ]
-                    for bin_ in bins
-                ],
-            }
-            for name, (status, bins) in (
-                self._coordinator.mpc.valve_curve_report().items()
-            )
-        }

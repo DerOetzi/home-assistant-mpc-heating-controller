@@ -24,11 +24,9 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   [`docs/mpc-guide.md`](docs/mpc-guide.md#radiator-lag-and-the-room-observer).
 - **Per-TRV emitter modelling** — each thermostatic radiator valve is configured with its
   emitter type (panel radiator or towel radiator), panel radiator type (10/11/21/22/33) and
-  dimensions, or a fixed nominal power for towel radiators. The MPC demand is the target
-  valve opening (sensor "Target valve opening", entity `heating_demand`); the planner
-  expects the heat the radiators give off at that opening, and in relative mode each TRV's
-  offset comes from its valve curve: learned, until then the profile's starting value (a
-  weighted fallback only for TRVs without either).
+  dimensions, or a fixed nominal power for towel radiators. The TRV regulates the room with
+  its own PI; the room's demand is the highest valve opening its TRVs report (sensor
+  "Valve opening", entity `heating_demand`).
 - **Comfort / eco / boost / frost-protection mode state machine** — a `select` entity per
   room drives the active mode; `comfort`/`eco` setpoints are independently adjustable
   `number` entities, boost applies a temporary offset on top of comfort, and frost
@@ -52,16 +50,17 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   room need heat now" signal; `sensor.<room>_hold_flow_temperature` keeps reporting the
   ungated requirement for diagnosis. Hold and recovery flow use the same design spread as
   the valve power the factors are learned from. See [docs/mpc-guide.md](docs/mpc-guide.md).
-- **Outdoor temperature outage** — without an outdoor temperature the TRVs get the active
-  mode's target as an absolute setpoint and regulate on their own, learning pauses, and
-  `binary_sensor.<room>_outdoor_temperature_missing` reports it. The MPC takes over again
-  once the value is back. See
-  [docs/mpc-guide.md](docs/mpc-guide.md#sensor-reliability).
+- **TRV setpoints** — each TRV regulates the room with its own PI. The room hands it the
+  active mode's target through `climate.set_temperature`, plus a slow setpoint correction
+  from the room sensor (0.5 K steps every two hours, at most ±2 K), switches its
+  heat-available switch with the heat source, and drops the setpoint to frost protection
+  while a window is open. Without an outdoor temperature only learning pauses. See
+  [docs/mpc-guide.md](docs/mpc-guide.md#trv-setpoints).
 - **Persisted learning** — each room's learned `ua_factor`/`capacity_factor` survive
   restarts (`homeassistant.helpers.storage.Store`, one file per room) and are removed
   cleanly if the room is deleted from the hub. The admin-only
   `heating_controller.recalibrate` service sets or resets them, and also resets a room's
-  learned gains or valve curves.
+  learned gains.
 - **Learning only when gains are small** — learning pauses while the sun is up and for two
   hours after sunset, while the outdoor temperature is missing or the flow temperature has
   had no reading for over 16 minutes, and while a room's optional *block learning* entity is
@@ -111,7 +110,7 @@ once per house. It holds everything that applies to the whole house:
    writes, own writes per day at most).
 2. **Control and design** — design outdoor temperature and system flow/return temperatures
    (used to size the emitter curves), demand-control hysteresis/hold-time/max-step tuning,
-   surplus gate, sensor age, target band and TRV target mode.
+   surplus gate, sensor age and target band.
 3. **Sun and workdays** — how the house is turned (the bearing of its north facade, e.g.
    −15° for a house turned 15° west), which way the roof surfaces face and their pitch, and
    an optional workday entity (on = workday; without it Monday to Friday). For the surfaces
@@ -239,35 +238,15 @@ What the controller does with each entity:
 - **climate** — reads the TRV's own temperature and writes the target temperature.
 - **Valve opening** — the heat the radiator really gives off, see
   [docs/mpc-guide.md](docs/mpc-guide.md#valve-position-the-heat-the-radiators-really-get).
-  Each TRV with it also learns its own valve curve (setpoint offset → opening), which
-  sets its offset for the target opening in relative mode, see
-  [docs/mpc-guide.md](docs/mpc-guide.md#valve-curve).
+  The highest opening of the room is its demand.
 - **Heat available** — switched on while the heat source delivers heat, so the TRV knows
-  whether opening its valve can help.
+  whether opening its valve can help. A flow dip below the threshold (e.g. a defrost)
+  switches it off only after 20 minutes.
 - **Adaptation status** — while the TRV calibrates its valve, nothing is written to it
   (any write aborts the run), for at most three hours and except for forced frost
   protection; the room does not learn meanwhile. Nor does it learn while the TRV has no
   calibrated valve (status other than `found`).
 - **Mounted mode** — while the TRV is in mounting mode the room learns nothing.
-
-A profile may give a starting point for that valve curve, optional, at least two points,
-offsets strictly rising and openings never falling:
-
-```yaml
-# [setpoint minus TRV reading in °C, valve opening in %]
-valve_characteristic_seed:
-  - [0.1, 5]
-  - [0.6, 45]
-  - [1.5, 55]
-  - [2.5, 90]
-  - [3.0, 100]
-```
-
-Until a TRV has learned its curve (and while its curve scatters) the starting value sets its
-offsets. Without one a TRV learns its curve from scratch and until then gets a weighted
-fallback offset that fits the target opening poorly, so give a profile for a new TRV model a
-starting value. The Danfoss Ally profiles carry the values
-above, read off one TRV in October 2026; each TRV replaces them with what it learns.
 
 ## Dashboard card
 

@@ -62,8 +62,8 @@ again does nothing, so you can't accidentally toggle back to automatic mode with
 tap on the same spot.
 
 **Details** (expanded): room sensor, each TRV (current vs. target temperature, plus the
-valve opening it reports, e.g. "21.1 °C → 22 °C · 34 %"), window
-contacts, and the room's additional heat (`sensor.<room>_additional_heat`: steady gain, day
+valve opening it reports, e.g. "21.1 °C → 22 °C · 34 %"), the setpoint correction for
+the room-sensor error (e.g. "+0.5 K"), window contacts, and the room's additional heat (`sensor.<room>_additional_heat`: steady gain, day
 profile and sun, see the MPC guide's "Gains and sun"), in whatever order you've set — tap any
 row to open its more-info dialog. The additional heat shows what the model may use; while
 terms are still being learned, their unconfirmed total follows in brackets, e.g.

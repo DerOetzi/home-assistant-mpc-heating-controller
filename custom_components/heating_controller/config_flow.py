@@ -44,10 +44,6 @@ from .const import (
     CONF_MAX_FLOW_GAP_MIN,
     CONF_MAX_SENSOR_AGE,
     CONF_MAX_WRITES_PER_DAY,
-    CONF_MPC_DEMAND_HYSTERESIS_PCT,
-    CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT,
-    CONF_MPC_HOLD_TIME,
-    CONF_MPC_MAX_DEMAND_STEP_PCT,
     CONF_OPAQUE_SURFACES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PV_BOOST_ENABLED,
@@ -68,7 +64,6 @@ from .const import (
     CONF_TRV_HEIGHT_MM,
     CONF_TRV_NOMINAL_POWER_W,
     CONF_TRV_RADIATOR_TYPE,
-    CONF_TRV_SETPOINT_MODE,
     CONF_TRV_WIDTH_MM,
     CONF_TRVS,
     CONF_USE_HOUSE_COMFORT_CONDITIONS,
@@ -84,11 +79,11 @@ from .const import (
     DEFAULT_RATE_LIMIT_RESERVE,
     DEFAULT_ROOF_TILT_DEG,
     DEFAULT_TARGET_BAND_C,
-    DEFAULT_TRV_SETPOINT_MODE,
     DOMAIN,
     FACADES,
     FLOW_TITLE,
     HOT_WATER_TITLE,
+    HUB_MINOR_VERSION,
     HUB_TITLE,
     HUB_VERSION,
     MAX_TARGET_BAND_C,
@@ -104,7 +99,6 @@ from .const import (
     PanelRadiatorType,
     RoofOrientation,
     Surface,
-    TrvSetpointMode,
 )
 from .control.flow import ActuatorMode
 from .hot_water_device import HOT_WATER_DEFAULTS, WEEKDAYS
@@ -243,21 +237,6 @@ def _hub_control_schema(defaults: dict[str, Any]) -> vol.Schema:
                 )
             ),
             vol.Required(
-                CONF_MPC_DEMAND_HYSTERESIS_PCT,
-                default=defaults.get(CONF_MPC_DEMAND_HYSTERESIS_PCT, 5.0),
-            ): vol.Coerce(float),
-            vol.Required(
-                CONF_MPC_HOLD_TIME, default=defaults.get(CONF_MPC_HOLD_TIME, 300.0)
-            ): vol.Coerce(float),
-            vol.Required(
-                CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT,
-                default=defaults.get(CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT, 40.0),
-            ): vol.Coerce(float),
-            vol.Required(
-                CONF_MPC_MAX_DEMAND_STEP_PCT,
-                default=defaults.get(CONF_MPC_MAX_DEMAND_STEP_PCT, 20.0),
-            ): vol.Coerce(float),
-            vol.Required(
                 CONF_FLOW_GATE_CLOSE_SURPLUS,
                 default=defaults.get(
                     CONF_FLOW_GATE_CLOSE_SURPLUS, DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C
@@ -282,16 +261,6 @@ def _hub_control_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_TARGET_BAND,
                 default=defaults.get(CONF_TARGET_BAND, DEFAULT_TARGET_BAND_C),
             ): _kelvin(MIN_TARGET_BAND_C, MAX_TARGET_BAND_C, TARGET_BAND_STEP_C),
-            vol.Required(
-                CONF_TRV_SETPOINT_MODE,
-                default=defaults.get(CONF_TRV_SETPOINT_MODE, DEFAULT_TRV_SETPOINT_MODE),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[mode.value for mode in TrvSetpointMode],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                    translation_key=CONF_TRV_SETPOINT_MODE,
-                )
-            ),
         }
     )
 
@@ -300,6 +269,7 @@ class HeatingControllerConfigFlow(ConfigFlow, domain=DOMAIN):
     """The hub: the house-wide settings, once per installation."""
 
     VERSION = HUB_VERSION
+    MINOR_VERSION = HUB_MINOR_VERSION
 
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}

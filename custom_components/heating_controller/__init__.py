@@ -30,11 +30,11 @@ from . import frontend
 from .const import (
     ATTR_CAPACITY_FACTOR,
     ATTR_RESET_GAINS,
-    ATTR_RESET_VALVE_CURVES,
     ATTR_UA_FACTOR,
     CONF_ROOM_NAME,
     CONF_TRVS,
     DOMAIN,
+    HUB_MINOR_VERSION,
     HUB_VERSION,
     SERVICE_RECALIBRATE,
     SERVICE_UNBLOCK,
@@ -62,7 +62,8 @@ from .store import (
     GainStore,
     HubStore,
     LearningFactorsStore,
-    ValveCurveStore,
+    SetpointCorrectionStore,
+    async_remove_valve_curve_store,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -70,6 +71,15 @@ _LOGGER = logging.getLogger(__name__)
 __all__ = ["DOMAIN"]
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+_REMOVED_PLANNER_KEYS = frozenset(
+    {
+        "mpc_demand_hysteresis_pct",
+        "mpc_hold_time_s",
+        "mpc_hold_override_demand_pct",
+        "mpc_max_demand_step_pct",
+    }
+)
 
 RECALIBRATE_SCHEMA = vol.All(
     vol.Schema(
@@ -86,12 +96,9 @@ RECALIBRATE_SCHEMA = vol.All(
                 ),
             ),
             vol.Optional(ATTR_RESET_GAINS): cv.boolean,
-            vol.Optional(ATTR_RESET_VALVE_CURVES): cv.boolean,
         }
     ),
-    cv.has_at_least_one_key(
-        ATTR_UA_FACTOR, ATTR_CAPACITY_FACTOR, ATTR_RESET_GAINS, ATTR_RESET_VALVE_CURVES
-    ),
+    cv.has_at_least_one_key(ATTR_UA_FACTOR, ATTR_CAPACITY_FACTOR, ATTR_RESET_GAINS),
 )
 
 PLATFORMS = [
@@ -229,6 +236,15 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entry.version,
         )
         return False
+    if entry.minor_version < 2:
+        data = {
+            key: value
+            for key, value in entry.data.items()
+            if key not in _REMOVED_PLANNER_KEYS
+        }
+        hass.config_entries.async_update_entry(
+            entry, data=data, minor_version=HUB_MINOR_VERSION
+        )
     return True
 
 
@@ -241,7 +257,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: HeatingConfigEntry) -> 
         for room_id, coordinator in hub.rooms.items():
             hass.data[DOMAIN].pop(room_id, None)
             coordinator.async_unload()
-            await coordinator.async_flush_valve_curves()
     return unload_ok
 
 
@@ -260,8 +275,9 @@ async def _async_remove_room_stores(
 ) -> None:
     await LearningFactorsStore(hass, room_name, room_id).async_remove()
     await FlowGateStateStore(hass, room_name, room_id).async_remove()
-    await ValveCurveStore(hass, room_name, room_id).async_remove()
+    await async_remove_valve_curve_store(hass, room_name, room_id)
     await GainStore(hass, room_name, room_id).async_remove()
+    await SetpointCorrectionStore(hass, room_name, room_id).async_remove()
 
 
 def _referenced_coordinators(
@@ -296,7 +312,6 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 call.data.get(ATTR_UA_FACTOR),
                 call.data.get(ATTR_CAPACITY_FACTOR),
                 call.data.get(ATTR_RESET_GAINS, False),
-                call.data.get(ATTR_RESET_VALVE_CURVES, False),
             )
 
     hass.services.async_register(DOMAIN, SERVICE_UNBLOCK, async_handle_unblock)

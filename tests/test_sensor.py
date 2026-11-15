@@ -173,41 +173,9 @@ async def test_capacity_learning_status_sensor_reports_the_replay(
     assert status.attributes["last_learned"] is None
 
 
-def test_valve_curve_sensor_shows_status_and_rounded_bins() -> None:
-    from types import SimpleNamespace
-
-    from heating_controller.controller.mpc.valve_curve import ValveCurveLearner
-    from heating_controller.sensor import ValveCurveSensor
-
-    learner = ValveCurveLearner(None)
-    learner.restore({"samples": [[0.7123, 30.0], [0.7123, 100 / 3], [0.7123, 40.0]]})
-    sensor = object.__new__(ValveCurveSensor)
-    # Only TRVs with a valve entity are in the report; a second TRV without
-    # one stays out of the attributes.
-    sensor._coordinator = SimpleNamespace(
-        mpc=SimpleNamespace(
-            valve_curve_report=lambda: {"climate.a": (learner.status, learner.bins())}
-        ),
-    )
-
-    assert sensor.native_value == 0
-    assert sensor.extra_state_attributes == {
-        "climate.a": {"status": "learning", "bins": [[0.71, 33.3, 3, 8.0]]}
-    }
-
-
-async def test_valve_curve_sensor_is_set_up(hass: HomeAssistant) -> None:
+async def test_removed_sensors_are_not_set_up(hass: HomeAssistant) -> None:
     await _setup_coasting_room(hass, _room_data(hass))
 
-    curve = hass.states.get("sensor.wohnzimmer_valve_curve")
-    assert curve is not None
-    # The room's TRV reports no valve opening, so it learns nothing.
-    assert curve.state == "0"
-    assert "climate.heizung_wohnzimmer" not in curve.attributes
-
-
-async def test_no_disturbance_sensor_is_set_up(hass: HomeAssistant) -> None:
-    await _setup_coasting_room(hass, _room_data(hass))
-
-    assert hass.states.get("sensor.wohnzimmer_valve_curve") is not None
-    assert hass.states.get("sensor.wohnzimmer_disturbance_power") is None
+    assert hass.states.get("sensor.wohnzimmer_valve_opening") is not None
+    for removed in ("valve_curve", "requested_heating_power", "disturbance_power"):
+        assert hass.states.get(f"sensor.wohnzimmer_{removed}") is None

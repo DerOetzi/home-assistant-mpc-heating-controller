@@ -6,6 +6,7 @@ import {
   ROOM_SENSOR_KEY,
   ROOM_TEMP_KEY,
   ADDITIONAL_HEAT_KEY,
+  CORRECTION_KEY,
   DEVICE_CLASS_ICONS,
 } from "./const.js";
 import { num, localeOf } from "./format.js";
@@ -106,6 +107,9 @@ export const managedDetailRows = (hass, roles) => {
     });
   }
 
+  const correction = correctionRow(hass, roles.demand);
+  if (correction) rows.push(correction);
+
   const contacts = roles.automation?.attributes?.window_contact_entities ?? [];
   for (const entityId of contacts) {
     const stateObj = hass.states[entityId];
@@ -123,6 +127,21 @@ export const managedDetailRows = (hass, roles) => {
   const additionalHeat = additionalHeatRow(hass, roles.additionalHeat);
   if (additionalHeat) rows.push(additionalHeat);
   return rows;
+};
+
+// How far the TRV setpoints sit above or below the mode's target, so the room
+// sensor reaches it although the TRVs measure at the radiator.
+const correctionRow = (hass, stateObj) => {
+  const correction = stateObj?.attributes?.setpoint_correction;
+  if (correction == null || !Number.isFinite(Number(correction))) return null;
+  const value = Number(correction);
+  return {
+    key: CORRECTION_KEY,
+    entity: stateObj.entity_id,
+    name: t(hass, "row_setpoint_correction"),
+    icon: "mdi:thermometer-plus",
+    value: `${value > 0 ? "+" : ""}${num(value, 1, localeOf(hass))} K`,
+  };
 };
 
 // The state counts only the terms the model may use; while some are still

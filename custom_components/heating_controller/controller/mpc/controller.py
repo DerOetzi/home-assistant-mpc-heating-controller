@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import ceil
 
-from ...const import CapacityOutcome, TrvSetpointMode
+from ...const import CapacityOutcome
 from .hot_water import HotWaterChargeDetector
 from .learner import RoomMpcModelLearner
 from .math_helper import clamp
 from .models.capacity import ThermalCapacityModel
-from .models.emitter import HeatEmitterModel, below_activation
+from .models.emitter import HeatEmitterModel
 from .models.gains import RoomGainModel, SunSource
 from .models.loss import RoomLossModel
-from .models.valve import ValveCharacteristic
 from .observer import ObserverEstimate, RoomStateObserver, step_radiator_power_w
 from .radiator_monitor import RadiatorDeliveryMonitor
 from .results import (
@@ -32,11 +31,9 @@ from .types import (
     TrvConfig,
     UaBalanceInfo,
 )
-from .valve_curve import ValveCurveBin, ValveCurveLearner, ValveCurveStatus
 
-MPC_PREDICTION_HORIZON_S = 1800
 # How quickly the minimum flow temperature asks to bring a room back to its
-# setpoint. Much longer than the demand horizon: a heat pump recovers more
+# setpoint. Long: a heat pump recovers more
 # efficiently at a lower flow over a longer time, and the heat source serves
 # the maximum over all rooms, so one slightly cool room must not drive the
 # whole house to a high flow temperature.
@@ -47,27 +44,8 @@ FLOW_RECOVERY_HORIZON_S = 6 * 3600
 FLOW_RECOVERY_TOLERANCE_C = 0.1
 FLOW_RECOVERY_SEARCH_PRECISION_C = 0.1
 MPC_SIMULATION_STEP_S = 150
-MPC_DEMAND_SEARCH_STEP_PCT = 5
-# Predictions this close count as equally good, so the hold demand decides.
-MPC_TIE_DECIMALS = 6
 MPC_SIMULATION_CONVERGENCE_DELTA_C = 0.001
 MPC_SIMULATION_CONVERGENCE_POWER_W = 1.0
-# max_demand_step_pct is the step allowed per this interval. compute() also runs
-# on every tracked state change, so a step per call let demand jump 85 -> 5 %
-# within seconds; the allowed step scales with the time since the last call.
-# Fixed, not the poll interval: the option is labelled "per 5 minutes".
-DEMAND_STEP_REFERENCE_S = 5 * 60
-# After setup the demand ramp starts from the openings the TRVs report, if
-# one arrives within this window (they report seconds after a restart).
-DEMAND_SEED_WINDOW_S = 10 * 60
-
-
-@dataclass
-class MpcRateLimitConfig:
-    demand_hysteresis_pct: float = 5.0
-    hold_time_s: float = 300.0
-    hold_override_demand_pct: float = 40.0
-    max_demand_step_pct: float = 20.0
 
 
 @dataclass
@@ -87,8 +65,8 @@ class _SurplusFlowGate:
     drop its flow the moment demand hits zero and the room would oscillate --
     but it is a phantom requirement while a real surplus exists.
 
-    So the gate closes only on both signals together: the optimizer wants no
-    heat over its horizon (demand zero), and the room is above target by more
+    So the gate closes only on both signals together: the TRVs report their
+    valves shut (demand zero), and the room is above target by more
     than a deadband. The deadband is what keeps the gate off the steady-state
     case, where demand is also zero but the floor must stay.
 
@@ -131,13 +109,6 @@ class _SurplusFlowGate:
 
 
 @dataclass
-class _DemandPrediction:
-    demand_pct: float
-    predicted_temperature_c: float
-    prediction_error: float
-
-
-@dataclass
 class _RecoveryFlow:
     flow_temperature_c: float
     saturated: bool = False
@@ -155,16 +126,11 @@ class RoomMpcController:
         self,
         thermal_config: RoomThermalConfig,
         trvs: list[TrvConfig],
-        rate_limit_config: MpcRateLimitConfig,
         max_sensor_age_s: float,
         room_sensor_configured: bool,
         target_band_c: float,
         flow_gate_config: FlowGateConfig | None = None,
-        trv_setpoint_mode: TrvSetpointMode = TrvSetpointMode.ABSOLUTE,
     ) -> None:
-        self._rate_limit_config = rate_limit_config
-        self._trv_setpoint_mode = trv_setpoint_mode
-        self._current_trv_targets: list[float | None] = [None] * len(trvs)
         self._target_band_c = max(0.0, target_band_c)
 
         gate_config = flow_gate_config or FlowGateConfig()
@@ -196,29 +162,6 @@ class RoomMpcController:
         # adds to the detection on the flow.
         self._external_hot_water_charge = False
         self._radiator_monitors = [RadiatorDeliveryMonitor() for _ in trvs]
-        self._trv_names = [trv.name for trv in trvs]
-        # By TRV name; only a TRV that reports its valve opening can learn
-        # its curve.
-        self._valve_curve_learners: dict[str, ValveCurveLearner] = {
-            trv.name: ValveCurveLearner(
-                trv.valve_characteristic_seed,
-                min_target_c=trv.min_target_temperature_c,
-            )
-            for trv in trvs
-            if trv.valve_position_configured
-        }
-        # The setpoints the TRVs report, as reported. Unlike in
-        # _current_trv_targets a just-written target does not stand in for
-        # the echo: the curve needs what the TRV really regulates to.
-        self._reported_trv_targets: list[float | None] = [None] * len(trvs)
-
-        self._target_demand_pct = 0.0
-        self._last_output_demand_pct = 0.0
-        self._last_demand_update_ts = 0.0
-        self._last_rate_limit_ts: float | None = None
-        # Until when the ramp may still start from the reported valve
-        # openings; None before the first smoothed computation.
-        self._demand_seed_until_ts: float | None = None
         self._outdoor_temperature_missing = False
 
     def destroy(self) -> None:
@@ -257,6 +200,12 @@ class RoomMpcController:
         """Per TRV: the radiator gives off no heat although its valve is open."""
         return [monitor.not_heating for monitor in self._radiator_monitors]
 
+    @property
+    def hot_water_charging(self) -> bool:
+        """A hot water charge takes the flow, seen on it or by the hot water
+        control."""
+        return self._hot_water.charging or self._external_hot_water_charge
+
     def set_heat_available(self, available: bool) -> None:
         """Whether the TRVs get hot water; without it the radiators cool down."""
         self._heat_available = available
@@ -286,64 +235,8 @@ class RoomMpcController:
     def set_room_sensor_temperature(self, value: float | None) -> None:
         self._sensors.set_room_sensor_temperature(value)
 
-    def set_current_trv_targets(self, targets: list[float | None]) -> None:
-        """The targets the TRVs report now, so a relative target can stay."""
-        self._current_trv_targets = list(targets)
-
     def set_valve_position(self, index: int, value: float | None) -> None:
         self._sensors.set_valve_position(index, value)
-
-    def set_trv_target(self, index: int, value: float | None) -> None:
-        """The setpoint a TRV reports, for its valve curve."""
-        if index < len(self._reported_trv_targets):
-            self._reported_trv_targets[index] = value
-
-    @property
-    def valve_curve_learners(self) -> dict[str, ValveCurveLearner]:
-        """By TRV name, only TRVs with a valve entity."""
-        return self._valve_curve_learners
-
-    def valve_characteristics(self) -> list[ValveCharacteristic | None]:
-        """Per TRV, in order: its curve; None without valve entity or curve."""
-        return [
-            learner.characteristic()
-            if (learner := self._valve_curve_learners.get(name)) is not None
-            else None
-            for name in self._trv_names
-        ]
-
-    def valve_curve_report(
-        self,
-    ) -> dict[str, tuple[ValveCurveStatus, list[ValveCurveBin]]]:
-        """Status and bins per TRV with a valve entity, for diagnosis."""
-        return {
-            name: (learner.status, learner.bins())
-            for name, learner in self._valve_curve_learners.items()
-        }
-
-    def consume_valve_curves_changed(self) -> bool:
-        """Whether any TRV finished a sample since the last call."""
-        # Collected first: any() would stop early and leave flags unconsumed.
-        changed = [
-            learner.consume_changed() for learner in self._valve_curve_learners.values()
-        ]
-        return any(changed)
-
-    def export_valve_curves(self) -> dict[str, dict]:
-        """Finished samples per TRV name, to persist."""
-        return {
-            name: learner.export()
-            for name, learner in self._valve_curve_learners.items()
-        }
-
-    def reset_valve_curves(self) -> None:
-        for learner in self._valve_curve_learners.values():
-            learner.reset()
-
-    def restore_valve_curves(self, data: Mapping[str, dict]) -> None:
-        for name, learner in self._valve_curve_learners.items():
-            if isinstance(data.get(name), dict):
-                learner.restore(data[name])
 
     def set_trv_adapting(self, adapting: bool) -> None:
         self._sensors.set_trv_adapting(adapting)
@@ -364,13 +257,11 @@ class RoomMpcController:
         self,
         target_temperature_c: float,
         apply_side_effects: bool = True,
-        skip_demand_smoothing: bool = False,
     ) -> RoomMpcComputeResult:
-        """Compute demand, TRV targets and flow requirements.
+        """Compute the flow requirements and feed the learner.
 
-        skip_demand_smoothing applies the optimal demand at once, for forced
-        frost protection: an open window must not keep the valve open for
-        the hold time while the demand steps down.
+        The TRVs regulate the room themselves; the demand is what their
+        valves report.
         """
         now_ts = time.time()
         if apply_side_effects:
@@ -415,7 +306,6 @@ class RoomMpcController:
                     output_fraction,
                     hot_water_charge=mpc_input.hot_water_charge,
                 )
-            self._observe_valve_curves(mpc_input, skip_demand_smoothing)
         mpc_input.radiator_not_heating = any(self.radiators_not_heating)
         mpc_input.radiator_not_heating_since_ts = min(
             (
@@ -434,48 +324,24 @@ class RoomMpcController:
             ),
         )
 
-        # Below this a demand writes the TRVs their minimum target (see the
-        # emitter): neither the search nor the smoothing may settle there.
-        activation_pct = self._emitter_model.activation_threshold_pct(
-            self._current_trv_targets
-        )
-        optimal_demand = self._find_optimal_demand_prediction(
-            mpc_input, estimate, activation_pct
-        )
-        if apply_side_effects and skip_demand_smoothing:
-            stabilized_demand_pct = self._reset_demand_rate_limiting(
-                mpc_input, optimal_demand.demand_pct
-            )
-        elif apply_side_effects:
-            stabilized_demand_pct = self._apply_demand_rate_limiting(
-                mpc_input, optimal_demand.demand_pct, activation_pct
-            )
-        else:
-            stabilized_demand_pct = optimal_demand.demand_pct
-
-        # The demand is the target valve opening: what the radiators give
-        # off there, on the same curve the observer uses for a reported one.
-        requested_heating_power_w = self._emitter_model.planned_heating_power_w(
-            mpc_input.room_temp_c, mpc_input.flow_temp_c, stabilized_demand_pct
-        )
-
-        # The TRVs are thermostats: a small demand can open a valve fully. Where
-        # they report their opening, that is what the radiators get.
+        reported_openings_pct = [
+            opening for opening in mpc_input.valve_positions_pct if opening is not None
+        ]
+        room_demand_pct = max(reported_openings_pct, default=0.0)
+        # A radiator without a reported opening counts with the room's
+        # highest one.
         measured_heating_power_w = (
             self._emitter_model.calculate_measured_heating_power_w(
                 mpc_input.room_temp_c,
                 mpc_input.flow_temp_c,
                 mpc_input.valve_positions_pct,
-                stabilized_demand_pct,
+                room_demand_pct,
             )
         )
-        reported_openings_pct = [
-            opening for opening in mpc_input.valve_positions_pct if opening is not None
-        ]
         effective_opening_pct = (
             sum(reported_openings_pct) / len(reported_openings_pct)
             if reported_openings_pct
-            else stabilized_demand_pct
+            else 0.0
         )
 
         flow_gate = (
@@ -483,7 +349,7 @@ class RoomMpcController:
         )
         flow_gate_closed = flow_gate.update(
             surplus_c=mpc_input.room_temp_c - mpc_input.target_temp_c,
-            demand_pct=stabilized_demand_pct,
+            demand_pct=room_demand_pct,
             now_ts=mpc_input.now_ts,
         )
 
@@ -498,28 +364,21 @@ class RoomMpcController:
 
         if apply_side_effects:
             water_flowing = self._heat_available and not mpc_input.hot_water_charge
+            applied_heating_power_w = measured_heating_power_w if water_flowing else 0.0
             self._observer.commit(
                 estimate,
                 mpc_input,
-                target_power_w=measured_heating_power_w if water_flowing else 0.0,
+                target_power_w=applied_heating_power_w,
                 demand_pct=effective_opening_pct if water_flowing else 0.0,
             )
-            self._record_learning_telemetry(
-                mpc_input, requested_heating_power_w, estimate
+            self._learner.append_history(
+                mpc_input,
+                applied_heating_power_w,
+                radiator_power_w=estimate.radiator_power_w,
             )
 
         result = RoomMpcResult(
-            trv_targets=self._emitter_model.calculate_target_temperatures(
-                stabilized_demand_pct,
-                self._trv_setpoint_mode,
-                mpc_input.trv_temperatures,
-                self._current_trv_targets,
-                # Fetched on every call: the curves keep learning.
-                self.valve_characteristics(),
-            ),
             input=mpc_input,
-            demand_pct=stabilized_demand_pct,
-            requested_heating_power_w=requested_heating_power_w,
             available_heating_power_w=available_heating_power_w,
             recommended_flow_temperature_c=recommended_flow_temperature_c,
             hold_flow_temperature_c=hold_flow_temperature_c,
@@ -532,43 +391,6 @@ class RoomMpcController:
             measured_heating_power_w=measured_heating_power_w,
         )
         return RoomMpcComputeResult(valid=True, result=result)
-
-    def _observe_valve_curves(
-        self, mpc_input: RoomMpcInput, frost_protection_forced: bool
-    ) -> None:
-        """Feed each TRV's valve curve with what it reports now.
-
-        A sample only counts while the valve answers the setpoint alone: an
-        adapting TRV moves it by itself, without water (hot-water charge) or
-        with an open window the PI winds up differently, a radiator that
-        does not heat leaves the TRV reading behind, and forced frost
-        protection shuts the valves whatever the curve says.
-        """
-        room_allowed = not (
-            mpc_input.trv_adapting
-            or mpc_input.hot_water_charge
-            or self._learner.window_open
-            or frost_protection_forced
-        )
-        for name, monitor, target_c, reading_c, opening_pct in zip(
-            self._trv_names,
-            self._radiator_monitors,
-            self._reported_trv_targets,
-            mpc_input.trv_temperatures,
-            mpc_input.valve_positions_pct or [None] * len(self._trv_names),
-        ):
-            learner = self._valve_curve_learners.get(name)
-            if learner is None:
-                continue
-            learner.observe(
-                mpc_input.now_ts,
-                target_c,
-                reading_c,
-                opening_pct,
-                sample_allowed=room_allowed
-                and not monitor.not_heating
-                and opening_pct is not None,
-            )
 
     def _calculate_hold_flow_temperature_c(
         self, mpc_input: RoomMpcInput
@@ -641,95 +463,6 @@ class RoomMpcController:
             )
         )
 
-    def _find_optimal_demand_prediction(
-        self,
-        mpc_input: RoomMpcInput,
-        estimate: ObserverEstimate,
-        activation_pct: float,
-    ) -> _DemandPrediction:
-        """Demand whose prediction lands closest to the target band.
-
-        Any prediction between setpoint minus the band and the setpoint is on
-        target. A heavy room with little radiator reserve cannot climb the
-        last 0.1 K within the horizon at any demand; aiming at the exact
-        setpoint then opened the valve fully for hours over one sensor step.
-        Among demands on target the one nearest the hold demand wins, so the
-        valve neither shuts at the setpoint (the room only drifts within the
-        band over the horizon) nor opens fully just below it.
-        """
-        best: _DemandPrediction | None = None
-        best_key: tuple[float, float] | None = None
-        hold_demand_pct = self._hold_demand_pct(mpc_input)
-
-        for demand_pct in range(0, 101, MPC_DEMAND_SEARCH_STEP_PCT):
-            if below_activation(demand_pct, activation_pct):
-                # The TRVs would get their minimum target, not this opening:
-                # a small hold opening otherwise planned heat a shut valve
-                # never got, and the room cycled shut-open-overshoot.
-                continue
-            predicted_temperature_c = self._predict_room_temperature_c(
-                mpc_input, estimate, demand_pct, MPC_PREDICTION_HORIZON_S
-            )
-            prediction_error = self._target_band_error_c(
-                mpc_input.target_temp_c, predicted_temperature_c
-            )
-            rounded_error = round(prediction_error, MPC_TIE_DECIMALS)
-            # Outside the band a tie (radiators that deliver nothing at this
-            # flow) keeps the lowest demand.
-            key = (
-                rounded_error,
-                abs(demand_pct - hold_demand_pct) if rounded_error == 0 else demand_pct,
-            )
-
-            if best_key is None or key < best_key:
-                best_key = key
-                best = _DemandPrediction(
-                    demand_pct=demand_pct,
-                    predicted_temperature_c=predicted_temperature_c,
-                    prediction_error=prediction_error,
-                )
-
-        # Demand 0 is never below activation, so the search always has a result.
-        assert best is not None
-        return best
-
-    def _target_band_error_c(
-        self, target_temperature_c: float, predicted_temperature_c: float
-    ) -> float:
-        if predicted_temperature_c > target_temperature_c:
-            return predicted_temperature_c - target_temperature_c
-        lower_c = target_temperature_c - self._target_band_c
-        if predicted_temperature_c < lower_c:
-            return lower_c - predicted_temperature_c
-        return 0.0
-
-    def _hold_demand_pct(self, mpc_input: RoomMpcInput) -> float:
-        """Valve opening that holds the setpoint in steady state."""
-        hold_power_w = max(
-            0.0,
-            self._loss_model.calculate_heat_loss_w(
-                mpc_input.target_temp_c, mpc_input.outdoor_temp_c
-            ),
-        )
-        return self._emitter_model.opening_for_power_pct(
-            mpc_input.target_temp_c, mpc_input.flow_temp_c, hold_power_w
-        )
-
-    def _predict_room_temperature_c(
-        self,
-        mpc_input: RoomMpcInput,
-        estimate: ObserverEstimate,
-        demand_pct: float,
-        duration_s: float,
-    ) -> float:
-        return self._simulate_room_temperature_c(
-            mpc_input,
-            estimate,
-            demand_pct=demand_pct,
-            flow_temperature_c=mpc_input.flow_temp_c,
-            duration_s=duration_s,
-        )
-
     def _simulate_room_temperature_c(
         self,
         mpc_input: RoomMpcInput,
@@ -783,111 +516,6 @@ class RoomMpcController:
                 break
 
         return simulated_room_temperature_c
-
-    def _apply_demand_rate_limiting(
-        self, mpc_input: RoomMpcInput, demand_pct: float, activation_pct: float
-    ) -> float:
-        """Step-limited demand, held against small and quick changes.
-
-        Never an output strictly between 0 and activation_pct: the TRVs get
-        their minimum target there, so a ramp value the hysteresis held
-        (0 -> 5.33 % on the way to 10 % with a shut valve) kept the valve
-        shut while the planner counted it open. Below the threshold the
-        output is 0 until the stepped target reaches it.
-        """
-        config = self._rate_limit_config
-        if self._demand_seed_until_ts is None:
-            self._demand_seed_until_ts = mpc_input.now_ts + DEMAND_SEED_WINDOW_S
-        if mpc_input.now_ts <= self._demand_seed_until_ts:
-            self._seed_demand_from_valves(mpc_input)
-        if below_activation(self._last_output_demand_pct, activation_pct):
-            # Output while the threshold was lower: the TRVs shut on it now,
-            # so hysteresis and hold time must not keep it.
-            self._last_output_demand_pct = 0.0
-
-        # Stamped on every call, also when the output is held below.
-        if self._last_rate_limit_ts is None:
-            elapsed_fraction = 1.0
-        else:
-            elapsed_fraction = clamp(
-                (mpc_input.now_ts - self._last_rate_limit_ts) / DEMAND_STEP_REFERENCE_S,
-                0.0,
-                1.0,
-            )
-        self._last_rate_limit_ts = mpc_input.now_ts
-        max_step_pct = config.max_demand_step_pct * elapsed_fraction
-
-        self._target_demand_pct = clamp(
-            demand_pct,
-            self._target_demand_pct - max_step_pct,
-            self._target_demand_pct + max_step_pct,
-        )
-        output_pct = (
-            0.0
-            if below_activation(self._target_demand_pct, activation_pct)
-            else self._target_demand_pct
-        )
-
-        if (
-            abs(output_pct - self._last_output_demand_pct)
-            < config.demand_hysteresis_pct
-        ):
-            return self._last_output_demand_pct
-
-        if (
-            mpc_input.now_ts - self._last_demand_update_ts < config.hold_time_s
-            and abs(output_pct - self._last_output_demand_pct)
-            < config.hold_override_demand_pct
-        ):
-            return self._last_output_demand_pct
-
-        self._last_output_demand_pct = output_pct
-        self._last_demand_update_ts = mpc_input.now_ts
-
-        return self._last_output_demand_pct
-
-    def _seed_demand_from_valves(self, mpc_input: RoomMpcInput) -> None:
-        """Start the ramp where the valves stand, not at zero.
-
-        After a restart the TRVs still hold the previous target and report
-        their opening. Ramping up from 0 wrote them a low target first and
-        shut a radiator that had been fully open for ~20 minutes. The TRVs
-        often report only some seconds after the first computation, so the
-        seed waits for the first reported opening, at most
-        DEMAND_SEED_WINDOW_S; without one the ramp starts at 0 as before.
-        """
-        openings = [
-            opening for opening in mpc_input.valve_positions_pct if opening is not None
-        ]
-        if not openings:
-            return
-        seed_pct = clamp(sum(openings) / len(openings), 0.0, 100.0)
-        self._target_demand_pct = seed_pct
-        self._last_output_demand_pct = seed_pct
-        # Seeded once; the ramp takes over from here.
-        self._demand_seed_until_ts = float("-inf")
-
-    def _reset_demand_rate_limiting(
-        self, mpc_input: RoomMpcInput, demand_pct: float
-    ) -> float:
-        # Smoothing resumes from this demand once the forced mode ends.
-        self._target_demand_pct = demand_pct
-        self._last_output_demand_pct = demand_pct
-        self._last_demand_update_ts = mpc_input.now_ts
-        self._last_rate_limit_ts = mpc_input.now_ts
-        return demand_pct
-
-    def _record_learning_telemetry(
-        self,
-        mpc_input: RoomMpcInput,
-        requested_heating_power_w: float,
-        estimate: ObserverEstimate,
-    ) -> None:
-        self._learner.append_history(
-            mpc_input,
-            requested_heating_power_w,
-            radiator_power_w=estimate.radiator_power_w,
-        )
 
     def run_learning_cycle(self) -> None:
         self._learner.run_learning_cycle()

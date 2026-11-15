@@ -68,10 +68,7 @@ class RoomMpcInputResult:
 
 @dataclass
 class RoomMpcResult:
-    trv_targets: list[float]
     input: RoomMpcInput
-    demand_pct: float
-    requested_heating_power_w: float
     available_heating_power_w: float
     recommended_flow_temperature_c: float | None
     hold_flow_temperature_c: float | None = None
@@ -81,6 +78,6 @@ class RoomMpcResult:
     flow_gate_closed: bool = False
     # Heat at the reported valve openings, before the radiator lag.
     measured_heating_power_w: float | None = None
-    # Observer state the demand was planned from.
+    # Observer state the flow requirements were computed from.
     estimated_room_temperature_c: float | None = None
     radiator_power_w: float | None = None

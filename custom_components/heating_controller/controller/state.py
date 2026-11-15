@@ -92,9 +92,8 @@ class HeatingStateController:
         return HeatMode.COMFORT if self.is_comfort() else HeatMode.ECO
 
     def should_force_frost_protection(self, blocked: bool) -> bool:
-        if blocked:
-            return False
-        return self._window_open or not self._trv_active
+        # Without heat the room keeps its mode: the TRV shuts on its own.
+        return not blocked and self._window_open
 
     def resolve_display_mode(self, blocked: bool) -> HeatMode:
         if self.should_force_frost_protection(blocked):

@@ -23,16 +23,11 @@
         "data": {
           "design_outdoor_temperature_c": "Auslegungs-Außentemperatur (°C)",
           "design_temperature_system": "Heizkörper-Auslegungstemperatursystem",
-          "mpc_demand_hysteresis_pct": "Anforderungs-Hysterese (%)",
-          "mpc_hold_time_s": "Haltezeit (s)",
-          "mpc_hold_override_demand_pct": "Haltezeit-Override-Anforderung (%)",
-          "mpc_max_demand_step_pct": "Max. Anforderungsänderung je 5 Minuten (%)",
           "flow_gate_close_surplus_c": "Überschuss-Gate: schließen ab Soll + (K)",
           "flow_gate_open_surplus_c": "Überschuss-Gate: öffnen unter Soll + (K)",
           "flow_gate_hold_time_s": "Überschuss-Gate: Haltezeit vor dem Schließen (s)",
           "max_sensor_age_s": "Max. Sensoralter (s)",
-          "target_band_c": "Zielband unter Sollwert (K)",
-          "trv_setpoint_mode": "TRV-Sollwert-Modus"
+          "target_band_c": "Zielband unter Sollwert (K)"
         }
       },
       "sun": {
@@ -292,12 +287,6 @@
         "very_heavy": "Sehr schwer (370 kJ/m²K)"
       }
     },
-    "trv_setpoint_mode": {
-      "options": {
-        "absolute": "Absolut (über den TRV-Bereich verteilt)",
-        "relative": "Relativ (über der TRV-eigenen Messung)"
-      }
-    },
     "roof_orientation": {
       "options": {
         "none": "Keine / Flachdach",
@@ -361,9 +350,6 @@
       },
       "radiator_not_heating": {
         "name": "Heizkörper heizt nicht"
-      },
-      "outdoor_temperature_missing": {
-        "name": "Außentemperatur fehlt"
       },
       "lead_heating_demand": {
         "name": "Heizanforderung Leiträume"
@@ -477,10 +463,7 @@
         "name": "Haltevorlauftemperatur"
       },
       "heating_demand": {
-        "name": "Ziel-Ventilöffnung"
-      },
-      "requested_heating_power": {
-        "name": "Angeforderte Heizleistung"
+        "name": "Ventilöffnung"
       },
       "available_heating_power": {
         "name": "Verfügbare Heizleistung"
@@ -546,9 +529,6 @@
           "radiator_not_heating": "Heizkörper heizt nicht",
           "paused": "Pausiert"
         }
-      },
-      "valve_curve": {
-        "name": "Ventilkennlinie"
       },
       "lead_hold_flow_temperature": {
         "name": "Haltevorlauf Leiträume"
@@ -696,7 +676,7 @@
     },
     "recalibrate": {
       "name": "Neu kalibrieren",
-      "description": "Setzt die gelernten UA- und Kapazitätsfaktoren eines oder mehrerer Räume oder setzt deren gelernte Gewinne bzw. Ventilkennlinien zurück. Ein weggelassener Faktor bleibt unverändert; 1.0 setzt ihn zurück. Nur für Admins.",
+      "description": "Setzt die gelernten UA- und Kapazitätsfaktoren eines oder mehrerer Räume oder setzt deren gelernte Gewinne zurück. Ein weggelassener Faktor bleibt unverändert; 1.0 setzt ihn zurück. Nur für Admins.",
       "fields": {
         "ua_factor": {
           "name": "UA-Faktor",
@@ -709,10 +689,6 @@
         "reset_gains": {
           "name": "Gewinne zurücksetzen",
           "description": "Vergisst den gelernten festen Gewinn, das Gewinnprofil und die Sonnenterme des Raums und lernt sie neu."
-        },
-        "reset_valve_curves": {
-          "name": "Ventilkennlinien zurücksetzen",
-          "description": "Vergisst die Proben der Ventilkennlinie (Sollwertabstand → Öffnung), die jeder TRV des Raums gelernt hat; bis neue Proben kommen, gilt der Startwert des Profils."
         }
       }
     }

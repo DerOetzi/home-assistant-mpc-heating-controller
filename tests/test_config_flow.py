@@ -29,10 +29,6 @@ HUB_SUN = {
 HUB_CONTROL = {
     "design_outdoor_temperature_c": -12.0,
     "design_temperature_system": "system_55_45",
-    "mpc_demand_hysteresis_pct": 5.0,
-    "mpc_hold_time_s": 300.0,
-    "mpc_hold_override_demand_pct": 40.0,
-    "mpc_max_demand_step_pct": 20.0,
     "max_sensor_age_s": 1800.0,
     "target_band_c": 0.15,
 }
@@ -89,7 +85,6 @@ async def test_hub_flow_creates_the_hub(hass: HomeAssistant) -> None:
         "flow_gate_close_surplus_c": 0.5,
         "flow_gate_open_surplus_c": 0.2,
         "flow_gate_hold_time_s": 900.0,
-        "trv_setpoint_mode": "relative",
     }
 
 

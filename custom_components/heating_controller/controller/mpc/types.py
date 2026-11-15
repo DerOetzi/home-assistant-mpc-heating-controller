@@ -12,17 +12,12 @@ from ...const import (
     PanelRadiatorType,
     UaBalanceOutcome,
 )
-from .models.valve import ValveCharacteristic
 
 
 @dataclass
 class TrvConfig:
     name: str
     emitter_type: HeatEmitterType = HeatEmitterType.PANEL
-
-    min_target_temperature_c: float = 5.0
-    max_target_temperature_c: float = 30.0
-    target_temperature_step_c: float = 0.5
 
     radiator_type: PanelRadiatorType | None = PanelRadiatorType.TYPE_22
     width_mm: float | None = 1000
@@ -31,8 +26,6 @@ class TrvConfig:
     nominal_power_w: float | None = None
     # The TRV reports its valve opening (0-100 %) through an entity.
     valve_position_configured: bool = False
-    # Starting point of the learned valve curve, from the device profile.
-    valve_characteristic_seed: ValveCharacteristic | None = None
 
 
 @dataclass

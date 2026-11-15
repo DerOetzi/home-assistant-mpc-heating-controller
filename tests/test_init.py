@@ -14,7 +14,6 @@ from test_coordinator import (
     _hub_entry,
     _room_data,
     _seed_entities,
-    register_trv_device,
 )
 
 
@@ -191,26 +190,19 @@ async def test_recalibrate_resets_gains_and_keeps_the_factors(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_recalibrate_accepts_a_valve_curve_reset_alone(
-    hass: HomeAssistant, hass_admin_user: MockUser, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    entry = await _setup_room(hass)
-    coordinator = hass.data[DOMAIN][entry.entry_id]
-    resets: list[bool] = []
-    monkeypatch.setattr(
-        coordinator.mpc, "reset_valve_curves", lambda: resets.append(True)
+async def test_migration_drops_the_planner_options(hass: HomeAssistant) -> None:
+    from heating_controller import async_migrate_entry
+
+    entry = _hub_entry(_room_data(hass))
+    entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, "mpc_hold_time_s": 300.0}
     )
 
-    await hass.services.async_call(
-        DOMAIN,
-        "recalibrate",
-        {"entity_id": "button.wohnzimmer_unblock", "reset_valve_curves": True},
-        blocking=True,
-        context=Context(user_id=hass_admin_user.id),
-    )
+    assert await async_migrate_entry(hass, entry)
 
-    assert resets == [True]
-    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert "mpc_hold_time_s" not in entry.data
+    assert entry.minor_version == 2
 
 
 async def test_recalibrate_rejects_disturbance(
@@ -286,69 +278,6 @@ async def test_recalibrate_is_admin_only(
     assert coordinator.mpc.learned_ua_factor == 1.0
 
     assert await hass.config_entries.async_unload(entry.entry_id)
-
-
-async def test_unload_flushes_the_valve_curve_and_removal_leaves_no_file(
-    hass: HomeAssistant, freezer, hass_storage
-) -> None:
-    from test_coordinator import VALVE_ENTITY, _poll
-
-    device_id = register_trv_device(
-        hass,
-        properties=(
-            ("climate", "climate", ""),
-            ("sensor", "pi_heating_demand", "_pi_heating_demand"),
-            ("switch", "switch_heat_available", "_trv_active"),
-        ),
-    )
-    _seed_entities(hass)
-    hass.states.async_set(
-        "climate.heizung_wohnzimmer",
-        "heat",
-        {"current_temperature": 18.0, "temperature": 18.0},
-    )
-    hass.states.async_set(VALVE_ENTITY, "0")
-
-    async def handler(call: ServiceCall) -> None:
-        pass
-
-    hass.services.async_register("climate", "set_temperature", handler)
-    hass.services.async_register("switch", "turn_on", handler)
-    hass.services.async_register("switch", "turn_off", handler)
-    entry = _hub_entry(
-        {**ENTRY_DATA, "trvs": [{"device_id": device_id, **TRV_EMITTER}]}
-    )
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-
-    # One sample finishes; its delayed write is still pending.
-    hass.states.async_set(
-        "climate.heizung_wohnzimmer",
-        "heat",
-        {"current_temperature": 18.0, "temperature": 20.0},
-    )
-    hass.states.async_set(VALVE_ENTITY, "60")
-    await hass.async_block_till_done()
-    await _poll(hass, freezer, 5)
-    await _poll(hass, freezer, 5.5)
-    await _poll(hass, freezer, 5)
-    key = f"{DOMAIN}_wohnzimmer_{entry.entry_id}_valve_curve"
-    assert key not in hass_storage
-
-    assert await hass.config_entries.async_unload(entry.entry_id)
-    await hass.async_block_till_done()
-    assert hass_storage[key]["data"]["trvs"]["climate.heizung_wohnzimmer"][
-        "samples"
-    ] == [[2.0, 60.0]]
-
-    assert await hass.config_entries.async_remove(entry.entry_id)
-    await hass.async_block_till_done()
-    assert key not in hass_storage
-
-    # No delayed write is left to bring the file back.
-    await _poll(hass, freezer, 11)
-    assert key not in hass_storage
 
 
 async def test_removing_a_room_drops_its_stores_and_keeps_the_hub(

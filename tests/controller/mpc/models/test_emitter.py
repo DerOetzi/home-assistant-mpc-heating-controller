@@ -4,7 +4,6 @@ from heating_controller.const import (
     DesignTemperatureSystem,
     HeatEmitterType,
     PanelRadiatorType,
-    TrvSetpointMode,
 )
 from heating_controller.controller.mpc.math_helper import round_to_step
 from heating_controller.controller.mpc.models.emitter import (
@@ -15,7 +14,6 @@ from heating_controller.controller.mpc.models.emitter import (
     REFERENCE_HEIGHT_MM,
     HeatEmitterModel,
 )
-from heating_controller.controller.mpc.models.valve import ValveCharacteristic
 from heating_controller.controller.mpc.types import RoomThermalConfig, TrvConfig
 
 
@@ -65,44 +63,6 @@ def test_available_power_increases_with_lower_room_temperature():
     power_at_20 = model.calculate_available_heating_power_w(20, flow_temperature_c=55)
     power_at_10 = model.calculate_available_heating_power_w(10, flow_temperature_c=55)
     assert power_at_10 > power_at_20 > 0
-
-
-def test_target_temperature_at_zero_demand_is_min_target():
-    model = make_model(
-        [
-            TrvConfig(
-                name="trv1", min_target_temperature_c=6, max_target_temperature_c=28
-            )
-        ]
-    )
-    assert model.calculate_target_temperatures(0) == [6]
-
-
-def test_target_temperature_at_full_demand_is_max_target():
-    model = make_model(
-        [
-            TrvConfig(
-                name="trv1", min_target_temperature_c=6, max_target_temperature_c=28
-            )
-        ]
-    )
-    assert model.calculate_target_temperatures(100) == [28]
-
-
-def _big_and_small():
-    """Two type 22 radiators, 1400 and 500 mm wide."""
-    return make_model(
-        [
-            TrvConfig(name="big", width_mm=1400, height_mm=600),
-            TrvConfig(name="small", width_mm=500, height_mm=600),
-        ]
-    )
-
-
-def test_two_trvs_split_demand_by_distribution_weight():
-    model = _big_and_small()
-    targets = model.calculate_target_temperatures(80)
-    assert targets[0] >= targets[1]
 
 
 def test_towel_radiator_uses_nominal_power_w():
@@ -347,80 +307,6 @@ def test_measured_power_mixes_reported_openings_and_demand():
     assert mixed == pytest.approx(available / 2 * 0.5, abs=0.05)
 
 
-def _relative_model():
-    model = make_model(
-        [
-            TrvConfig(
-                name="trv",
-                width_mm=1000,
-                height_mm=600,
-                min_target_temperature_c=5.0,
-                max_target_temperature_c=30.0,
-                target_temperature_step_c=0.5,
-            )
-        ]
-    )
-    return model, TrvSetpointMode.RELATIVE
-
-
-def test_relative_target_sits_a_step_above_the_trv_reading():
-    model, mode = _relative_model()
-
-    closed = model.calculate_target_temperatures(2, mode, [19.3])
-    small = model.calculate_target_temperatures(10, mode, [19.3])
-    full = model.calculate_target_temperatures(100, mode, [19.3])
-
-    assert closed == [5.0]
-    # Just above the reading, rounded up to the TRV's step.
-    assert 19.4 <= small[0] <= 20.0
-    assert full == [22.5]
-
-
-def test_the_smallest_demand_keeps_a_valve_barely_open():
-    model, mode = _relative_model()
-
-    # 5 % keeps an open valve open with less than half a kelvin of step, so
-    # the TRV can hold it slightly open instead of the room pulsing.
-    trickle = model.calculate_target_temperatures(5, mode, [21.6], [22.0])
-
-    assert trickle == [22.0]
-    assert trickle[0] - 21.6 < 0.5
-
-
-def test_relative_target_keeps_the_current_one_within_a_step():
-    model, mode = _relative_model()
-
-    # 10 % demand: about 0.6 K above 19.4 °C, rounded up to 20.0 °C.
-    kept = model.calculate_target_temperatures(10, mode, [19.4], [20.0])
-    replaced = model.calculate_target_temperatures(10, mode, [20.1], [20.0])
-
-    # Still above the reading and within a step: no write.
-    assert kept == [20.0]
-    # The reading caught up with it: the target moves on.
-    assert replaced[0] > 20.1
-
-
-def test_relative_target_without_a_reading_uses_the_absolute_mapping():
-    model, mode = _relative_model()
-
-    assert model.calculate_target_temperatures(
-        40, mode, [None]
-    ) == model.calculate_target_temperatures(40, TrvSetpointMode.ABSOLUTE)
-
-
-def test_a_shut_valve_needs_more_demand_to_open_than_to_stay_open():
-    model, mode = _relative_model()
-
-    # 5 % keeps an open valve open, but does not open a shut one.
-    stays_open = model.calculate_target_temperatures(5, mode, [19.4], [20.0])
-    stays_shut = model.calculate_target_temperatures(5, mode, [19.4], [5.0])
-    opens = model.calculate_target_temperatures(10, mode, [19.4], [5.0])
-
-    assert stays_open[0] > 19.4
-    assert stays_shut == [5.0]
-    assert opens[0] > 19.4
-
-
 def test_full_output_fraction_follows_the_flow():
     model = make_model([TrvConfig(name="trv", width_mm=1200, height_mm=600)])
 
@@ -477,124 +363,3 @@ def test_planned_power_mixes_trvs_with_and_without_valve_entity():
     assert model.planned_heating_power_w(21.0, 40.0, 30) == pytest.approx(
         available / 2 * (curve_fraction + 0.3), abs=0.05
     )
-
-
-@pytest.mark.parametrize("opening_pct", [10, 30, 70])
-def test_opening_for_power_inverts_the_planned_power(opening_pct):
-    model = make_model([_valve_trv()])
-    power_w = model.planned_heating_power_w(21.0, 40.0, opening_pct)
-
-    assert model.opening_for_power_pct(21.0, 40.0, power_w) == pytest.approx(
-        opening_pct, abs=0.5
-    )
-
-
-def test_opening_for_power_is_zero_without_a_power():
-    model = make_model([_valve_trv()])
-
-    assert model.opening_for_power_pct(21.0, 40.0, 0) == 0
-    assert model.opening_for_power_pct(21.0, 40.0, -5) == 0
-
-
-def test_opening_for_power_is_full_when_the_flow_is_too_cold():
-    model = make_model([_valve_trv()])
-
-    assert model.opening_for_power_pct(21.0, 20.0, 50) == 100
-
-
-def test_opening_for_power_is_full_when_full_opening_is_not_enough():
-    model = make_model([_valve_trv()])
-    available = model.calculate_available_heating_power_w(21.0, 40.0)
-
-    assert model.opening_for_power_pct(21.0, 40.0, 2 * available) == 100
-
-
-TEST_CHARACTERISTIC = ValveCharacteristic(
-    points=((0.1, 0.0), (0.6, 45.0), (1.5, 60.0), (2.5, 90.0), (3.0, 100.0))
-)
-
-
-def test_relative_target_uses_the_valve_characteristic():
-    model, mode = _relative_model()
-
-    # 52.5 %: 0.6 + 0.9 * 7.5 / 15 = 1.05 K -> 21.35 °C, nearest step 21.5.
-    medium = model.calculate_target_temperatures(
-        52.5, mode, [20.3], characteristics=[TEST_CHARACTERISTIC]
-    )
-    # 10 %: 0.1 + 0.5 * 10 / 45 = 0.21 K -> 20.51 °C, nearest step 20.5, which
-    # is also the smallest step above reading plus minimum offset.
-    small = model.calculate_target_temperatures(
-        10, mode, [20.3], characteristics=[TEST_CHARACTERISTIC]
-    )
-
-    assert medium == [21.5]
-    assert small == [20.5]
-
-
-def test_relative_target_rounds_to_the_nearest_step_with_a_characteristic():
-    model, mode = _relative_model()
-
-    # 47 %: 0.6 + 0.9 * 2 / 15 = 0.72 K -> 20.72 °C. Rounding up gave 21.0
-    # (1.0 K, about 52 % opening); the nearest step is 20.5 (0.5 K, about
-    # 40 %), above the floor ceil(20.1 / 0.5) * 0.5 = 20.5.
-    nearest = model.calculate_target_temperatures(
-        47, mode, [20.0], characteristics=[TEST_CHARACTERISTIC]
-    )
-
-    assert nearest == [20.5]
-
-
-def test_two_trvs_get_the_same_opening_with_a_characteristic():
-    model = _big_and_small()
-
-    targets = model.calculate_target_temperatures(
-        100,
-        TrvSetpointMode.RELATIVE,
-        [20.0, 20.0],
-        characteristics=[TEST_CHARACTERISTIC, TEST_CHARACTERISTIC],
-    )
-    without = model.calculate_target_temperatures(
-        100, TrvSetpointMode.RELATIVE, [20.0, 20.0]
-    )
-
-    # Both the full 3 K; the weighted mapping split them below that.
-    assert targets == [23.0, 23.0]
-    assert without[1] < 23.0
-
-
-def test_relative_target_without_characteristic_is_unchanged():
-    model, mode = _relative_model()
-
-    for demand_pct, reading_c in ((10, 19.3), (40, 20.2), (100, 19.3)):
-        assert model.calculate_target_temperatures(
-            demand_pct, mode, [reading_c], characteristics=[None]
-        ) == model.calculate_target_temperatures(demand_pct, mode, [reading_c])
-
-
-def test_mixed_trvs_use_their_own_mapping():
-    model = _big_and_small()
-    readings = [20.0, 20.0]
-
-    mixed = model.calculate_target_temperatures(
-        52.5,
-        TrvSetpointMode.RELATIVE,
-        readings,
-        characteristics=[TEST_CHARACTERISTIC, None],
-    )
-    weighted = model.calculate_target_temperatures(
-        52.5, TrvSetpointMode.RELATIVE, readings
-    )
-
-    # TRV 1: 1.05 K from its curve -> 21.05 °C, nearest step 21.0.
-    assert mixed[0] == 21.0
-    # TRV 2: today's weighted mapping, its weight unchanged by TRV 1.
-    assert mixed[1] == weighted[1]
-
-
-def test_activation_threshold_counts_any_shut_trv():
-    model = make_model([_valve_trv("a"), _valve_trv("b")])
-
-    assert model.activation_threshold_pct([22.0, 22.0]) == pytest.approx(5)
-    assert model.activation_threshold_pct([22.0, 5.0]) == pytest.approx(10)
-    assert model.activation_threshold_pct([22.0, None]) == pytest.approx(10)
-    assert model.activation_threshold_pct(None) == pytest.approx(10)

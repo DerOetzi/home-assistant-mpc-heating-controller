@@ -335,6 +335,22 @@ def test_trv_rows_show_the_valve_opening(ctx) -> None:
     )
 
 
+def test_correction_row_shows_the_signed_correction(ctx) -> None:
+    ctx.eval(_HASS_FIXTURE)
+    attrs = 'hass.states["sensor.katharina_heating_demand"].attributes'
+    ctx.eval(f"{attrs}.setpoint_correction = 0.5;")
+    rows = _json(ctx, "managedDetailRows(hass, roles)")
+    by_key = {r["key"]: r for r in rows}
+    row = by_key["setpoint_correction"]
+    assert row["name"] == "Setpoint correction"
+    assert row["value"] == "+0.5 K"
+    assert [r["key"] for r in rows].index("setpoint_correction") == 3
+    ctx.eval(f"{attrs}.setpoint_correction = -1;")
+    rows = _json(ctx, "managedDetailRows(hass, roles)")
+    assert {r["key"]: r for r in rows}["setpoint_correction"]["value"] == "-1 K"
+    ctx.eval(f"delete {attrs}.setpoint_correction;")
+
+
 _ADDITIONAL_HEAT = """
 hass.entities["sensor.katharina_zusatzwarme"] = {
   entity_id: "sensor.katharina_zusatzwarme",

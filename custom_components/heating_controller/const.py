@@ -7,6 +7,8 @@ DOMAIN = "heating_controller"
 # Config entry version of the hub that holds rooms, flow and hot water as
 # subentries.
 HUB_VERSION = 8
+# 2: the demand planner's options are gone.
+HUB_MINOR_VERSION = 2
 
 DEFAULT_COMFORT_TEMPERATURE_C = 22.0
 DEFAULT_ECO_TEMPERATURE_OFFSET_C = -2.0
@@ -16,7 +18,7 @@ DEFAULT_FLOW_GATE_CLOSE_SURPLUS_C = 0.5
 DEFAULT_FLOW_GATE_OPEN_SURPLUS_C = 0.2
 DEFAULT_FLOW_GATE_HOLD_TIME_S = 900.0
 
-# Band below the setpoint the demand counts as on target in: one step of the
+# Band below the setpoint the learner counts as near target: one step of the
 # usual 0.1 K room sensor.
 DEFAULT_TARGET_BAND_C = 0.1
 MIN_TARGET_BAND_C = 0.0
@@ -83,16 +85,11 @@ CONF_DESIGN_TEMPERATURE_SYSTEM = "design_temperature_system"
 CONF_ROOM_HEAT_LOAD = "room_heat_load_w"
 CONF_ROOM_AREA = "room_area_m2"
 CONF_CONSTRUCTION = "construction"
-CONF_MPC_DEMAND_HYSTERESIS_PCT = "mpc_demand_hysteresis_pct"
-CONF_MPC_HOLD_TIME = "mpc_hold_time_s"
-CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT = "mpc_hold_override_demand_pct"
-CONF_MPC_MAX_DEMAND_STEP_PCT = "mpc_max_demand_step_pct"
 CONF_FLOW_GATE_CLOSE_SURPLUS = "flow_gate_close_surplus_c"
 CONF_FLOW_GATE_OPEN_SURPLUS = "flow_gate_open_surplus_c"
 CONF_FLOW_GATE_HOLD_TIME = "flow_gate_hold_time_s"
 CONF_MAX_SENSOR_AGE = "max_sensor_age_s"
 CONF_TARGET_BAND = "target_band_c"
-CONF_TRV_SETPOINT_MODE = "trv_setpoint_mode"
 # Sun on the building: how the house is turned, its roof, and which day
 # counts as a workday for the gain profile.
 CONF_BUILDING_ROTATION = "building_rotation_deg"
@@ -138,16 +135,11 @@ HUB_KEYS = (
     CONF_FROST_PROTECTION_TEMPERATURE,
     CONF_DESIGN_OUTDOOR_TEMPERATURE,
     CONF_DESIGN_TEMPERATURE_SYSTEM,
-    CONF_MPC_DEMAND_HYSTERESIS_PCT,
-    CONF_MPC_HOLD_TIME,
-    CONF_MPC_HOLD_OVERRIDE_DEMAND_PCT,
-    CONF_MPC_MAX_DEMAND_STEP_PCT,
     CONF_FLOW_GATE_CLOSE_SURPLUS,
     CONF_FLOW_GATE_OPEN_SURPLUS,
     CONF_FLOW_GATE_HOLD_TIME,
     CONF_MAX_SENSOR_AGE,
     CONF_TARGET_BAND,
-    CONF_TRV_SETPOINT_MODE,
     CONF_BUILDING_ROTATION,
     CONF_ROOF_ORIENTATION,
     CONF_ROOF_TILT,
@@ -182,7 +174,6 @@ SERVICE_RECALIBRATE = "recalibrate"
 ATTR_UA_FACTOR = "ua_factor"
 ATTR_CAPACITY_FACTOR = "capacity_factor"
 ATTR_RESET_GAINS = "reset_gains"
-ATTR_RESET_VALVE_CURVES = "reset_valve_curves"
 
 LEARNING_CYCLE_INTERVAL_MINUTES = 30
 SENSOR_POLL_INTERVAL_MINUTES = 5
@@ -273,16 +264,6 @@ class LearningStatus(StrEnum):
     WAITING_INTERVAL = "waiting_interval"
     OUTSIDE_WINDOW = "outside_window"
     PAUSED = "paused"
-
-
-class TrvSetpointMode(StrEnum):
-    # Target spread over the TRV's range by demand (18 °C .. max).
-    ABSOLUTE = "absolute"
-    # Target a demand-dependent step above the TRV's own reading.
-    RELATIVE = "relative"
-
-
-DEFAULT_TRV_SETPOINT_MODE = TrvSetpointMode.RELATIVE
 
 
 class UaBalanceOutcome(StrEnum):
