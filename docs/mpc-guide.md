@@ -1,9 +1,10 @@
 # The heating model (MPC)
 
-Each room predicts how its own temperature responds to heating and adjusts its radiators'
-target temperature accordingly, rather than just reacting to whether the room is currently
-above or below setpoint. This page covers what to expect from that in day-to-day use — for
-what the fields of the hub and the rooms actually do, see below.
+Each room hands its TRVs the mode's setpoint plus a slow correction for the gap between the
+TRV's own reading and the room sensor; the TRVs regulate the room themselves. Alongside, a
+model of the room learns how it loses and stores heat, and turns that into the flow
+temperature the heat source should deliver. This page covers what to expect from that in
+day-to-day use — for what the fields of the hub and the rooms actually do, see below.
 
 ## Modes and setpoints
 
@@ -119,11 +120,11 @@ it's actively adapting.
 ## When the model learns
 
 The two factors are learned in different ways, because a wrong heat-loss factor hardly shows
-as a prediction error: the controller keeps the room at the setpoint its prediction aims
-for, whatever the model believes the losses are.
+as a model error: the TRVs keep the room at its setpoint, whatever the model believes the
+losses are.
 
 - **Heat-loss factor (`ua_factor`): heat balance over a usable stretch.** Over the
-  stretch the heat the radiators gave off (the requested power, lagged as described in
+  stretch the heat the radiators gave off (the output at the reported valve opening, lagged as described in
   [Radiator lag and the room observer](#radiator-lag-and-the-room-observer)) has to equal
   what the room lost plus what it stored. The factor that balances this is the target, and each balance moves the learned
   factor 30 % of the way there. A stretch starts once the room is near its mode setpoint — no more than 0.1 K above it
@@ -152,7 +153,7 @@ for, whatever the model believes the losses are.
   Each balanced stretch is also a point for the night regression that separates a steady
   gain from the factor over several nights, see [Gains and sun](#gains-and-sun).
   Two checks keep measurement artefacts out: a stretch where the heat stored in or
-  released by the room exceeds half of the requested heat depends more on the capacity
+  released by the room exceeds half of the radiators' heat depends more on the capacity
   than on the losses and is discarded, and so is a target above 2. A target below 0.15
   means the radiators supplied almost nothing — the room lives off its neighbours, for
   whom the model has no coupling: the factor then moves only down to 0.15 (status
@@ -331,15 +332,13 @@ per square metre of its **construction class** (ISO 13790, table 12):
 The learned capacity factor (0.15–3) scales this base for furniture, open doors and heat
 exchange with neighbouring rooms. Both values are required in the room's design step.
 
-The capacity also drives the valve demand and the recovery flow temperature: a lighter
-room reaches its setpoint faster in the prediction, so the controller asks for less
-preheating and backs off earlier. After changing a room's area or construction, watch for
-overshoot or demand that switches back and forth before tuning the demand smoothing below.
+The capacity also drives the recovery flow temperature: a lighter room warms up faster in
+the simulation, so it asks for a lower flow.
 
-## TRV setpoints
+## TRV control
 
-Each TRV regulates the room on its own: its PI opens the valve by its own reading. The room
-only hands it three things:
+Each TRV regulates the room on its own: its PI opens the valve by its own reading. There is
+no planner and no valve curve; the room only hands it three things:
 
 - **Setpoint** — the active mode's target (comfort, eco, boost, frost protection, plus a PV
   boost if on) plus the room's setpoint correction (below), always through
@@ -357,7 +356,7 @@ only hands it three things:
   open-window flag (Danfoss Ally: `window_open_external`) is not written by the
   integration; set it from an automation if wanted.
 
-The attribute `trv_setpoint_writes` of the target valve opening sensor counts the setpoint
+The attribute `trv_setpoint_writes` of the room's "Valve opening" sensor counts the setpoint
 writes per TRV since setup, `trv_target_temps` the target each TRV has, `setpoint_correction`
 the room's correction and `trv_valve_positions` the opening each TRV reports right now
 (`pi_heating_demand`, `null` without a valve-position entity). The recorder keeps
@@ -426,8 +425,8 @@ the radiator.
 A TRV is a thermostat, not a valve positioner: the controller sets its target temperature,
 and the TRV opens its valve by its own reading at the radiator. A small demand can thus open
 a valve almost fully. Where the TRV's device profile names a valve opening entity (Danfoss
-Ally: `pi_heating_demand`), the observer, the heat balance and the jump stretches then use the heat the radiator gives
-off at that opening instead of the requested power (sensor `measured_heating_power`).
+Ally: `pi_heating_demand`), the observer, the heat balance and the jump stretches use the heat the radiator gives
+off at that opening (sensor `measured_heating_power`).
 
 The opening is taken as proportional to the flow. With less water the radiator cools it
 further and its output stays high: at a 40 °C flow a 10 % opening still gives about 44 % of
@@ -445,7 +444,7 @@ entity never learns: without a measured opening it has no heat to balance.
 
 A radiator does not stop heating when its valve closes: the water and steel in it keep
 giving off heat for a while, and after the valve opens it takes a while to warm up. The
-model follows the requested power with a first-order lag whose time constant comes from the
+model follows the output at the reported opening with a first-order lag whose time constant comes from the
 radiator itself — water content and steel mass from panel type and dimensions (towel
 radiators from their nominal power) over the emitter's conductance at the current flow
 temperature. Cooling down only goes through the surface; heating up the inflowing water
@@ -456,53 +455,16 @@ Each room runs its model alongside the room as a state observer (sensor
 `radiator_heating_power`, attribute `estimated_temp_c` of the room temperature sensor):
 
 - Every calculation propagates the estimate with the power the radiators were heading for
-  (from the valve opening where reported, otherwise the requested power) and pulls it
+  (from the reported valve openings; none without heat or during a hot-water charge) and pulls it
   towards the measured temperature (time constant 5 minutes). A difference above 1 K is
   taken as a jump — a sensor source switching over — and the estimate restarts from the
   measurement.
 - A lasting difference between model and room is learned into the heat-loss factor; a
   separate offset term could not be told apart from it at a near-constant room-outdoor
   difference.
-- The valve demand is planned from the estimate and the radiators' current output, so a
-  room whose radiators are still hot closes earlier. The demand that holds the setpoint is
-  the valve opening at which the radiators give off the loss at the setpoint. The hold and recovery flow
-  temperatures use the lag as well; the flow requirement stays weather-driven.
-
-## Demand smoothing
-
-Three settings in the hub's "Control and design" step keep the requested
-heating power from chattering cycle to cycle:
-
-- **Demand hysteresis (%)** — a change smaller than this from the last requested value is
-  ignored.
-- **Hold time (s)** / **hold override demand (%)** — once demand has changed, further
-  changes are held back for this long unless they're large enough (past the override
-  threshold) to cut through immediately regardless of the hold.
-- **Max demand step per 5 minutes (%)** — caps how much requested demand can rise or
-  fall per 5 minutes, even for a large, genuine change — smooths out the transition instead of
-  jumping straight there. The cap scales with the time since the previous calculation, so
-  several calculations within seconds (state changes arrive in bursts) allow only a
-  proportionally small step in total; the first calculation after a start allows the full step.
-  After a start (HA restart, integration reload) the steps begin at the valve opening the
-  TRVs report — their mean, if the room has several — not at 0: the TRVs still hold the
-  previous target, and ramping up from 0 would first write a low target and shut a radiator
-  that was open. A report that arrives within 10 minutes of the start still seeds the ramp;
-  without one it starts at 0.
-
-The smoothed demand never stops between 0 and the valve's open threshold (10 % while a TRV
-of the room is shut, 5 % while all are open, see [TRV target mode](#trv-target-mode)): the
-TRV would get its minimum target there while the model counted the valve open. Rising, the
-output stays at 0 until the stepped value reaches the threshold; falling below it, the output
-goes to 0.
-
-Larger values make a room's demand steadier but slower to react; smaller values make it more
-responsive but more prone to small back-and-forth adjustments.
-
-Smoothing only applies in normal operation. While frost protection is forced (a window is
-open, or the heat source is unavailable), the demand is applied at once, so an opened window
-closes the valve on the same calculation instead of stepping down over the hold time. A room
-below the frost protection temperature still gets heat. Once the forced mode ends, smoothing
-resumes from that demand.
+- The recovery flow temperature starts from the estimate and the radiators' current output,
+  so heat still in the radiators counts. The hold flow temperature uses the lag as well; the
+  flow requirement stays weather-driven.
 
 ## Sensor reliability
 
@@ -518,10 +480,11 @@ accepted as a real change.
 
 The flow temperature is exempt from that filter. Its jumps are physical —
 compressor start, defrost, or a hot-water charge showing up on a shared leaving-water sensor
-— and it only feeds the valve demand, never the minimum flow temperature (see below).
+— and it only feeds the radiators' output (observer, heat balance, radiator check), never
+the minimum flow temperature (see below).
 
 Without an outdoor temperature the model cannot calculate, but the TRVs need nothing from
-it: they keep getting the mode's setpoint (see [TRV setpoints](#trv-setpoints)). Learning
+it: they keep getting the mode's setpoint (see [TRV control](#trv-control)). Learning
 pauses for both factors (status `outdoor_temperature_missing`) and the model's values
 (powers, flow requirements) keep their last result. Once the outdoor temperature is back
 the heat balance starts a new stretch. Feed the outdoor entity a measured value or nothing:
@@ -536,9 +499,8 @@ off.
 
 A heat pump charging its hot-water tank sends hot water to the tank, not the radiators,
 while a shared leaving-water sensor reads its flow spiking. A flow more than 5 K above the
-lowest one of the last hour counts as such a charge. Meanwhile the valve demand is planned
-with the heating flow from before the charge, so the valves do not close on the hot reading;
-the observer lets the radiators cool down, the heat balance counts
+lowest one of the last hour counts as such a charge. Meanwhile the radiators' output is
+computed with the heating flow from before the charge, not the hot reading; the observer lets the radiators cool down, the heat balance counts
 no heating and the radiator check starts its hour over. A flow raised for more than an hour
 is the new heating flow. While heating is unavailable the reference starts over; a heat
 pump ramping up after such a pause may read as a charge for a while.
@@ -717,7 +679,7 @@ The minimum flow temperature is the larger of two requirements:
   the surplus gate below).
 - **Recovery** — for a room below its setpoint, the lowest flow that brings it back within
   six hours with its valves fully open. It is found by simulating the room with the same
-  radiator, heat-loss and capacity model the valve demand uses, including the learned
+  radiator, heat-loss and capacity model the observer uses, including the learned
   factors. A room within 0.1 K of its setpoint counts as there, and a room whose outdoor
   temperature is above its setpoint asks for no recovery at all.
 
@@ -765,7 +727,7 @@ on its own it would keep reporting a requirement for a room sitting well above s
 stored heat, typically after a warm spell in spring or autumn. The surplus gate suppresses
 the floor in exactly that case. It closes only when both signals agree:
 
-- the model wants no heat over its prediction horizon (target valve opening at 0 %), **and**
+- the TRVs report their valves shut (the room's valve opening at 0 %), **and**
 - the room is above its current target by more than **"close above setpoint"**
 
 Both are needed. Demand alone also reads 0 % for a room sitting exactly at setpoint, which

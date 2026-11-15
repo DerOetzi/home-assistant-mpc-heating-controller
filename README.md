@@ -5,10 +5,11 @@
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A Home Assistant custom integration for **model-predictive-control (MPC) room heating** —
-one hub per house with the rooms as its sub-entries, combining a self-calibrating grey-box
-thermal model with
-rate-limited demand control and a purpose-built Lovelace card to operate it.
+A Home Assistant custom integration for **room heating with self-regulating TRVs** —
+one hub per house with the rooms as its sub-entries. The TRVs get each room's setpoint plus
+a slow correction from the room sensor; a self-calibrating grey-box thermal model per room
+turns its learned losses into the flow temperature the heat source should deliver. A
+purpose-built Lovelace card operates it.
 
 ## Features
 
@@ -17,9 +18,10 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   and continuously self-calibrated while the room is actively heating. See
   [`docs/mpc-guide.md`](docs/mpc-guide.md) for how modes/setpoints combine, what the
   learning-status sensors mean, and how to size a room correctly.
-- **Radiator lag and a room observer** — the radiators follow the requested power with a
+- **Radiator lag and a room observer** — the radiators follow the output at the reported
+  valve opening with a
   lag derived from their water and steel mass, and the room model runs alongside the room,
-  correcting itself towards the measurement, so the valve demand counts the heat still in the
+  correcting itself towards the measurement, so the recovery flow counts the heat still in the
   radiators. Lasting gains (neighbours, appliances) end up in the learned heat-loss factor. See
   [`docs/mpc-guide.md`](docs/mpc-guide.md#radiator-lag-and-the-room-observer).
 - **Per-TRV emitter modelling** — each thermostatic radiator valve is configured with its
@@ -35,9 +37,7 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   following its normal comfort/eco schedule or has been manually overridden; a dedicated
   `button` (and the `heating_controller.unblock` service, targetable at multiple rooms at
   once) clears the override and resumes automatic mode.
-- **Rate-limited demand control** — hysteresis, a configurable hold time, and a maximum
-  demand step per 5 minutes keep the requested heating power from chattering.
-- **Window contacts and comfort switches** — open windows suspend demand; the hub's
+- **Window contacts and comfort switches** — an open window drops the room to frost protection; the hub's
   comfort switch (off e.g. on holiday) puts every following room on eco, and a room can get
   a comfort switch of its own (e.g. a guest room), no helpers needed.
 - **PV-surplus boost** — the hub's PV-surplus switch (by hand or from an automation)
@@ -55,7 +55,7 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   from the room sensor (0.5 K steps every two hours, at most ±2 K), switches its
   heat-available switch with the heat source, and drops the setpoint to frost protection
   while a window is open. Without an outdoor temperature only learning pauses. See
-  [docs/mpc-guide.md](docs/mpc-guide.md#trv-setpoints).
+  [docs/mpc-guide.md](docs/mpc-guide.md#trv-control).
 - **Persisted learning** — each room's learned `ua_factor`/`capacity_factor` survive
   restarts (`homeassistant.helpers.storage.Store`, one file per room) and are removed
   cleanly if the room is deleted from the hub. The admin-only
@@ -65,7 +65,7 @@ rate-limited demand control and a purpose-built Lovelace card to operate it.
   hours after sunset, while the outdoor temperature is missing or the flow temperature has
   had no reading for over 16 minutes, and while a room's optional *block learning* entity is
   on (e.g. an extra heater in that room). The heat-loss factor comes from a heat balance
-  over each usable night stretch (four to eight hours) of the requested heating power, the capacity factor from the
+  over each usable night stretch (four to eight hours) of the radiators' measured output, the capacity factor from the
   energy balance of the stretch after each setpoint jump (heating up learns, cooling down
   only estimates), as long as no sun reaches the room's windows. See [docs/mpc-guide.md](docs/mpc-guide.md#when-the-model-learns).
 - **Gains and sun (learning only, not yet used by the control)** — over several nights a
@@ -109,8 +109,7 @@ once per house. It holds everything that applies to the whole house:
    source's cloud (optional entity with the calls left today, reserve kept for required
    writes, own writes per day at most).
 2. **Control and design** — design outdoor temperature and system flow/return temperatures
-   (used to size the emitter curves), demand-control hysteresis/hold-time/max-step tuning,
-   surplus gate and sensor age.
+   (used to size the emitter curves), surplus gate and sensor age.
 3. **Sun and workdays** — how the house is turned (the bearing of its north facade, e.g.
    −15° for a house turned 15° west), which way the roof surfaces face and their pitch, and
    an optional workday entity (on = workday; without it Monday to Friday). For the surfaces

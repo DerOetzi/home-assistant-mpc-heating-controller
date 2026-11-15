@@ -53,13 +53,7 @@ Wenige Tage, Moduswechsel selten (nur Dani, Urlaub) — Ergebnis eher Plausibili
 
 ## 2. Umbau TRV-Ansteuerung (Neustart A)
 
-Ein Neustart für 2a–2g zusammen. 2a (Sollwert, Fenster, Wärmeangebot, Korrektur), 2b (Planer, Kennlinie), 2c (Lerner: Modus-Soll, Toleranz, Lüften-Kapazität), 2d (Heizkörper-Check), 2e (Geräteprofil) und 2f (Demand-Eingang) umgesetzt, warten auf Neustart A; weiter mit 2g.
-
-### 2g. Doku
-
-- `mpc-guide.md`: Planer-, Zielband-, Rampen-Kapitel raus (Kennlinie schon in 2b); neu „TRV control" (Soll, Korrektur, Fenster, Wärmeangebot), „Capacity" um Lüften (beobachtet), „Radiator check" neu.
-- README, Übersetzungen, `services.yaml`.
-- Skill: `SKILL.md` (Beschreibung ohne MPC-Planer/Ventilkennlinie, Kern-Dateien, Regel 7 an neues Vorgehen), `diagnose.md` (Entities, Lernstatus, Fehlbilder Kennlinie/Planer raus, Heizkörper-Check neu, Sollwerttyp-Notiz), `tagesauswertung.md` (Ventilkennlinien-Prüfpunkte raus; Takten je TRV, Korrekturverlauf, Raumfehler rein), Agent `heizung-tagesauswertung` (Prüfpunkte gleich nachziehen).
+Ein Neustart für 2a–2g zusammen. 2a (Sollwert, Fenster, Wärmeangebot, Korrektur), 2b (Planer, Kennlinie), 2c (Lerner: Modus-Soll, Toleranz, Lüften-Kapazität), 2d (Heizkörper-Check), 2e (Geräteprofil), 2f (Demand-Eingang) und 2g (Doku) umgesetzt, warten auf Neustart A.
 
 Nach Neustart A in Tagesauswertung: Raumfehler je Raum, Korrekturverlauf, Ventiltakten je TRV (Faktor 1), Schreibzahl, Fenster-Ablauf.
 
