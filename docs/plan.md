@@ -137,7 +137,7 @@ Mit Termin:
 Laufend:
 - Ventiltakten je TRV seit Neustart A; bei Takten Faktor-Empfehlung an Nutzer.
 - Typ 1: Demand-Verlauf nach jedem Korrekturschritt nach unten (Sprung auf ~10 % erwartet). Erholung > 30 min → Nutzer melden (dann Schritte nach unten seltener/erst bei größerem Fehler).
-- Korrektur je Raum: am Deckel ±2 K → Ursache melden (Sensorlage, TRV-Lage, Unterversorgung).
+- Korrektur je Raum: am Deckel ±3 K → Ursache melden (Sensorlage, TRV-Lage, Unterversorgung).
 - Vorlauf: `feedback_k` am Anschlag ±5 K oder Pendeln (Hoch/Runter im Wechsel < 4 h) → melden.
 - Lüften-Kapazität: Werte je Raum sammeln, nach einigen Wochen Nutzer fragen, ob sie Boost bekommt.
 - Ladungs-Dips zählen (6a).

@@ -181,9 +181,18 @@ async def _setup_for_correction(
     _seed_entities(hass)
     hass.states.async_set(ROOM_SENSOR, str(room_c))
     coordinator, calls = await _setup(hass)
-    # The night's heat balance holds the correction; these tests run by day.
-    monkeypatch.setattr(coordinator, "is_sun_condition_met", lambda _ts: False)
     return coordinator, calls
+
+
+async def test_the_correction_steps_at_night_as_well(
+    hass: HomeAssistant, freezer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    coordinator, calls = await _setup_for_correction(hass, monkeypatch)
+    monkeypatch.setattr(coordinator, "is_sun_condition_met", lambda _ts: True)
+
+    await _run_hours(hass, coordinator, freezer, CORRECTION_INTERVAL_S / 3600, 21.0)
+    assert coordinator.setpoint_correction.correction_c == 0.5
+    assert _setpoints(calls)[-1] == 22.5
 
 
 async def test_a_cold_room_raises_the_setpoint_step_by_step(

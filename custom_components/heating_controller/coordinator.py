@@ -806,8 +806,21 @@ class HeatingRoomCoordinator:
         ua_factor: float | None,
         capacity_factor: float | None,
         reset_gains: bool = False,
+        setpoint_correction_c: float | None = None,
     ) -> None:
         """Set the factors; one left out keeps its learned value."""
+        if setpoint_correction_c is not None:
+            self.setpoint_correction.set(time.time(), setpoint_correction_c)
+            await self.setpoint_correction_store.async_save(
+                self.setpoint_correction.correction_c
+            )
+            _LOGGER.info(
+                "Set setpoint correction for room %s to %+.1f K",
+                self.room_name,
+                self.setpoint_correction.correction_c,
+            )
+            # Hands the TRVs the new setpoint now rather than next cycle.
+            await self._async_recompute()
         if reset_gains:
             self.mpc.gain_model.reset()
             await self.gain_store.async_save(self.mpc.gain_model.export())
@@ -1006,8 +1019,6 @@ class HeatingRoomCoordinator:
                 self._adaptation_running(trv, now_ts) or self._trv_uncalibrated(trv)
                 for trv in self._trvs
             )
-            # The night's heat balance needs the setpoint to stay put.
-            and not self.is_sun_condition_met(now_ts)
         )
 
     async def _async_update_setpoint_correction(

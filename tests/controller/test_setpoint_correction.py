@@ -59,8 +59,25 @@ def test_the_correction_stops_at_its_limit() -> None:
 
 
 def test_a_stored_value_beyond_the_limit_is_cut() -> None:
-    assert SetpointCorrection(START, 3.0).correction_c == CORRECTION_LIMIT_C
-    assert SetpointCorrection(START, -3.0).correction_c == -CORRECTION_LIMIT_C
+    assert CORRECTION_LIMIT_C == 3.0
+    assert SetpointCorrection(START, 4.0).correction_c == CORRECTION_LIMIT_C
+    assert SetpointCorrection(START, -4.0).correction_c == -CORRECTION_LIMIT_C
+
+
+def test_a_value_set_by_hand_holds_for_a_full_interval() -> None:
+    correction = SetpointCorrection(START)
+    set_ts = START + CORRECTION_INTERVAL_S
+    correction.set(set_ts, 1.5)
+
+    assert correction.correction_c == 1.5
+    assert not correction.due(set_ts + CORRECTION_INTERVAL_S - 1)
+    assert correction.due(set_ts + CORRECTION_INTERVAL_S)
+
+
+def test_a_value_set_by_hand_is_cut_at_the_limit() -> None:
+    correction = SetpointCorrection(START)
+    correction.set(START, -5.0)
+    assert correction.correction_c == -CORRECTION_LIMIT_C
 
 
 def test_a_warm_room_steps_down() -> None:

@@ -52,15 +52,15 @@ purpose-built Lovelace card operates it.
   the valve power the factors are learned from. See [docs/mpc-guide.md](docs/mpc-guide.md).
 - **TRV setpoints** — each TRV regulates the room with its own PI. The room hands it the
   active mode's target through `climate.set_temperature`, plus a slow setpoint correction
-  from the room sensor (0.5 K steps every two hours, at most ±2 K), switches its
+  from the room sensor (0.5 K steps every two hours, at most ±3 K), switches its
   heat-available switch with the heat source, and drops the setpoint to frost protection
   while a window is open. Without an outdoor temperature only learning pauses. See
   [docs/mpc-guide.md](docs/mpc-guide.md#trv-control).
 - **Persisted learning** — each room's learned `ua_factor`/`capacity_factor` survive
   restarts (`homeassistant.helpers.storage.Store`, one file per room) and are removed
   cleanly if the room is deleted from the hub. The admin-only
-  `heating_controller.recalibrate` service sets or resets them, and also resets a room's
-  learned gains.
+  `heating_controller.recalibrate` service sets or resets them, resets a room's learned
+  gains and sets its setpoint correction.
 - **Learning only when gains are small** — learning pauses while the sun is up and for two
   hours after sunset, while the outdoor temperature is missing or the flow temperature has
   had no reading for over 16 minutes, and while a room's optional *block learning* entity is

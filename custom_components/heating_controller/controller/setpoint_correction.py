@@ -18,7 +18,7 @@ CORRECTION_WINDOW_S = 3600
 # A room error smaller than this leaves the correction where it is.
 CORRECTION_DEADBAND_C = 0.3
 CORRECTION_STEP_C = 0.5
-CORRECTION_LIMIT_C = 2.0
+CORRECTION_LIMIT_C = 3.0
 # A room whose temperature spans more than this within the window is still
 # moving, and its mean says little about where it settles.
 CORRECTION_MAX_SPAN_C = 0.3
@@ -52,6 +52,11 @@ class SetpointCorrection:
     @property
     def correction_c(self) -> float:
         return self._correction_c
+
+    def set(self, now_ts: float, correction_c: float) -> None:
+        """Set the correction by hand; the next step waits a full interval."""
+        self._correction_c = _limit(correction_c)
+        self._last_evaluation_ts = now_ts
 
     def add_sample(
         self, now_ts: float, room_temperature_c: float, demand_pct: float | None

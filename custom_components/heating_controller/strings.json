@@ -675,7 +675,7 @@
     },
     "recalibrate": {
       "name": "Recalibrate",
-      "description": "Set the learned UA and capacity factors of one or more rooms, or reset their learned gains. A factor left out stays unchanged; pass 1.0 to reset it. Admin only.",
+      "description": "Set the learned UA and capacity factors or the setpoint correction of one or more rooms, or reset their learned gains. A value left out stays unchanged; pass 1.0 to reset a factor. Admin only.",
       "fields": {
         "ua_factor": {
           "name": "UA factor",
@@ -688,6 +688,10 @@
         "reset_gains": {
           "name": "Reset gains",
           "description": "Forget the learned steady gain, gain profile and sun terms of the room and learn them anew."
+        },
+        "setpoint_correction": {
+          "name": "Setpoint correction",
+          "description": "Correction added to the mode's setpoint handed to the TRVs, in K. The automatic correction carries on from it after two hours."
         }
       }
     }

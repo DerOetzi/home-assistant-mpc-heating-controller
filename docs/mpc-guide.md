@@ -226,12 +226,16 @@ data:
   ua_factor: 1.0
   capacity_factor: 1.0
   reset_gains: true
+  setpoint_correction: 1.0
 ```
 
 A factor that is left out stays as it is, so a reset needs an explicit `1.0`; at least one
 value (or a reset) is required. The call discards the heat-loss stretch and any jump
 stretch in progress, because they were measured with the old factors. A new capacity factor also resets the airing factor to its start value. `reset_gains: true` forgets the
 learned steady gain, day profile and sun terms (see [Gains and sun](#gains-and-sun)).
+`setpoint_correction` sets the room's [setpoint correction](#setpoint-correction) in 0.5 K
+steps within ±3 K and hands the TRVs the new setpoint at once; the automatic correction
+takes its next step two hours later at the earliest. It leaves the learned factors alone.
 
 ## Gains and sun
 
@@ -367,16 +371,14 @@ the TRV entities.
 The TRV measures at the radiator, warmer than the room, so a room sensor reading below the
 setpoint is common. Every two hours the room compares the mode's target with the room
 sensor's time-weighted mean over the last hour and moves the correction by 0.5 K, up to
-±2 K, when the error is 0.3 K or more. One value per room, for all its TRVs; it is stored and
+±3 K, when the error is 0.3 K or more. One value per room, for all its TRVs; it is stored and
 survives a restart. A step needs a settled room:
 
 - the room sensor's own reading (not the TRVs standing in for it), with at least two values
   in the hour and one near its start, spanning no more than 0.3 K;
 - windows closed for at least an hour, the mode's target unchanged for two hours (frost
   protection for an open window is no change of it);
-- heat available, no hot-water charge, no TRV adapting or uncalibrated;
-- not during the night's heat-loss stretch (two hours after sunset to sunrise), which needs
-  the setpoint to stay put.
+- heat available, no hot-water charge, no TRV adapting or uncalibrated.
 
 A step up waits while the room's valves (the highest opening, averaged over the hour) are at
 90 % or more — more setpoint would only wind up; a step down waits while they are shut. A
