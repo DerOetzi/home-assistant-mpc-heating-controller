@@ -128,8 +128,7 @@ losses are.
   [Radiator lag and the room observer](#radiator-lag-and-the-room-observer)) has to equal
   what the room lost plus what it stored. The factor that balances this is the target, and each balance moves the learned
   factor 30 % of the way there. A stretch starts once the room is near its mode setpoint — no more than 0.1 K above it
-  or 0.4 K below (the setpoint correction moves in 0.5 K steps and leaves up to a
-  quarter kelvin, plus a sensor step); a room still coasting down on the evening's heat with the valve
+  or 0.4 K below (the setpoint correction leaves up to 0.3 K, plus a sensor step); a room still coasting down on the evening's heat with the valve
   shut would end far below where it started, one recovering from below far above (status
   `coasting` until then) — or once it has held its temperature for an
   hour (trend below 0.05 K/h), counted from the start of that hour, so a room its
@@ -373,7 +372,8 @@ survives a restart. A step needs a settled room:
 
 - the room sensor's own reading (not the TRVs standing in for it), with at least two values
   in the hour and one near its start, spanning no more than 0.3 K;
-- windows closed for at least an hour, the mode's target unchanged for two hours;
+- windows closed for at least an hour, the mode's target unchanged for two hours (frost
+  protection for an open window is no change of it);
 - heat available, no hot-water charge, no TRV adapting or uncalibrated;
 - not during the night's heat-loss stretch (two hours after sunset to sunrise), which needs
   the setpoint to stay put.
@@ -411,9 +411,10 @@ these held for two hours without a break:
 - the room did not rise by 0.3 K; a room that does starts the two hours over.
 
 A hot-water charge (see [Hot-water charges](#hot-water-charges)), an open window or an
-adapting TRV (calibrating, uncalibrated or in mounting mode) starts the two hours over. The
-verdict holds while there is nothing to test and clears once the room rises by 0.3 K or the
-TRV's demand falls below 50 %.
+adapting TRV (calibrating, uncalibrated or in mounting mode) starts the two hours over, as
+does half an hour without a calculation. The verdict holds while there is nothing to test
+and clears once the room rises 0.3 K above where it stood at the verdict or the TRV's demand falls below 50 %; during a
+hot-water charge, with a window open or a TRV adapting neither counts.
 
 Meanwhile the room learns nothing (status `radiator_not_heating`). The running heat-balance stretch ends where the two hours that led to the verdict
 started: their heat is in doubt as well. `binary_sensor.<room>_radiator_not_heating` (problem) is on, its attribute
@@ -729,6 +730,9 @@ the floor in exactly that case. It closes only when both signals agree:
 
 - the TRVs report their valves shut (the room's valve opening at 0 %), **and**
 - the room is above its current target by more than **"close above setpoint"**
+
+While a TRV that reports its opening has been silent for 30 minutes the gate stays as it is:
+its valve may well be open.
 
 Both are needed. Demand alone also reads 0 % for a room sitting exactly at setpoint, which
 is precisely where the floor must stay.

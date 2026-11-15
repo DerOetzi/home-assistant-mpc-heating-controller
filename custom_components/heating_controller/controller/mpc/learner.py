@@ -34,8 +34,7 @@ MIN_HISTORY_SAMPLES = 5
 # The learner judges the room against the setpoint of its mode, not against
 # the setpoint written to the TRVs: the setpoint correction steps that one in
 # 0.5 K steps, and frost protection for an open window is no mode change. The
-# correction leaves an error of up to a quarter kelvin either way, plus a
-# sensor step; a room within this below its mode's setpoint counts as near it.
+# correction leaves an error of up to 0.3 K either way, plus a sensor step; a room within this below its mode's setpoint counts as near it.
 LEARNER_SETPOINT_TOLERANCE_C = 0.4
 
 # Capacity is learned from jump stretches: the mode's setpoint steps and the
@@ -341,7 +340,7 @@ class RoomMpcModelLearner:
         self._window_unknown = unknown
 
     def set_outdoor_temperature_missing(self, missing: bool, now_ts: float) -> None:
-        # Without an outdoor temperature the controller plans nothing and the
+        # Without an outdoor temperature the controller computes nothing and the
         # TRVs hold a fixed setpoint on their own: no samples come in, and the
         # heat the radiators give off meanwhile is unknown. The stretch up to
         # the last sample is still balanced, the next one starts once the

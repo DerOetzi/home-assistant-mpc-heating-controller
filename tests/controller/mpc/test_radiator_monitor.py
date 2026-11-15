@@ -133,3 +133,26 @@ def test_after_clearing_a_new_window_is_needed():
     assert monitor.not_heating is False
     monitor.update(_sample(ts + STEP_S))
     assert monitor.not_heating is True
+
+
+def test_airing_does_not_clear_the_verdict():
+    monitor = RadiatorDeliveryMonitor()
+    ts = _feed(monitor, WINDOW_STEPS)
+
+    # Window open: the valve shuts and the room cools.
+    monitor.update(
+        _sample(ts + STEP_S, excluded=True, demand_pct=0.0, room_temperature_c=18.5)
+    )
+    assert monitor.not_heating is True
+    # Closed again: the room warms back from its walls, not above where it was.
+    monitor.update(_sample(ts + 2 * STEP_S, room_temperature_c=19.0))
+    monitor.update(_sample(ts + 3 * STEP_S, room_temperature_c=19.5))
+    assert monitor.not_heating is True
+
+
+def test_a_gap_starts_the_window_over():
+    monitor = RadiatorDeliveryMonitor()
+    ts = _feed(monitor, WINDOW_STEPS // 2)
+
+    _feed(monitor, WINDOW_STEPS // 2, start_ts=ts + 3600)
+    assert monitor.not_heating is False

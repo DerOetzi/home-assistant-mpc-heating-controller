@@ -242,8 +242,8 @@ async def test_an_opened_window_holds_the_correction(
     hass.states.async_set(WINDOW, "off")
     await hass.async_block_till_done()
 
-    # Due, but the mode target is back for less than two hours.
-    await _run_hours(hass, coordinator, freezer, 1.75, 21.0)
+    # Due, but the window is closed for less than an hour.
+    await _run_hours(hass, coordinator, freezer, 0.75, 21.0)
     assert coordinator.setpoint_correction.correction_c == 0.0
 
     await _run_hours(hass, coordinator, freezer, 0.5, 21.0)

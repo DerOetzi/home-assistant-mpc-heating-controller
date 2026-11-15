@@ -158,6 +158,9 @@ class RoomMpcController:
         # adds to the detection on the flow.
         self._external_hot_water_charge = False
         self._radiator_monitors = [RadiatorDeliveryMonitor() for _ in trvs]
+        self._valve_position_configured = [
+            trv.valve_position_configured for trv in trvs
+        ]
         self._room_heat_load_w = thermal_config.room_heat_load_w
         self._window_open = False
         self._outdoor_temperature_missing = False
@@ -347,10 +350,22 @@ class RoomMpcController:
         flow_gate = (
             self._live_flow_gate if apply_side_effects else self._preview_flow_gate
         )
-        flow_gate_closed = flow_gate.update(
-            surplus_c=mpc_input.room_temp_c - mpc_input.target_temp_c,
-            demand_pct=room_demand_pct,
-            now_ts=mpc_input.now_ts,
+        # A TRV that should report its opening and does not may well be open:
+        # the gate stays as it is.
+        demand_unknown = any(
+            configured and opening is None
+            for configured, opening in zip(
+                self._valve_position_configured, mpc_input.valve_positions_pct
+            )
+        )
+        flow_gate_closed = (
+            flow_gate.closed
+            if demand_unknown
+            else flow_gate.update(
+                surplus_c=mpc_input.room_temp_c - mpc_input.target_temp_c,
+                demand_pct=room_demand_pct,
+                now_ts=mpc_input.now_ts,
+            )
         )
 
         hold_flow_temperature_c = self._calculate_hold_flow_temperature_c(mpc_input)

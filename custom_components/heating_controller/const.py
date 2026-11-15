@@ -7,8 +7,9 @@ DOMAIN = "heating_controller"
 # Config entry version of the hub that holds rooms, flow and hot water as
 # subentries.
 HUB_VERSION = 8
-# 2: the demand planner's options are gone.
-HUB_MINOR_VERSION = 3
+# 2: the demand planner's options are gone. 3: the learner's tolerance is a
+# constant. 4: the TRVs only take the room's setpoint.
+HUB_MINOR_VERSION = 4
 
 DEFAULT_COMFORT_TEMPERATURE_C = 22.0
 DEFAULT_ECO_TEMPERATURE_OFFSET_C = -2.0

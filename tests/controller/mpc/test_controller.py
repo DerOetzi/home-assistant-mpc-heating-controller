@@ -364,6 +364,19 @@ def test_surplus_gate_stays_open_while_a_trv_reports_an_open_valve():
     assert controller.compute(target_temperature_c=23.0).result.flow_gate_closed
 
 
+def test_surplus_gate_stays_as_it_is_while_a_trv_is_silent():
+    controller = _valve_controller(flow_gate_config=FlowGateConfig(hold_time_s=0.0))
+    feed_coasting_room(controller)
+
+    # No opening reported yet: the valve may well be open.
+    assert not controller.compute(target_temperature_c=23.0).result.flow_gate_closed
+
+    controller.set_valve_position(0, 0.0)
+    assert controller.compute(target_temperature_c=23.0).result.flow_gate_closed
+    controller.set_valve_position(0, None)
+    assert controller.compute(target_temperature_c=23.0).result.flow_gate_closed
+
+
 def test_surplus_gate_stays_open_for_a_room_sitting_at_its_setpoint():
     controller = make_gated_controller()
     controller.set_room_sensor_temperature(23.0)

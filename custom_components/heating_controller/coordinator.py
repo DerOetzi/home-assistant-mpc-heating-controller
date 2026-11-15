@@ -116,7 +116,7 @@ SENSOR_POLL_INTERVAL = timedelta(minutes=SENSOR_POLL_INTERVAL_MINUTES)
 TARGET_TEMPERATURE_TOLERANCE_C = 0.01
 # A Danfoss Ally reports its previous setpoint once more a few seconds after a
 # write. Within this window the written target counts as the TRV's target, so
-# the echo neither triggers a second write nor moves a relative target.
+# the echo does not trigger a second write.
 TARGET_WRITE_SETTLE_S = 120.0
 # Without a target_temp_step attribute the TRV takes setpoints in this step.
 DEFAULT_TARGET_TEMPERATURE_STEP_C = 0.5
@@ -318,8 +318,12 @@ class HeatingRoomCoordinator:
         self.normal_result: RoomMpcResult | None = None
         self.normal_heat_mode: HeatMode | None = None
         self.normal_target_temperature_c: float | None = None
-        # The setpoint of the active mode, and since when it holds.
+        # The setpoint handed to the TRVs before the correction: the active
+        # mode's, or frost protection for an open window.
         self.mode_target_temperature_c: float | None = None
+        # The active mode's own setpoint, and since when it holds; an open
+        # window does not change it.
+        self._settled_target_c: float | None = None
         self._mode_target_since_ts = 0.0
         # Since when every window has been closed; None while one is open.
         self._windows_closed_since_ts: float | None = None
@@ -333,7 +337,7 @@ class HeatingRoomCoordinator:
         # Entities report in bursts (a TRV its temperature and valve position,
         # the heat pump flow and outdoor temperature): one recompute per burst.
         self._pending_recompute: asyncio.Task[None] | None = None
-        # A recompute awaits TRV writes; a second one in between would plan
+        # A recompute awaits TRV writes; a second one in between would compute
         # and write on half-updated state.
         self._recompute_lock = asyncio.Lock()
         self._sun_events: dict[tuple[str, date], datetime | None] = {}
@@ -910,8 +914,12 @@ class HeatingRoomCoordinator:
         mode_target = self.state.effective_target_temperature(
             self.state.determine_base_target_temperature(display_mode)
         )
-        if mode_target != self.mode_target_temperature_c:
-            self.mode_target_temperature_c = mode_target
+        self.mode_target_temperature_c = mode_target
+        normal_target = self.state.effective_target_temperature(
+            self.state.determine_base_target_temperature(self.state.current_heat_mode)
+        )
+        if normal_target != self._settled_target_c:
+            self._settled_target_c = normal_target
             self._mode_target_since_ts = now_ts
         frost_protection = display_mode is HeatMode.FROST_PROTECTION
         await self._async_update_setpoint_correction(now_ts, frost_protection)
@@ -926,9 +934,6 @@ class HeatingRoomCoordinator:
             return
 
         self.normal_heat_mode = self.state.current_heat_mode
-        normal_target = self.state.effective_target_temperature(
-            self.state.determine_base_target_temperature(self.normal_heat_mode)
-        )
         self.normal_target_temperature_c = normal_target
         normal_compute = self.mpc.compute(normal_target, apply_side_effects=False)
         self.normal_result = normal_compute.result if normal_compute.valid else None

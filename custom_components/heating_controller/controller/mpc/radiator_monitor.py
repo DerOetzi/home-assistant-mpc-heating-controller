@@ -6,6 +6,9 @@ from dataclasses import dataclass
 # radiator counts as not heating. Long enough that a sound radiator, even a
 # slow one at a low flow, lifts its room by a sensor step or more.
 RADIATOR_CHECK_WINDOW_S = 2 * 3600
+# Samples further apart than this leave the time between them unobserved; the
+# window starts over.
+RADIATOR_CHECK_MAX_GAP_S = 30 * 60
 # The TRV asks for nearly all the heat its radiator can give.
 RADIATOR_CHECK_MIN_DEMAND_PCT = 80.0
 # A verdict clears once the TRV no longer asks for much heat: the room is
@@ -58,15 +61,21 @@ class RadiatorDeliveryMonitor:
     def __init__(self) -> None:
         self._since_ts: float | None = None
         self._lowest_room_c: float | None = None
+        self._last_ts: float | None = None
         self.not_heating = False
         # Start of the window that led to the verdict.
         self.not_heating_since_ts: float | None = None
 
     def update(self, sample: RadiatorCheckSample) -> None:
+        gap = (
+            self._last_ts is not None
+            and sample.now_ts - self._last_ts > RADIATOR_CHECK_MAX_GAP_S
+        )
+        self._last_ts = sample.now_ts
         if self.not_heating:
             self._check_clear(sample)
             return
-        if sample.excluded or not self._conditions_hold(sample):
+        if gap or sample.excluded or not self._conditions_hold(sample):
             self._restart()
             return
         room_c = sample.room_temperature_c
@@ -100,20 +109,24 @@ class RadiatorDeliveryMonitor:
         )
 
     def _check_clear(self, sample: RadiatorCheckSample) -> None:
+        if sample.excluded:
+            # An open window shuts the valve: that says nothing about the
+            # radiator.
+            return
         if (
             sample.demand_pct is not None
             and sample.demand_pct < RADIATOR_CHECK_CLEAR_DEMAND_PCT
         ):
             self._clear()
             return
+        # Measured from where the room stood at the verdict: a room that
+        # cooled further since and warms back has not got its heat yet.
         assert self._lowest_room_c is not None
         if (
             sample.room_temperature_c - self._lowest_room_c
             >= RADIATOR_CHECK_MIN_ROOM_RISE_C
         ):
             self._clear()
-            return
-        self._lowest_room_c = min(self._lowest_room_c, sample.room_temperature_c)
 
     def _clear(self) -> None:
         self.not_heating = False

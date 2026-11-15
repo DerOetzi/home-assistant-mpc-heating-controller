@@ -198,14 +198,38 @@ async def test_migration_drops_the_planner_options_and_target_band(
     entry = _hub_entry(_room_data(hass))
     entry.add_to_hass(hass)
     hass.config_entries.async_update_entry(
-        entry, data={**entry.data, "mpc_hold_time_s": 300.0, "target_band_c": 0.1}
+        entry,
+        data={
+            **entry.data,
+            "mpc_hold_time_s": 300.0,
+            "target_band_c": 0.1,
+            "trv_setpoint_mode": "relative",
+        },
     )
 
     assert await async_migrate_entry(hass, entry)
 
     assert "mpc_hold_time_s" not in entry.data
     assert "target_band_c" not in entry.data
-    assert entry.minor_version == 3
+    assert "trv_setpoint_mode" not in entry.data
+    assert entry.minor_version == 4
+
+
+async def test_migration_from_minor_version_3_drops_the_setpoint_mode(
+    hass: HomeAssistant,
+) -> None:
+    from heating_controller import async_migrate_entry
+
+    entry = _hub_entry(_room_data(hass))
+    entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, "trv_setpoint_mode": "relative"}, minor_version=3
+    )
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert "trv_setpoint_mode" not in entry.data
+    assert entry.minor_version == 4
 
 
 async def test_migration_from_minor_version_2_drops_the_target_band(
@@ -222,7 +246,7 @@ async def test_migration_from_minor_version_2_drops_the_target_band(
     assert await async_migrate_entry(hass, entry)
 
     assert "target_band_c" not in entry.data
-    assert entry.minor_version == 3
+    assert entry.minor_version == 4
 
 
 async def test_recalibrate_rejects_disturbance(

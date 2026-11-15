@@ -31,7 +31,7 @@ Raum regelt der TRV selbst (eigener PI, Sollwert über `climate.set_temperature`
 | Schritt | Was | Bedingung für Start |
 |---|---|---|
 | 1 | 1d Kapazität beobachten | läuft seit Neustart 15.11., bis Neustart A |
-| 2 | 2a–2g Umbau TRV-Ansteuerung, Neustart A | sofort |
+| 2 | 2a–2g Umbau TRV-Ansteuerung | umgesetzt, Neustart A am 15.11. erfolgt; Beobachtung läuft |
 | 3 | 3 Vorlauf-Rückkopplung, Neustart B | nach 2, ein paar Tage Betrieb ohne Auffälligkeit (Takten, Raumfehler) |
 | 4 | 4a Gewinne auswerten | parallel, kein Code |
 | 5 | Boiler-Modus TRV (5, ~01.12.) | Z2M 2.15.0 da, kein anderer Neustart in den 3 Tagen davor |
@@ -53,9 +53,9 @@ Wenige Tage, Moduswechsel selten (nur Dani, Urlaub) — Ergebnis eher Plausibili
 
 ## 2. Umbau TRV-Ansteuerung (Neustart A)
 
-Ein Neustart für 2a–2g zusammen. 2a (Sollwert, Fenster, Wärmeangebot, Korrektur), 2b (Planer, Kennlinie), 2c (Lerner: Modus-Soll, Toleranz, Lüften-Kapazität), 2d (Heizkörper-Check), 2e (Geräteprofil), 2f (Demand-Eingang) und 2g (Doku) umgesetzt, warten auf Neustart A.
+2a–2g umgesetzt, Neustart A am 15.11. erfolgt.
 
-Nach Neustart A in Tagesauswertung: Raumfehler je Raum, Korrekturverlauf, Ventiltakten je TRV (Faktor 1), Schreibzahl, Fenster-Ablauf.
+In Tagesauswertung: Raumfehler je Raum, Korrekturverlauf, Ventiltakten je TRV (Faktor 1), Schreibzahl, Fenster-Ablauf, UA-Lernstatus `valve_position_missing` in ruhigen Nächten (TRV 30 min still), `lead_min_flow` gegen Haltevorlauf (Recovery läuft bis Schritt 3 bei Raumfehler > 0,1 K mit).
 
 ## 3. Vorlauf-Rückkopplung (Neustart B)
 
