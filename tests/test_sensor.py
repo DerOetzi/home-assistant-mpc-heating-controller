@@ -1,7 +1,7 @@
-"""The hold-flow sensor is the ungated counterpart to the min-flow sensor."""
+"""Room sensors: hold flow with and without the gate, boost, supply."""
 
 import pytest
-from heating_controller.const import FlowSupplyStatus
+from heating_controller.const import RoomSupply, SupplyReason
 from homeassistant.core import HomeAssistant, ServiceCall
 from test_coordinator import _hub_entry, _room_data, _seed_entities
 
@@ -35,17 +35,13 @@ async def test_hold_flow_sensor_keeps_reporting_while_the_gate_is_closed(
 ) -> None:
     await _setup_coasting_room(hass, {**_room_data(hass), "flow_gate_hold_time_s": 0.0})
 
-    gated = hass.states.get("sensor.wohnzimmer_minimum_flow_temperature")
+    assert hass.states.get("sensor.wohnzimmer_minimum_flow_temperature") is None
     hold = hass.states.get("sensor.wohnzimmer_hold_flow_temperature")
-    assert gated is not None and hold is not None
-
-    assert float(gated.state) == 0
-    assert gated.attributes["supply_status"] == FlowSupplyStatus.SURPLUS
-    assert gated.attributes["flow_gate_closed"] is True
+    assert hold is not None
 
     assert float(hold.state) > 0
     assert hold.attributes["flow_gate_closed"] is True
-    assert hold.attributes["gated_min_flow_temperature_c"] == 0
+    assert hold.attributes["calculation_heat_mode"] == "comfort"
     assert hold.attributes["room_surplus_c"] > 0
 
     gated_hold = hass.states.get("sensor.wohnzimmer_gated_hold_flow_temperature")
@@ -55,12 +51,12 @@ async def test_hold_flow_sensor_keeps_reporting_while_the_gate_is_closed(
     assert gated_hold.attributes["hold_flow_temperature_c"] == float(hold.state)
 
 
-async def test_hold_flow_sensor_matches_min_flow_while_the_gate_is_open(
+async def test_hold_flow_sensor_matches_the_gated_one_while_the_gate_is_open(
     hass: HomeAssistant,
 ) -> None:
     await _setup_coasting_room(hass, _room_data(hass))
 
-    gated = hass.states.get("sensor.wohnzimmer_minimum_flow_temperature")
+    gated = hass.states.get("sensor.wohnzimmer_gated_hold_flow_temperature")
     hold = hass.states.get("sensor.wohnzimmer_hold_flow_temperature")
     assert gated is not None and hold is not None
 
@@ -69,7 +65,7 @@ async def test_hold_flow_sensor_matches_min_flow_while_the_gate_is_open(
     assert float(hold.state) == float(gated.state)
 
 
-async def test_min_flow_sensor_leaves_recovery_out_without_a_mode_jump(
+async def test_boost_flow_sensor_reads_zero_without_a_mode_jump(
     hass: HomeAssistant,
 ) -> None:
     _seed_entities(hass)
@@ -84,19 +80,29 @@ async def test_min_flow_sensor_leaves_recovery_out_without_a_mode_jump(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    gated = hass.states.get("sensor.wohnzimmer_minimum_flow_temperature")
-    assert gated is not None
+    boost = hass.states.get("sensor.wohnzimmer_boost_flow_temperature")
+    assert boost is not None
 
     # A cold room alone is no flow boost: recovery is shown, not asked for.
-    recovery_c = gated.attributes["recovery_flow_temperature_c"]
-    assert recovery_c > gated.attributes["hold_flow_temperature_c"]
-    assert float(gated.state) == gated.attributes["hold_flow_temperature_c"]
-
+    assert float(boost.state) == 0
+    assert boost.attributes["boost_active"] is False
+    recovery_c = boost.attributes["recovery_flow_temperature_c"]
     gated_hold = hass.states.get("sensor.wohnzimmer_gated_hold_flow_temperature")
     assert gated_hold is not None
-    assert float(gated_hold.state) == gated.attributes["hold_flow_temperature_c"]
     assert float(gated_hold.state) < recovery_c
-    assert gated.attributes["recovery_flow_saturated"] in (True, False)
+    assert boost.attributes["recovery_flow_saturated"] in (True, False)
+
+
+async def test_supply_sensor_states_and_reason(hass: HomeAssistant) -> None:
+    await _setup_coasting_room(hass, _room_data(hass))
+
+    supply = hass.states.get("sensor.wohnzimmer_supply")
+    assert supply is not None
+    assert supply.attributes["options"] == [s.value for s in RoomSupply]
+    # The test room has no valve position: nothing to judge.
+    assert supply.state == RoomSupply.NOT_RATED
+    assert supply.attributes["reason"] == SupplyReason.DEMAND_UNKNOWN
+    assert supply.attributes["demand_pct"] is None
 
 
 async def test_ua_learning_status_sensor_exposes_the_heat_balance(

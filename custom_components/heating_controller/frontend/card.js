@@ -429,14 +429,15 @@ export class HeatingControllerCard extends HTMLElement {
   }
 
   _controlSignature(roles) {
-    const flow = roles.minFlow?.attributes ?? {};
+    const supply = roles.supply?.attributes ?? {};
     return [
       roles.mode.state,
       (roles.mode.attributes.options ?? []).join(","),
       roles.comfort && this._effectiveValue(roles.comfort),
       roles.eco && this._effectiveValue(roles.eco),
-      roles.minFlow?.state,
-      flow.supply_status,
+      roles.supply?.state,
+      supply.reason,
+      supply.demand_pct,
     ].join("|");
   }
 
@@ -604,15 +605,15 @@ export class HeatingControllerCard extends HTMLElement {
     if (roles.eco) setpoints.appendChild(ecoStepper(roles.eco, context));
     container.appendChild(setpoints);
 
-    // Minimum flow temperature — same row styling as a detail sensor (icon,
-    // spelled-out value, 44 px tall, clickable), not a special one-off widget.
-    if (roles.minFlow) {
-      const { value, verdict, hint } = supplyPresentation(this._hass, roles.minFlow);
+    // Supply — same row styling as a detail sensor (icon, spelled-out value,
+    // 44 px tall, clickable), not a special one-off widget.
+    if (roles.supply) {
+      const { value, verdict, hint } = supplyPresentation(this._hass, roles.supply);
       const flow = this._row(
-        t(this._hass, "row_min_flow"),
+        t(this._hass, "row_supply"),
         `<span class="${verdict}">${value}</span>`,
         "mdi:water-thermometer",
-        roles.minFlow.entity_id
+        roles.supply.entity_id
       );
       if (hint) flow.title = hint;
       container.appendChild(flow);

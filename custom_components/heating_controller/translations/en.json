@@ -373,6 +373,9 @@
       "heating_unblock": {
         "name": "Unblock"
       },
+      "flow_feedback_reset": {
+        "name": "Reset flow feedback"
+      },
       "legionella_start": {
         "name": "Start legionella protection"
       }
@@ -443,8 +446,30 @@
       }
     },
     "sensor": {
-      "min_flow_temperature": {
-        "name": "Minimum flow temperature"
+      "supply": {
+        "name": "Supply",
+        "state": {
+          "undersupplied": "Undersupplied",
+          "supplied": "Supplied",
+          "oversupplied": "Oversupplied",
+          "not_rated": "Not rated"
+        },
+        "state_attributes": {
+          "reason": {
+            "name": "Reason",
+            "state": {
+              "window_open": "Window open",
+              "frost_protection": "Frost protection",
+              "no_heat": "No heat",
+              "radiator_not_heating": "Radiator not heating",
+              "boost": "Boost",
+              "demand_unknown": "Valve opening unknown"
+            }
+          }
+        }
+      },
+      "boost_flow_temperature": {
+        "name": "Boost flow temperature"
       },
       "gated_hold_flow_temperature": {
         "name": "Gated hold flow temperature"
@@ -529,14 +554,8 @@
       "lead_hold_flow_temperature": {
         "name": "Lead rooms hold flow temperature"
       },
-      "lead_min_flow_temperature": {
-        "name": "Lead rooms minimum flow temperature"
-      },
       "hold_flow_reserve": {
         "name": "Flow reserve hold"
-      },
-      "min_flow_reserve": {
-        "name": "Flow reserve minimum"
       },
       "irradiance_north": {
         "name": "Irradiance North facade"

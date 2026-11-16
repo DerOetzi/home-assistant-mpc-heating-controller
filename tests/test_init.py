@@ -480,15 +480,13 @@ async def test_hub_reports_the_lead_rooms(hass: HomeAssistant) -> None:
 
     coordinator = hass.data[DOMAIN][entry.entry_id]
     hold_c = coordinator.normal_gated_hold_flow_temperature_c
-    min_c = coordinator.normal_min_flow_temperature_c
-    assert hold_c is not None and min_c is not None
+    assert hold_c is not None
 
     hold = hass.states.get("sensor.heizung_lead_rooms_hold_flow_temperature")
     assert float(hold.state) == round(hold_c, 1)
     assert hold.attributes["room"] == "Wohnzimmer"
     assert hold.attributes["rooms"] == ["Wohnzimmer"]
-    minimum = hass.states.get("sensor.heizung_lead_rooms_minimum_flow_temperature")
-    assert float(minimum.state) == round(min_c, 1)
+    assert hass.states.get("sensor.heizung_lead_rooms_minimum_flow_temperature") is None
 
     demand = hass.states.get("binary_sensor.heizung_lead_rooms_heating_demand")
     assert demand.state == ("on" if round(hold_c, 1) >= 30.0 else "off")

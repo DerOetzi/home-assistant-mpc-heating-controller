@@ -373,6 +373,9 @@
       "heating_unblock": {
         "name": "Entblocken"
       },
+      "flow_feedback_reset": {
+        "name": "Rückkopplung zurücksetzen"
+      },
       "legionella_start": {
         "name": "Legionellenschutz starten"
       }
@@ -443,8 +446,30 @@
       }
     },
     "sensor": {
-      "min_flow_temperature": {
-        "name": "Mindestvorlauftemperatur"
+      "supply": {
+        "name": "Versorgung",
+        "state": {
+          "undersupplied": "unterversorgt",
+          "supplied": "versorgt",
+          "oversupplied": "überversorgt",
+          "not_rated": "nicht bewertet"
+        },
+        "state_attributes": {
+          "reason": {
+            "name": "Grund",
+            "state": {
+              "window_open": "Fenster offen",
+              "frost_protection": "Frostschutz",
+              "no_heat": "Keine Wärme",
+              "radiator_not_heating": "Heizkörper heizt nicht",
+              "boost": "Boost",
+              "demand_unknown": "Ventilöffnung unbekannt"
+            }
+          }
+        }
+      },
+      "boost_flow_temperature": {
+        "name": "Boost-Vorlauf"
       },
       "gated_hold_flow_temperature": {
         "name": "Haltevorlauftemperatur mit Gate"
@@ -529,14 +554,8 @@
       "lead_hold_flow_temperature": {
         "name": "Haltevorlauf Leiträume"
       },
-      "lead_min_flow_temperature": {
-        "name": "Mindestvorlauf Leiträume"
-      },
       "hold_flow_reserve": {
         "name": "Vorlauf-Reserve Haltevorlauf"
-      },
-      "min_flow_reserve": {
-        "name": "Vorlauf-Reserve Mindestvorlauf"
       },
       "irradiance_north": {
         "name": "Einstrahlung Nordfassade"

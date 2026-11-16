@@ -23,24 +23,27 @@ export const TRANSLATIONS = {
     row_room_temp: "Room temperature",
     window_open: "Open",
     window_closed: "Closed",
-    row_min_flow: "Minimum flow temperature",
+    row_supply: "Supply",
     row_additional_heat: "Additional heat",
     row_additional_heat_learning: "{value} (learning: {ungated})",
 
-    // Card — minimum flow supply status
-    supply_no_requirement: "No requirement",
-    supply_surplus: "Coasting on stored heat",
-    supply_below_threshold: "Below operating threshold",
-    supply_source_inactive: "Source inactive",
-    supply_hint_no_requirement:
-      "Ambient temperature alone holds the target, no flow needed",
-    supply_hint_surplus:
-      "Room is above target on stored heat – the requirement returns once that is used up",
-    supply_hint_below_threshold:
-      "Requirement is below the heat pump's operating threshold – can never become binding",
-    supply_hint_source_inactive: "Heat pump is not running – cannot be judged",
-    supply_hint_undersupplied: "Flow temperature too low for this room",
-    supply_hint_sufficient: "Flow temperature is sufficient for this room",
+    // Card — supply, judged on the valves
+    supply_undersupplied: "Undersupplied",
+    supply_supplied: "Supplied",
+    supply_oversupplied: "Oversupplied",
+    supply_not_rated: "Not rated",
+    supply_reason_window_open: "window open",
+    supply_reason_frost_protection: "frost protection",
+    supply_reason_no_heat: "no heat",
+    supply_reason_radiator_not_heating: "radiator not heating",
+    supply_reason_boost: "boost",
+    supply_reason_demand_unknown: "valve opening unknown",
+    supply_hint_undersupplied:
+      "Valves fully open and the room below target – the flow is too low",
+    supply_hint_supplied: "Valves open enough – the flow fits this room",
+    supply_hint_oversupplied:
+      "Valves well closed or the room above target – the flow could be lower",
+    supply_hint_not_rated: "The valves say nothing about the flow right now",
 
     // Card — modes
     mode_boost: "Boost",
@@ -83,8 +86,8 @@ export const TRANSLATIONS = {
     // Card registration
     card_name: "Heating Controller",
     card_description:
-      "Room control for the Heating Controller — mode, setpoints and minimum " +
-      "flow temperature from a single device.",
+      "Room control for the Heating Controller — mode, setpoints and supply " +
+      "from a single device.",
 
     // Heating curve card
     curve_card_name: "Heating curve",
@@ -127,23 +130,26 @@ export const TRANSLATIONS = {
     row_room_temp: "Raumtemperatur",
     window_open: "Offen",
     window_closed: "Geschlossen",
-    row_min_flow: "Mindestvorlauftemperatur",
+    row_supply: "Versorgung",
     row_additional_heat: "Zusatzwärme",
     row_additional_heat_learning: "{value} (lernt: {ungated})",
 
-    supply_no_requirement: "Keine Anforderung",
-    supply_surplus: "Zehrt von gespeicherter Wärme",
-    supply_below_threshold: "Unter Betriebsschwelle",
-    supply_source_inactive: "Quelle inaktiv",
-    supply_hint_no_requirement:
-      "Außentemperatur allein hält das Ziel, kein Vorlauf nötig",
-    supply_hint_surplus:
-      "Raum liegt über Soll und zehrt vom Wärmepuffer – die Anforderung kommt zurück, sobald der aufgebraucht ist",
-    supply_hint_below_threshold:
-      "Anforderung liegt unter der Betriebsschwelle der Wärmepumpe – kann nie bestimmend werden",
-    supply_hint_source_inactive: "Wärmepumpe läuft gerade nicht – nicht bewertbar",
-    supply_hint_undersupplied: "Vorlauf zu niedrig für diesen Raum",
-    supply_hint_sufficient: "Vorlauf reicht für diesen Raum",
+    supply_undersupplied: "Unterversorgt",
+    supply_supplied: "Versorgt",
+    supply_oversupplied: "Überversorgt",
+    supply_not_rated: "Nicht bewertet",
+    supply_reason_window_open: "Fenster offen",
+    supply_reason_frost_protection: "Frostschutz",
+    supply_reason_no_heat: "keine Wärme",
+    supply_reason_radiator_not_heating: "Heizkörper heizt nicht",
+    supply_reason_boost: "Boost",
+    supply_reason_demand_unknown: "Ventilöffnung unbekannt",
+    supply_hint_undersupplied:
+      "Ventile voll offen und Raum unter Soll – Vorlauf zu niedrig",
+    supply_hint_supplied: "Ventile offen genug – Vorlauf passt für diesen Raum",
+    supply_hint_oversupplied:
+      "Ventile weit zu oder Raum über Soll – Vorlauf könnte tiefer",
+    supply_hint_not_rated: "Ventile sagen gerade nichts über den Vorlauf",
 
     mode_boost: "Boost",
 
@@ -205,7 +211,7 @@ export const TRANSLATIONS = {
     card_name: "Heating Controller",
     card_description:
       "Raumsteuerung für den Heating Controller — Modus, Solltemperaturen und " +
-      "Mindestvorlauf aus einem Gerät.",
+      "Versorgung aus einem Gerät.",
   },
 };
 

@@ -14,8 +14,7 @@ RADIATOR_CHECK_MIN_DEMAND_PCT = 80.0
 # A verdict clears once the TRV no longer asks for much heat: the room is
 # near its setpoint or got its heat elsewhere.
 RADIATOR_CHECK_CLEAR_DEMAND_PCT = 50.0
-# The room stays clearly below its mode setpoint, beyond what the setpoint
-# correction leaves and a sensor step.
+# The room stays clearly below its mode setpoint, beyond a sensor step.
 RADIATOR_CHECK_MIN_SHORTFALL_C = 0.5
 # A room rising this much gets heat from somewhere; room sensors step in
 # 0.1 K and swing by a step or two on their own.

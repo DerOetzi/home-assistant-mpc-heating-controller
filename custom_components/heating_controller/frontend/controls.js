@@ -237,42 +237,33 @@ export const ecoStepper = (stateObj, { hass, effectiveValue, setNumber }) => {
   return box;
 };
 
-// Maps supply_status straight to what the row shows. Four of the six states
-// can never mean "this is the temperature the source must hit" -- no
-// requirement exists, the room is coasting on stored heat, it could never
-// bind, or there is no source running to judge against -- so those read as
-// words rather than a misleading number.
-const SUPPLY_PRESENTATION = {
-  no_requirement: { textKey: "supply_no_requirement", verdict: "" },
-  surplus: { textKey: "supply_surplus", verdict: "idle" },
-  below_threshold: { textKey: "supply_below_threshold", verdict: "idle" },
-  source_inactive: { textKey: "supply_source_inactive", verdict: "idle" },
-  undersupplied: { verdict: "low" },
-  sufficient: { verdict: "ok" },
+// The supply sensor judges the room on its valves, like the flow feedback.
+const SUPPLY_VERDICTS = {
+  undersupplied: "low",
+  supplied: "ok",
+  oversupplied: "idle",
+  not_rated: "",
 };
 
-const SUPPLY_HINT_KEYS = {
-  no_requirement: "supply_hint_no_requirement",
-  surplus: "supply_hint_surplus",
-  below_threshold: "supply_hint_below_threshold",
-  source_inactive: "supply_hint_source_inactive",
-  undersupplied: "supply_hint_undersupplied",
-  sufficient: "supply_hint_sufficient",
-};
-
-// Returns { value, verdict, hint } for the minimum-flow row; the caller renders
-// it with the same row builder the detail sensors use.
+// Returns { value, verdict, hint } for the supply row; the caller renders it
+// with the same row builder the detail sensors use. Rated: state and highest
+// valve opening; not rated: state and why.
 export const supplyPresentation = (hass, stateObj) => {
-  const status = stateObj.attributes.supply_status;
-  const presentation = SUPPLY_PRESENTATION[status] ?? { verdict: "" };
-  const hintKey = SUPPLY_HINT_KEYS[status];
-  const value = presentation.textKey
-    ? t(hass, presentation.textKey)
-    : `${num(stateObj.state, 1, localeOf(hass))} °C` +
-      (presentation.verdict === "low" ? " ⚠" : "");
+  const status = stateObj.state;
+  if (!(status in SUPPLY_VERDICTS)) {
+    return { value: status ?? "", verdict: "" };
+  }
+  const { reason, demand_pct: demand } = stateObj.attributes;
+  let value = t(hass, `supply_${status}`);
+  if (status === "not_rated") {
+    if (reason) value += ` · ${t(hass, `supply_reason_${reason}`)}`;
+  } else if (demand !== null && demand !== undefined) {
+    value += ` · ${num(demand, 0, localeOf(hass))} %`;
+  }
+  if (status === "undersupplied") value += " ⚠";
   return {
     value,
-    verdict: presentation.verdict,
-    hint: hintKey ? t(hass, hintKey) : undefined,
+    verdict: SUPPLY_VERDICTS[status],
+    hint: t(hass, `supply_hint_${status}`),
   };
 };

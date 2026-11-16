@@ -360,6 +360,8 @@ async def test_a_switch_back_from_an_outage_shares_at_once(
     coordinator, calls = await _setup_sharing(
         hass, [_sharing_trv("gross"), _sharing_trv("klein")]
     )
+    hass.states.async_set("switch.heizung_gross_load_balancing_enable", "on")
+    await hass.async_block_till_done()
     calls.clear()
 
     hass.states.async_set("switch.heizung_klein_load_balancing_enable", "off")

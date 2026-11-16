@@ -313,3 +313,20 @@ async def test_feedback_kept_in_the_hub_store(hass: HomeAssistant) -> None:
     hub.flow_feedback.feedback_k = 2.0
 
     assert hub._export()["flow_feedback"]["feedback_k"] == 2.0
+
+
+async def test_reset_button_drops_the_feedback(hass: HomeAssistant) -> None:
+    await _setup(hass)
+    hub = _hub(hass)
+    hub.flow_feedback.feedback_k = 5.0
+
+    await hass.services.async_call(
+        "button",
+        "press",
+        {"entity_id": "button.vorlauf_reset_flow_feedback"},
+        blocking=True,
+    )
+
+    assert hub.flow_feedback.feedback_k == 0.0
+    assert hub.flow_feedback.last_change_ts is not None
+    assert hub._export()["flow_feedback"]["feedback_k"] == 0.0

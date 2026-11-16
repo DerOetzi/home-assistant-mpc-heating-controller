@@ -70,7 +70,7 @@ terms are still being learned, their unconfirmed total follows in brackets, e.g.
 
 **Heating control** (expanded): a Comfort/Eco/Frost-protection mode switcher (always
 tappable, independent of Boost/Unblock), a comfort-temperature slider, an eco-offset
-stepper, and the minimum flow temperature row (see below).
+stepper, and the supply row (see below).
 
 ## Editing the lists
 
@@ -107,21 +107,19 @@ gates comfort mode for that room specifically, on top of the shared house-wide s
 Each condition's icon and label per state are customizable in the editor; without an
 override they fall back to a generic "On"/"Off".
 
-## Minimum flow temperature
+## Supply
 
-This row shows what your heat source's flow temperature needs to be for this room's
-radiators to keep up with current demand:
+This row shows whether the flow reaches this room, read from its valves the same way the
+flow feedback reads them (`sensor.<room>_supply`):
 
 | Shown value | Meaning |
 |---|---|
-| "No requirement" | The room isn't asking for heat right now. |
-| "Below operating threshold" | The heat source isn't running warm enough yet to compare against. |
-| "Source inactive" | No heat source is currently running. |
-| A temperature with ⚠ | The heat source's actual flow temperature is **below** what this room needs — it's under-supplied. |
-| A plain temperature | The heat source is meeting this room's requirement. |
+| "Undersupplied · 100 % ⚠" | Valves (nearly) fully open and the room below its target — the flow is too low. |
+| "Supplied · 85 %" | Valves open enough to keep the flow from going down. |
+| "Oversupplied · 30 %" | Valves well closed, or open only with the room above its target — the flow could be lower. |
+| "Not rated · reason" | The valves say nothing about the flow right now: window open, frost protection, no heat (heat pump off, below its threshold, hot water), radiator not heating, boost, or valve opening unknown. |
 
-If several rooms share one heat source, whichever room shows the highest required
-temperature is the one currently limiting the system.
+The percentage is the room's highest valve opening.
 
 ## What the card doesn't cover
 

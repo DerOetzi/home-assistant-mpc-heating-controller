@@ -75,12 +75,13 @@ from .const import (
     Construction,
     CurveEnd,
     DesignTemperatureSystem,
-    FlowSupplyStatus,
     HeatEmitterType,
     HeatMode,
     PanelRadiatorType,
+    RoomSupply,
+    SupplyReason,
 )
-from .control.flow_feedback import DemandSample
+from .control.flow_feedback import DemandSample, holds, wants_more
 from .controller.mpc.controller import (
     FLOW_RECOVERY_HORIZON_S,
     FlowGateConfig,
@@ -558,8 +559,7 @@ class HeatingRoomCoordinator:
 
         room_sensor_entity = self.data.get(CONF_ROOM_SENSOR_ENTITY)
         if room_sensor_entity:
-            room_sensor_temp_c = self._float_state(room_sensor_entity)
-            self.mpc.set_room_sensor_temperature(room_sensor_temp_c)
+            self._update_room_sensor(self.hass.states.get(room_sensor_entity))
 
         self.mpc.set_outdoor_temperature(
             self._float_state(self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY])
@@ -706,6 +706,14 @@ class HeatingRoomCoordinator:
         ]
         return max(reported, default=None)
 
+    def _update_room_sensor(self, state: State | None) -> None:
+        # The poll hands in an unchanged state again: its age is that of the
+        # sensor's last report, or a sensor that hangs would never go stale.
+        self.mpc.set_room_sensor_temperature(
+            self._float_from_state(state),
+            state.last_reported.timestamp() if state is not None else None,
+        )
+
     def _update_valve_position(self, index: int) -> None:
         entity_id = self._valve_position_entities[index]
         if entity_id:
@@ -821,8 +829,7 @@ class HeatingRoomCoordinator:
             self._update_valve_position(self._valve_position_entities.index(entity_id))
 
         elif entity_id == self.data.get(CONF_ROOM_SENSOR_ENTITY):
-            room_sensor_temp_c = self._float_from_state(new_state)
-            self.mpc.set_room_sensor_temperature(room_sensor_temp_c)
+            self._update_room_sensor(new_state)
 
         elif entity_id == self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY]:
             self.mpc.set_outdoor_temperature(self._float_from_state(new_state))
@@ -994,9 +1001,7 @@ class HeatingRoomCoordinator:
 
         self.normal_heat_mode = self.state.current_heat_mode
         self.normal_target_temperature_c = normal_target
-        normal_compute = self.mpc.compute(
-            normal_target, apply_side_effects=False, recovery=self.flow_boost_active
-        )
+        normal_compute = self.mpc.compute(normal_target, apply_side_effects=False)
         self.normal_result = normal_compute.result if normal_compute.valid else None
 
         # Frost protection for an open window is no mode change for the
@@ -1004,7 +1009,6 @@ class HeatingRoomCoordinator:
         actual_compute = self.mpc.compute(
             mode_target,
             mode_target_temperature_c=normal_target,
-            recovery=self.flow_boost_active,
         )
         if actual_compute.valid:
             self.last_result = actual_compute.result
@@ -1077,20 +1081,42 @@ class HeatingRoomCoordinator:
         Left out: an open window, frost protection, a radiator that does not
         heat, a running boost, and a TRV whose opening is unknown.
         """
-        if (
-            self.state.is_window_open
-            or self.current_heat_mode is HeatMode.FROST_PROTECTION
-            or self.radiators_not_heating
-            or self.flow_boost_active
-        ):
-            return None
+        return self._demand_sample()[0]
+
+    @property
+    def supply(self) -> tuple[RoomSupply, SupplyReason | None, DemandSample | None]:
+        """How the flow supplies the room, judged like the feedback does.
+
+        Without heat at the valves (heat pump off, below the threshold, hot
+        water) they stand open for nothing: not rated.
+        """
+        sample, reason = self._demand_sample()
+        if reason is None and (not self.trv_active or self.mpc.hot_water_charging):
+            reason = SupplyReason.NO_HEAT
+        if sample is None or reason is not None:
+            return RoomSupply.NOT_RATED, reason, sample
+        if wants_more(sample):
+            return RoomSupply.UNDERSUPPLIED, None, sample
+        if holds(sample):
+            return RoomSupply.SUPPLIED, None, sample
+        return RoomSupply.OVERSUPPLIED, None, sample
+
+    def _demand_sample(self) -> tuple[DemandSample | None, SupplyReason | None]:
+        if self.state.is_window_open:
+            return None, SupplyReason.WINDOW_OPEN
+        if self.current_heat_mode is HeatMode.FROST_PROTECTION:
+            return None, SupplyReason.FROST_PROTECTION
+        if self.radiators_not_heating:
+            return None, SupplyReason.RADIATOR_NOT_HEATING
+        if self.flow_boost_active:
+            return None, SupplyReason.BOOST
         demands = [
             self._trv_demand_pct(index)
             for index, entity_id in enumerate(self._valve_position_entities)
             if entity_id
         ]
         if not demands or any(demand is None for demand in demands):
-            return None
+            return None, SupplyReason.DEMAND_UNKNOWN
         target_c = self._settled_target_c
         room_c = self._room_sensor_temperature_c()
         if room_c is None and self.normal_result is not None:
@@ -1098,7 +1124,7 @@ class HeatingRoomCoordinator:
         deficit_c = (
             None if target_c is None or room_c is None else round(target_c - room_c, 2)
         )
-        return DemandSample(self.room_name, max(demands), deficit_c)
+        return DemandSample(self.room_name, max(demands), deficit_c), None
 
     def _room_sensor_temperature_c(self) -> float | None:
         """The room sensor's reading; None without one or while it is stale."""
@@ -1342,17 +1368,12 @@ class HeatingRoomCoordinator:
         return self._flow_temperature_c
 
     @property
-    def normal_min_flow_temperature_c(self) -> float | None:
-        result = self.normal_result
-        return result.recommended_flow_temperature_c if result else None
-
-    @property
     def normal_hold_flow_temperature_c(self) -> float | None:
         """The ungated hold requirement -- what the room would need at setpoint.
 
-        Unlike normal_min_flow_temperature_c this keeps following the weather
-        while the surplus gate is closed, which is what makes the gate's effect
-        (and the seasonal heating limit behind it) observable.
+        Unlike the gated hold this keeps following the weather while the
+        surplus gate is closed, which is what makes the gate's effect (and the
+        seasonal heating limit behind it) observable.
         """
         result = self.normal_result
         return result.hold_flow_temperature_c if result else None
@@ -1415,24 +1436,3 @@ class HeatingRoomCoordinator:
     def normal_flow_gate_closed(self) -> bool | None:
         result = self.normal_result
         return result.flow_gate_closed if result else None
-
-    @property
-    def flow_supply_status(self) -> FlowSupplyStatus:
-
-        required = self.normal_min_flow_temperature_c
-        if required is None or required <= 0:
-            if self.normal_flow_gate_closed:
-                return FlowSupplyStatus.SURPLUS
-            return FlowSupplyStatus.NO_REQUIREMENT
-
-        if required < self.flow_threshold_c:
-            return FlowSupplyStatus.BELOW_THRESHOLD
-
-        if not self.trv_active:
-            return FlowSupplyStatus.SOURCE_INACTIVE
-
-        current = self.current_flow_temperature_c
-        if current is not None and current >= required:
-            return FlowSupplyStatus.SUFFICIENT
-
-        return FlowSupplyStatus.UNDERSUPPLIED

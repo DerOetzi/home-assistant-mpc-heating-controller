@@ -1,4 +1,4 @@
-# Offener Umsetzungsplan (Stand 2026-11-15)
+# Offener Umsetzungsplan (Stand 2026-11-16)
 
 Nur was noch zu tun ist, mit den Angaben für die Umsetzung. Erledigtes steht im Code, in `mpc-guide.md` und in der Git-Historie. Getroffene Entscheidungen stehen im Skill `heating-controller` (`references/entscheidungen.md`).
 
@@ -30,9 +30,9 @@ Raum regelt der TRV selbst (eigener PI, Sollwert über `climate.set_temperature`
 
 | Schritt | Was | Bedingung für Start |
 |---|---|---|
-| 1 | 1d Kapazität beobachten | läuft seit Neustart 15.11., bis Neustart A |
+| 1 | 1d Kapazität beobachten | läuft, Daten ab Neustart A (15.11.) |
 | 2 | 2a–2g Umbau TRV-Ansteuerung | umgesetzt, Neustart A am 15.11. erfolgt; Beobachtung läuft |
-| 3 | Vorlauf-Rückkopplung, Raumsensor an TRV + Lastausgleich (Sollwertkorrektur entfernt), Neustart B | umgesetzt, Neustart B ausstehend; danach `radiator_covered` Wohnzimmer groß an (Nutzer), anzeigen was `current_temperature` mit externem Sensor zeigt; danach `feedback_k`, Einfrieren und Leit-Demand in Tagesauswertung beobachten |
+| 3 | Vorlauf-Rückkopplung, Raumsensor an TRV + Lastausgleich (Sollwertkorrektur entfernt), Neustart B | umgesetzt, Neustart B am 16.11. erfolgt; offen: `radiator_covered` Wohnzimmer groß an (Nutzer), anzeigen was `current_temperature` mit externem Sensor zeigt; danach `feedback_k`, Einfrieren und Leit-Demand in Tagesauswertung beobachten |
 | 4 | 4a Gewinne auswerten | parallel, kein Code |
 | 5 | Boiler-Modus TRV (5, ~01.12.) | Z2M 2.15.0 da, kein anderer Neustart in den 3 Tagen davor |
 | 6 | 4b Gewinne im Lerner, 4c Vorsteuerung mit Gewinnen + Boost, Neustart C | Nutzer hat 4a freigegeben, 3 läuft stabil |
@@ -43,7 +43,7 @@ Raum regelt der TRV selbst (eigener PI, Sollwert über `climate.set_temperature`
 
 1a–1c (Sprungstrecken, Untergrenze 0,15, Sonnensperre über Einstrahlung) seit Neustart 15.11. aktiv.
 
-### 1d. Auswirkungen prüfen (bis Neustart A, kein Code)
+### 1d. Auswirkungen prüfen (kein Code)
 
 Wenige Tage, Moduswechsel selten (nur Dani, Urlaub) — Ergebnis eher Plausibilität als Bewertung. In Tagesauswertung je Raum:
 - `sensor.<raum>_kapazitatsfaktor` Verlauf; Zustände und `last_stretch_*` am Kapazitäts-Lernstatus.
@@ -102,9 +102,8 @@ Doku: `mpc-guide.md` „Gains and sun", „Flow control"; Offset-Empfehlung neu 
 ## 5. Beobachten (laufend, Tagesauswertung)
 
 Sofort durch Nutzer:
-- Raumsensor Rebekka (`sensor.sensor_rebekka_temperature`) meldet nur ~stündlich — Reporting-Intervall am Gerät prüfen (TRV braucht Raumwert ≥ alle 3 h, verdeckt alle 30 min).
+- Raumsensor Rebekka (`sensor.sensor_rebekka_temperature`) meldet nur ~stündlich — Reporting-Intervall am Gerät prüfen (TRV braucht Raumwert ≥ alle 3 h, verdeckt alle 30 min). Raumsensor gilt nach 150 min ohne Meldung als veraltet (`room_sensor_fallback`).
 - Arbeitszimmer unter Soll bei 100 % Ventil: vermutlich Voreinstellung — prüfen.
-- `algorithm_scale_factor` aller TRVs auf 1 vor Neustart A.
 
 Mit Termin:
 - Boiler-Modus TRV: nach Z2M 2.15.0 (~01.12., Schreib-Fix `heating_system_mode` UINT8) alle 13 `select.heizung_*_heating_system_mode` auf `default_heating`. Nur nach Nutzer-Okay. Danach Takten und Raumfehler je TRV gegen Tage davor.

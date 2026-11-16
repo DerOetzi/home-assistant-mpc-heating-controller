@@ -32,7 +32,7 @@ from .types import (
     UaBalanceInfo,
 )
 
-# How quickly the minimum flow temperature asks to bring a room back to its
+# How quickly the boost flow asks to bring a room back to its
 # setpoint. Long: a heat pump recovers more
 # efficiently at a lower flow over a longer time, and the heat source serves
 # the maximum over all rooms, so one slightly cool room must not drive the
@@ -250,8 +250,11 @@ class RoomMpcController:
     def set_trv_temperature(self, index: int, value: float | None) -> None:
         self._sensors.set_trv_temperature(index, value)
 
-    def set_room_sensor_temperature(self, value: float | None) -> None:
-        self._sensors.set_room_sensor_temperature(value)
+    def set_room_sensor_temperature(
+        self, value: float | None, reported_ts: float | None = None
+    ) -> None:
+        """reported_ts: when the sensor last reported, now if not given."""
+        self._sensors.set_room_sensor_temperature(value, reported_ts)
 
     def set_valve_position(
         self, index: int, value: float | None, reported_ts: float | None = None
@@ -279,14 +282,12 @@ class RoomMpcController:
         target_temperature_c: float,
         apply_side_effects: bool = True,
         mode_target_temperature_c: float | None = None,
-        recovery: bool = True,
     ) -> RoomMpcComputeResult:
         """Compute the flow requirements and feed the learner.
 
         The TRVs regulate the room themselves; the demand is what their
         valves report. The learner judges the room on the mode's setpoint,
-        target_temperature_c where none is given. Without recovery the
-        recovery flow is still computed but not part of the recommendation.
+        target_temperature_c where none is given.
         """
         now_ts = time.time()
         if apply_side_effects:
@@ -380,9 +381,6 @@ class RoomMpcController:
         gated_hold_flow_c = (
             0.0 if flow_gate_closed else (hold_flow_temperature_c or 0.0)
         )
-        recommended_flow_temperature_c = max(
-            gated_hold_flow_c, recovery_flow.flow_temperature_c if recovery else 0.0
-        )
 
         if apply_side_effects:
             water_flowing = self._heat_available and not mpc_input.hot_water_charge
@@ -402,7 +400,6 @@ class RoomMpcController:
         result = RoomMpcResult(
             input=mpc_input,
             available_heating_power_w=available_heating_power_w,
-            recommended_flow_temperature_c=recommended_flow_temperature_c,
             hold_flow_temperature_c=hold_flow_temperature_c,
             gated_hold_flow_temperature_c=gated_hold_flow_c,
             recovery_flow_temperature_c=recovery_flow.flow_temperature_c,

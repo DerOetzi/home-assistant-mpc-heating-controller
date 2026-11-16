@@ -1,7 +1,7 @@
 """The hub: the house-wide part of the integration.
 
 Holds the rooms of one installation and derives the figures of the lead
-rooms from them -- the hold and minimum flow temperatures, the heating
+rooms from them -- the hold and boost flow temperatures, the heating
 demand and the reserve of the heat pump's curve.
 """
 
@@ -263,6 +263,11 @@ class HeatingHub:
                 flow.numbers["curve_outdoor_warm"],
             )
 
+    def reset_flow_feedback(self) -> None:
+        """Drop the valve feedback to zero, e.g. after a change of its rules."""
+        self.flow_feedback.reset(time.time())
+        self._store.async_delay_save(self._export, HUB_SAVE_DELAY_S)
+
     def set_hot_water(self, hot_water: HotWaterDevice) -> None:
         """Rooms take the charges the hot water device sees."""
         self.hot_water = hot_water
@@ -393,13 +398,6 @@ class HeatingHub:
         )
 
     @property
-    def lead_min_flow(self) -> LeadValue:
-        """Flow the flow lead rooms need after the gate, boost included."""
-        return self._lead(
-            CONF_LEAD_FLOW, lambda room: room.normal_min_flow_temperature_c
-        )
-
-    @property
     def lead_feedforward_flow(self) -> LeadValue:
         """Hold flow of the flow lead rooms, ungated: the feedforward."""
         return self._lead(
@@ -510,7 +508,3 @@ class HeatingHub:
     @property
     def hold_flow_reserve(self) -> float | None:
         return self._reserve(self.lead_hold_flow)
-
-    @property
-    def min_flow_reserve(self) -> float | None:
-        return self._reserve(self.lead_min_flow)

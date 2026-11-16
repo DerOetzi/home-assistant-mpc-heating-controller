@@ -237,7 +237,7 @@ learned steady gain, day profile and sun terms (see [Gains and sun](#gains-and-s
 
 Heat the radiators do not supply — people, cooking, appliances, neighbouring rooms, the sun —
 is learned on two levels. **At this stage it is only learned and shown; the control, the
-hold and the minimum flow temperature do not use it yet.** Both levels use recursive least
+hold and the boost flow do not use it yet.** Both levels use recursive least
 squares with forgetting, bounds and damping of outliers (after
 [Thermocast](https://github.com/drumtorben/thermocast)).
 
@@ -309,8 +309,8 @@ heat this room's actual radiators can put out at your real system's flow/return
 temperatures — this sets the ceiling on what the model can ever ask the room's own radiators
 for, independent of how well-calibrated the thermal model itself is.
 
-If a room's minimum flow temperature (shown on its card) frequently reads as "undersupplied
-⚠" even once the model has had time to learn, its radiators are likely genuinely
+If a room's supply (shown on its card) frequently reads as "undersupplied ⚠" while the
+flow control sits at its upper limit, its radiators are likely genuinely
 undersized for the room relative to what was entered — worth revisiting the design heat
 load / radiator dimensions for that room, or expecting that room to be the one that sets
 the system's flow temperature.
@@ -482,12 +482,19 @@ Each room runs its model alongside the room as a state observer (sensor
 
 ## Sensor reliability
 
-Room and outdoor temperature readings are checked against **max sensor age (s)**: once a
+TRV and outdoor temperature readings are checked against **max sensor age (s)**: once a
 reading is older than that, it's treated as unavailable rather than trusted indefinitely, and
 the room pauses its calculation until a fresh reading arrives. The age counts from when the
 room last read the entity, not from its `last_changed`: every room reads all its inputs
 every 5 minutes, so an outdoor sensor that reports whole degrees and keeps one value for
 hours stays fresh. An entity that turns `unavailable` or `unknown` counts as missing at once.
+
+The room sensor is stricter, because its reading goes to the TRVs: its age counts from its
+last report (`last_reported`), and after 150 minutes without one it is stale. A battery
+sensor that hangs stays available with its last value; the room then falls back to the TRVs'
+own temperatures (`room_sensor_fallback`) and sends them no room temperature any more. A
+sensor with a constant reading reports about once an hour, so one lost report is covered.
+With max sensor age 0 no reading ever goes stale.
 Implausible single-sample jumps are also filtered rather than acted on immediately, so one
 noisy reading doesn't swing a room's demand; a jump that repeats over a few polls is
 accepted as a real change.
@@ -495,7 +502,7 @@ accepted as a real change.
 The flow temperature is exempt from that filter. Its jumps are physical —
 compressor start, defrost, or a hot-water charge showing up on a shared leaving-water sensor
 — and it only feeds the radiators' output (observer, heat balance, radiator check), never
-the minimum flow temperature (see below).
+the hold or boost flow (see below).
 
 Without an outdoor temperature the model cannot calculate, but the TRVs need nothing from
 it: they keep getting the mode's setpoint (see [TRV control](#trv-control)). Learning
@@ -561,11 +568,11 @@ values.
 
 ## Multiple rooms sharing one heat source
 
-Each room independently reports its own required minimum flow temperature (see the card's
-"Minimum flow temperature" row). If your heat source's flow temperature is shared across
-several rooms, the room asking for the highest flow temperature at any moment is the one
-actually determining what the shared source needs to deliver — worth keeping in mind when
-tuning any individual room's design values.
+Each room independently reports the flow it needs to hold its setpoint, and its supply
+judged on its valves (see the card's "Supply" row). If your heat source's flow temperature
+is shared across several rooms, the room asking for the highest flow temperature at any
+moment is the one actually determining what the shared source needs to deliver — worth
+keeping in mind when tuning any individual room's design values.
 
 The hub sums this up over the **lead rooms**, marked per room by two checkboxes:
 
@@ -574,15 +581,26 @@ The hub sums this up over the **lead rooms**, marked per room by two checkboxes:
   threshold (the threshold entity if linked, else the hub's fixed threshold). Rooms that
   live off their neighbours or are heated by something else are better left out, or they
   keep the heat pump running for nothing.
-- **Lead room for the flow temperature** — *Lead rooms minimum flow temperature* is the
-  highest minimum flow (flow boost included) among them. The flow control takes their
-  ungated hold flow as feedforward and their valve openings as feedback (see
-  [Flow control](#flow-control)).
+- **Lead room for the flow temperature** — the flow control takes their ungated hold flow
+  as feedforward, their boost flow as a floor during a flow boost and their valve openings
+  as feedback (see [Flow control](#flow-control)).
 
-With an effective heating curve entity on the hub, *Flow reserve hold* and *Flow reserve
-minimum* report the curve minus each value: negative means the curve does not reach what a
-lead room needs. Both values are rounded to 0.1 K; the reserves are unavailable while the
-lead flow is 0 (all lead rooms in their surplus buffer).
+With an effective heating curve entity on the hub, *Flow reserve hold* reports the curve
+minus *Lead rooms hold flow temperature*: negative means the curve does not reach what a
+lead room needs. It is rounded to 0.1 K and unavailable while the lead flow is 0 (all lead
+rooms in their surplus buffer).
+
+### Supply per room
+
+`sensor.<room>_supply` judges the flow on the room's valves with the same rules as the
+flow feedback: **undersupplied** when the feedback would step up for this room (highest
+valve ≥ 98 % and the room not above target, or > 90 % and at least 0.1 K short),
+**supplied** when it holds the flow (≥ 80 % and not more than 0.2 K above target),
+**oversupplied** otherwise. It is **not rated** while the valves say nothing about the
+flow; the `reason` attribute names why: window open, frost protection, no heat (heat
+source off, flow below the threshold, hot-water charge), radiator not heating, boost, or
+a valve opening that is unknown. Attributes `demand_pct` and `deficit_c` show what was
+judged. Unlike the feedback it covers every room, lead room or not.
 
 ### Heating season
 
@@ -612,15 +630,22 @@ works out:
   rooms with an open window, in frost protection, with a radiator that does not heat,
   in a flow boost or with an unknown opening.
   - **Up** one actuator step: a room above 90 % open and at least 0.1 K below its target
-    (mode setpoint against the room sensor), or a room at 98 % or more. At most every 30 minutes, the first
+    (mode setpoint against the room sensor), or a room at 98 % or more that is not above
+    its target (or whose room value is unknown). At most every 30 minutes, the first
     30 minutes after a start too.
-  - **Down** one step: the lead demand below 80 % for 2 hours at a stretch; then again
-    after another 2 hours.
+  - **Down** one step: a count reaches 1 hour; then the count starts over. It runs while
+    no room holds the flow (80 % or more open); a room holding at its target (less than
+    0.1 K short) counts it back, never below 0; a room holding at least 0.1 K short, or
+    one that wants more, sets it to 0. A room 0.2 K or more above its target does not
+    hold: its valve is open on the TRV's own, colder reading, more flow would not help
+    it. Without any usable room the count waits. It starts at 0 after a restart.
   - Limited to ±5 K. No step that the target limits would cut off anyway.
   - **Frozen** (no step, the timers stand still) while *Write flow* is off, the heat source
     does not heat or is unreachable, a hot-water charge runs, the measured flow is below
     the threshold (defrost), the lead flow is missing (fallback), a flow boost runs, or the
     last wanted value has not gone out (budget, hold time). The value survives restarts.
+  - Button *Reset flow feedback* (flow device, config) sets it to 0; the next step up
+    comes 30 minutes later at the earliest, as after a start.
 - **Target flow** = feedforward + feedback, at most feedforward + 6 K, the curve plus the
   highest offset (setpoint mode: the highest setpoint) and the radiators' design flow.
   A **flow boost** (a lead room recovering after its mode setpoint went up) raises it to
@@ -630,7 +655,10 @@ works out:
   `fallback`; further attributes `feedforward_flow_c`, `room`, `feedback_k`,
   `boost_flow_c`, `boost_room`.
 - *Flow feedback* attributes: `lead_demand_pct`, `lead_room`, `lead_deficit_c`,
-  `feedforward_flow_c`, `frozen`, `frozen_reason`, `last_change`.
+  `feedforward_flow_c`, `frozen`, `frozen_reason`, `down_timer_min` (the down count),
+  `last_change`. The lead is the room
+  that decides: one that wants more, else the most open one that holds the flow, else
+  the most open one.
 - **Actuator value**: in offset mode target minus the heat source's curve at the current
   outdoor value, in setpoint mode the target itself. Rounded up to the step, so the flow
   never falls below the target; clamped to the limits.
@@ -719,18 +747,19 @@ or on a draw. The reason sensor keeps the reason of the last switch while
 the pump stays in that state; *unknown* only after a start or when the pump was switched
 from outside.
 
-## How the minimum flow temperature is computed
+## How the hold and boost flow are computed
 
-The minimum flow temperature is the larger of two requirements:
+Each room computes two flow requirements:
 
-- **Hold** — the flow needed to hold the setpoint at the current outdoor temperature (see
-  the surplus gate below).
-- **Recovery** (flow boost) — only after the mode's setpoint went up by at least 0.5 K
-  (not after a window closed), until the room is within 0.2 K
+- **Hold** (`sensor.<room>_hold_flow_temperature`) — the flow needed to hold the setpoint
+  at the current outdoor temperature (see the surplus gate below).
+- **Recovery** (`sensor.<room>_boost_flow_temperature`) — only after the mode's setpoint
+  went up by at least 0.5 K (not after a window closed), until the room is within 0.2 K
   of it or six hours have passed: the lowest flow that brings it back within six hours
-  with its valves fully open. Outside a flow boost the recovery flow is still shown
-  (`recovery_flow_temperature_c`) but not asked for; the valve feedback of the flow
-  control covers a room that stays short. It is found by simulating the room with the same
+  with its valves fully open. The sensor reads 0 outside a flow boost; the recovery flow
+  is still shown there as attribute `recovery_flow_temperature_c` but not asked for, the
+  valve feedback of the flow control covers a room that stays short. It is found by
+  simulating the room with the same
   radiator, heat-loss and capacity model the observer uses, including the learned
   factors. A room within 0.1 K of its setpoint counts as there, and a room whose outdoor
   temperature is above its setpoint asks for no recovery at all.
@@ -754,8 +783,7 @@ The search runs from 10 K below the room's **flow threshold** up to the flow tem
 the configured **design temperature system** (55 °C for 55/45). A requirement below the
 threshold stays visible as such rather than being rounded up to what the source delivers at
 minimum. If even the design flow cannot bring the room back within six hours, the
-requirement reads the design flow and the `recovery_flow_saturated` attribute is set. The
-recovery part on its own is exposed as `recovery_flow_temperature_c`.
+recovery flow reads the design flow and the `recovery_flow_saturated` attribute is set.
 
 The flow threshold is not a number in the room's configuration but an entity linked in the
 **Sensors and signals** step: an `input_number` helper, a `number` entity, or a `sensor` a
@@ -770,14 +798,10 @@ report; without the tolerance every room would shut and reopen. The heat source 
 
 ## The surplus gate
 
-A room's minimum flow temperature has a floor: the flow needed to *hold* its setpoint at
-the current outdoor temperature. That floor is what keeps the source from dropping its
-flow the moment a room reaches its setpoint, which would only cool it down again.
-
-The floor is computed at the setpoint, though, not at the room's actual temperature — so
-on its own it would keep reporting a requirement for a room sitting well above setpoint on
-stored heat, typically after a warm spell in spring or autumn. The surplus gate suppresses
-the floor in exactly that case. It closes only when both signals agree:
+The hold flow is computed at the setpoint, not at the room's actual temperature — so on its
+own it would keep reporting a requirement for a room sitting well above setpoint on stored
+heat, typically after a warm spell in spring or autumn. For the heating limit the surplus
+gate suppresses it in exactly that case. It closes only when both signals agree:
 
 - the TRVs report their valves shut (the room's valve opening at 0 %), **and**
 - the room is above its current target by more than **"close above setpoint"**
@@ -795,17 +819,10 @@ surplus falls below **"reopen below setpoint"** — restoring a requirement is t
 direction. The two different thresholds are what stops a room drifting around the
 deadband from flapping the requirement on and off.
 
-While the gate is closed the card's minimum-flow row reads "Coasting on stored heat" and
-the `sensor.<room>_min_flow_temperature` entity reads 0. That is distinct from "No
-requirement", which means the outdoor temperature alone holds the setpoint — the surplus
-case will come back once the stored heat is used up, the no-requirement case will not until
-the weather turns.
-
-The gated hold on its own — without the recovery part — is exposed as
-`sensor.<room>_gated_hold_flow_temperature`. It is the signal for deciding whether the
-heating season is on: it rises with the weather, drops to 0 while a room coasts on stored
-heat, and ignores a room that is merely below setpoint after airing, which the minimum flow
-temperature does count.
+The gated hold is exposed as `sensor.<room>_gated_hold_flow_temperature` (attribute
+`flow_gate_closed`). It is the signal for deciding whether the heating season is on: it
+rises with the weather, drops to 0 while a room coasts on stored heat, and ignores a room
+that is merely below setpoint after airing.
 
 Because the gated value reads 0 for much of the shoulder season, the underlying number
 stays available separately as `sensor.<room>_hold_flow_temperature`. It reports the

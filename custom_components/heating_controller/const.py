@@ -185,20 +185,24 @@ class HeatMode(StrEnum):
     FROST_PROTECTION = "frost_protection"
 
 
-class FlowSupplyStatus(StrEnum):
-    """The minimum-flow-temperature sensor's situation, in one value.
+class RoomSupply(StrEnum):
+    """How the flow supplies a room, judged on its valves like the feedback."""
 
-    Replaces comparing sufficiently_supplied/below_operating_threshold
-    separately -- those alone cannot tell "no requirement" from "requirement
-    exists but can never bind" from "source isn't even running".
-    """
-
-    NO_REQUIREMENT = "no_requirement"
-    SURPLUS = "surplus"
-    BELOW_THRESHOLD = "below_threshold"
-    SOURCE_INACTIVE = "source_inactive"
     UNDERSUPPLIED = "undersupplied"
-    SUFFICIENT = "sufficient"
+    SUPPLIED = "supplied"
+    OVERSUPPLIED = "oversupplied"
+    NOT_RATED = "not_rated"
+
+
+class SupplyReason(StrEnum):
+    """Why a room's supply is not rated."""
+
+    WINDOW_OPEN = "window_open"
+    FROST_PROTECTION = "frost_protection"
+    NO_HEAT = "no_heat"
+    RADIATOR_NOT_HEATING = "radiator_not_heating"
+    BOOST = "boost"
+    DEMAND_UNKNOWN = "demand_unknown"
 
 
 class HeatEmitterType(StrEnum):
@@ -250,8 +254,6 @@ class RoomTemperatureStrategy(StrEnum):
 class LearningStatus(StrEnum):
     LEARNED = "learned"
     DISABLED = "disabled"
-    NO_CORRECTION = "no_correction"
-    DISTURBED = "disturbed"
     SUPPRESSED = "suppressed"
     WAITING_INTERVAL = "waiting_interval"
     OUTSIDE_WINDOW = "outside_window"
@@ -282,7 +284,7 @@ class UaBalanceOutcome(StrEnum):
     # The outdoor temperature is missing: the TRVs hold the base setpoint on
     # their own, the radiator heat is unknown.
     OUTDOOR_TEMPERATURE_MISSING = "outdoor_temperature_missing"
-    # The valves stood fully open with the room below its target band for
+    # The valves stood fully open with the room below its setpoint for
     # most of the stretch: the heat assumed for a full opening is the least
     # certain one (a flow-limited radiator gives off less).
     VALVE_SATURATED = "valve_saturated"

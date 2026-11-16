@@ -34,6 +34,12 @@ SENSOR_OUTLIER_DRIFT_MAX_INTERVAL_S = 2 * SENSOR_POLL_INTERVAL_MINUTES * 60
 # battery device that hangs stays available with its last values. A TRV with
 # constant values reports about once an hour; the age leaves room for that.
 VALVE_POSITION_MAX_AGE_S = 75 * 60
+# The room sensor counts as stale once it reported nothing for this long. Its
+# age runs from its last report, not from its last change: a battery sensor
+# that hangs stays available with its last value, and that value goes to the
+# TRVs as their room temperature. A sensor with a constant reading reports
+# about once an hour; the age leaves room for one lost report.
+ROOM_SENSOR_MAX_AGE_S = 150 * 60
 
 
 class SensorEntry:
@@ -177,7 +183,9 @@ class RoomMpcSensors:
             else None
             for index, trv in enumerate(trvs[:MAX_TRV_COUNT])
         ]
-        self._room_sensor = SensorEntry(max_age_s, name="room")
+        self._room_sensor = SensorEntry(
+            ROOM_SENSOR_MAX_AGE_S if max_age_s > 0 else 0.0, name="room"
+        )
         self._outdoor_temperature_sensor = SensorEntry(max_age_s, name="outdoor")
         # Flow temperature jumps are physical (compressor start, defrost, a DHW
         # charge seen on a shared leaving-water sensor), not measurement noise.

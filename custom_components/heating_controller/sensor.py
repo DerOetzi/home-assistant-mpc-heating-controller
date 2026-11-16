@@ -27,6 +27,7 @@ from .const import (
     CONF_LEAD_FLOW,
     CapacityOutcome,
     CurveEnd,
+    RoomSupply,
     Surface,
     UaBalanceOutcome,
 )
@@ -58,13 +59,12 @@ async def async_setup_entry(
     hub: HeatingHub = entry.runtime_data
     hub_entities: list[SensorEntity] = [
         LeadHoldFlowTemperatureSensor(hub),
-        LeadMinFlowTemperatureSensor(hub),
         HeatingDemandHoursSensor(hub),
         HeatingSeasonLastDemandSensor(hub),
         WriteBudgetSensor(hub),
     ]
     if hub.has_flow_curve:
-        hub_entities += [HoldFlowReserveSensor(hub), MinFlowReserveSensor(hub)]
+        hub_entities.append(HoldFlowReserveSensor(hub))
     async_add_flow_entities(
         entry,
         async_add_entities,
@@ -108,7 +108,8 @@ async def async_setup_entry(
         entry,
         async_add_entities,
         lambda coordinator: [
-            MinFlowTemperatureSensor(coordinator),
+            SupplySensor(coordinator),
+            BoostFlowTemperatureSensor(coordinator),
             HoldFlowTemperatureSensor(coordinator),
             GatedHoldFlowTemperatureSensor(coordinator),
             CurveHoldFlowTemperatureSensor(coordinator, CurveEnd.COLD),
@@ -157,18 +158,6 @@ class LeadHoldFlowTemperatureSensor(_LeadFlowSensor):
 
     def _lead(self) -> LeadValue:
         return self._hub.lead_hold_flow
-
-
-class LeadMinFlowTemperatureSensor(_LeadFlowSensor):
-    """Highest minimum flow among the flow lead rooms."""
-
-    _attr_translation_key = "lead_min_flow_temperature"
-
-    def __init__(self, hub: HeatingHub) -> None:
-        super().__init__(hub, "lead_min_flow_temperature")
-
-    def _lead(self) -> LeadValue:
-        return self._hub.lead_min_flow
 
 
 class HeatingDemandHoursSensor(HeatingHubEntity, SensorEntity):
@@ -439,6 +428,7 @@ class FlowFeedbackSensor(FlowEntity, SensorEntity):
             "feedforward_flow_c": self._flow.hub.lead_feedforward_flow.value_c,
             "frozen": feedback.frozen is not None,
             "frozen_reason": None if feedback.frozen is None else str(feedback.frozen),
+            "down_timer_min": round(feedback.down_count_s / 60),
             "last_change": None
             if last is None
             else dt_util.utc_from_timestamp(last).isoformat(),
@@ -623,16 +613,6 @@ class HoldFlowReserveSensor(_FlowReserveSensor):
         return self._hub.hold_flow_reserve
 
 
-class MinFlowReserveSensor(_FlowReserveSensor):
-    _attr_translation_key = "min_flow_reserve"
-
-    def __init__(self, hub: HeatingHub) -> None:
-        super().__init__(hub, "min_flow_reserve")
-
-    def _reserve(self) -> float | None:
-        return self._hub.min_flow_reserve
-
-
 class IrradianceSensor(HeatingHubEntity, SensorEntity):
     """Sun on one surface of the building, from Open-Meteo."""
 
@@ -688,36 +668,57 @@ class _DiagnosticSensor(HeatingControllerEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
 
-class MinFlowTemperatureSensor(_DiagnosticSensor):
-    _attr_translation_key = "min_flow_temperature"
+class SupplySensor(_DiagnosticSensor):
+    """How the flow supplies the room, read from its valves.
+
+    Same judgement as the flow feedback: valves near fully open with the
+    room short of its target are undersupplied, open enough to hold the flow
+    supplied, further closed oversupplied.
+    """
+
+    _attr_translation_key = "supply"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = [supply.value for supply in RoomSupply]
+
+    def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
+        super().__init__(coordinator, "supply")
+
+    @property
+    def native_value(self) -> str:
+        return self._coordinator.supply[0].value
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        _, reason, sample = self._coordinator.supply
+        return {
+            "reason": reason.value if reason is not None else None,
+            "demand_pct": sample.demand_pct if sample is not None else None,
+            "deficit_c": sample.deficit_c if sample is not None else None,
+            "current_flow_temperature_c": self._coordinator.current_flow_temperature_c,
+        }
+
+
+class BoostFlowTemperatureSensor(_DiagnosticSensor):
+    """The recovery flow while the room recovers after a setpoint rise; else 0."""
+
+    _attr_translation_key = "boost_flow_temperature"
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
 
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
-        super().__init__(coordinator, "min_flow_temperature")
+        super().__init__(coordinator, "boost_flow_temperature")
 
     @property
     def native_value(self) -> float | None:
-        return self._coordinator.normal_min_flow_temperature_c
+        if not self._coordinator.flow_boost_active:
+            return 0.0
+        return self._coordinator.flow_boost_temperature_c
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return {
-            "current_flow_temperature_c": self._coordinator.current_flow_temperature_c,
-            "supply_status": self._coordinator.flow_supply_status.value,
-            "calculation_heat_mode": (
-                self._coordinator.normal_heat_mode.value
-                if self._coordinator.normal_heat_mode is not None
-                else None
-            ),
-            "calculation_target_temperature_c": (
-                self._coordinator.normal_target_temperature_c
-            ),
-            "flow_gate_closed": self._coordinator.normal_flow_gate_closed,
-            "hold_flow_temperature_c": (
-                self._coordinator.normal_hold_flow_temperature_c
-            ),
+            "boost_active": self._coordinator.flow_boost_active,
             "recovery_flow_temperature_c": (
                 self._coordinator.normal_recovery_flow_temperature_c
             ),
@@ -730,8 +731,7 @@ class MinFlowTemperatureSensor(_DiagnosticSensor):
 class HoldFlowTemperatureSensor(_DiagnosticSensor):
     """The hold requirement before the surplus gate.
 
-    Same number the minimum-flow sensor used to report unconditionally: what
-    this room would need to hold its setpoint at the current outdoor
+    What this room would need to hold its setpoint at the current outdoor
     temperature, regardless of how much stored heat it is currently sitting
     on. Carries a state class so it keeps accruing long-term statistics
     through the shoulder season, when the gated sensor reads zero.
@@ -754,8 +754,10 @@ class HoldFlowTemperatureSensor(_DiagnosticSensor):
         result = self._coordinator.normal_result
         return {
             "flow_gate_closed": self._coordinator.normal_flow_gate_closed,
-            "gated_min_flow_temperature_c": (
-                self._coordinator.normal_min_flow_temperature_c
+            "calculation_heat_mode": (
+                self._coordinator.normal_heat_mode.value
+                if self._coordinator.normal_heat_mode is not None
+                else None
             ),
             "calculation_target_temperature_c": (
                 self._coordinator.normal_target_temperature_c
@@ -769,12 +771,12 @@ class HoldFlowTemperatureSensor(_DiagnosticSensor):
 
 
 class GatedHoldFlowTemperatureSensor(_DiagnosticSensor):
-    """The hold requirement after the surplus gate, without the recovery part.
+    """The hold requirement after the surplus gate.
 
     Reads the weather-driven hold flow while the room needs heat to keep its
-    setpoint and 0 while it coasts on stored heat. Unlike the minimum-flow
-    sensor it ignores how far the room is below setpoint, so a room briefly
-    cooled by airing does not register as a heating-season demand.
+    setpoint and 0 while it coasts on stored heat. It ignores how far the
+    room is below setpoint, so a room briefly cooled by airing does not
+    register as a heating-season demand.
     """
 
     _attr_translation_key = "gated_hold_flow_temperature"

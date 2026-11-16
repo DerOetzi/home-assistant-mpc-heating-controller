@@ -415,22 +415,27 @@ def test_managed_header_rows_follow_the_language(ctx) -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "value", "verdict"),
+    ("status", "attributes", "value", "verdict"),
     [
-        ("no_requirement", "No requirement", ""),
-        ("below_threshold", "Below operating threshold", "idle"),
-        ("source_inactive", "Source inactive", "idle"),
-        ("undersupplied", "34.5 °C ⚠", "low"),
-        ("sufficient", "34.5 °C", "ok"),
+        ("undersupplied", "{demand_pct: 100}", "Undersupplied · 100 % ⚠", "low"),
+        ("supplied", "{demand_pct: 85}", "Supplied · 85 %", "ok"),
+        ("oversupplied", "{demand_pct: 30}", "Oversupplied · 30 %", "idle"),
+        (
+            "not_rated",
+            '{reason: "window_open", demand_pct: null}',
+            "Not rated · window open",
+            "",
+        ),
     ],
 )
-def test_supply_presentation(ctx, status: str, value: str, verdict: str) -> None:
-    """Three of the five states must read as words: a degree figure there would
-    claim the source has to hit that temperature, which is not true of them."""
+def test_supply_presentation(
+    ctx, status: str, attributes: str, value: str, verdict: str
+) -> None:
+    """Rated: state and valve opening; not rated: state and why."""
     result = _json(
         ctx,
         'supplyPresentation({locale: {language: "en"}}, '
-        f'{{state: "34.5", attributes: {{supply_status: "{status}"}}}})',
+        f'{{state: "{status}", attributes: {attributes}}})',
     )
     assert result["value"] == value
     assert result["verdict"] == verdict
@@ -438,13 +443,13 @@ def test_supply_presentation(ctx, status: str, value: str, verdict: str) -> None
 
 
 def test_supply_presentation_survives_an_unknown_status(ctx) -> None:
-    """A future backend state must degrade to the bare number, not to nothing."""
+    """A future backend state must degrade to the bare state, not to nothing."""
     result = _json(
         ctx,
         'supplyPresentation({locale: {language: "en"}}, '
-        '{state: "34.5", attributes: {supply_status: "brand_new"}})',
+        '{state: "brand_new", attributes: {}})',
     )
-    assert result["value"] == "34.5 °C"
+    assert result["value"] == "brand_new"
     assert result["verdict"] == ""
     assert "hint" not in result
 

@@ -1,6 +1,7 @@
 from heating_controller.const import RoomTemperatureStrategy
 from heating_controller.controller.mpc.results import RoomMpcErrorCode
 from heating_controller.controller.mpc.sensors import (
+    ROOM_SENSOR_MAX_AGE_S,
     VALVE_POSITION_MAX_AGE_S,
     RoomMpcSensors,
 )
@@ -158,10 +159,11 @@ def test_trv_average_is_a_fallback_only_with_a_configured_room_sensor():
 def test_stale_room_sensor_is_a_fallback():
     sensors = make_sensors(max_sensor_age_s=1800, room_sensor_configured=True)
     sensors.set_room_sensor_temperature(21.0, now_ts=1000)
-    sensors.set_trv_temperature(0, 19.0, now_ts=2900)
+    stale_ts = 1001 + ROOM_SENSOR_MAX_AGE_S
+    sensors.set_trv_temperature(0, 19.0, now_ts=stale_ts)
 
     assert sensors.get_room_temperature(now_ts=2000).room_sensor_fallback is False
-    result = sensors.get_room_temperature(now_ts=2900)
+    result = sensors.get_room_temperature(now_ts=stale_ts)
     assert result.used_strategy == RoomTemperatureStrategy.TRV_AVERAGE
     assert result.room_sensor_fallback is True
 
@@ -207,3 +209,17 @@ def test_a_valve_opening_reported_half_an_hour_ago_is_unknown():
     result = sensors.create_input(21.0, 5000.0).input
     assert result.valve_positions_pct == [None]
     assert result.valve_position_missing is True
+
+
+def test_room_sensor_age_runs_from_its_last_report():
+    sensors = make_sensors(room_sensor_configured=True)
+    sensors.set_trv_temperature(0, 20.0, now_ts=1000.0)
+    sensors.set_room_sensor_temperature(21.0, now_ts=1000.0)
+    # The poll hands in the unchanged reading with the same report time.
+    sensors.set_room_sensor_temperature(21.0, now_ts=1000.0)
+
+    fresh = sensors.get_room_temperature(now_ts=1000.0 + ROOM_SENSOR_MAX_AGE_S)
+    stale = sensors.get_room_temperature(now_ts=1001.0 + ROOM_SENSOR_MAX_AGE_S)
+
+    assert fresh.room_sensor_temp_c == 21.0
+    assert stale.room_sensor_temp_c is None

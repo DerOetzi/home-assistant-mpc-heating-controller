@@ -8,11 +8,14 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import HeatingRoomCoordinator
 from .entity import (
+    FlowEntity,
     HeatingControllerEntity,
     HotWaterEntity,
+    async_add_flow_entities,
     async_add_hot_water_entities,
     async_add_room_entities,
 )
+from .flow_device import FlowDevice
 from .hot_water_device import HotWaterDevice
 
 
@@ -33,6 +36,25 @@ async def async_setup_entry(
             [LegionellaStartButton(hot_water)] if hot_water.legionella_enabled else []
         ),
     )
+    async_add_flow_entities(
+        entry,
+        async_add_entities,
+        lambda flow: [FlowFeedbackResetButton(flow)],
+    )
+
+
+class FlowFeedbackResetButton(FlowEntity, ButtonEntity):
+    """Set the valve feedback back to zero."""
+
+    _attr_translation_key = "flow_feedback_reset"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:restore"
+
+    def __init__(self, flow: FlowDevice) -> None:
+        super().__init__(flow, "flow_feedback_reset")
+
+    async def async_press(self) -> None:
+        self._flow.reset_feedback()
 
 
 class LegionellaStartButton(HotWaterEntity, ButtonEntity):

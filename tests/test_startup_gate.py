@@ -51,6 +51,7 @@ async def test_opens_after_the_last_entity_came_in_and_quiet(
     assert gate.missing == [ENTITY]
 
     hass.states.async_set(ENTITY, "off")
+    await hass.async_block_till_done()
     await _wait(hass, freezer, STARTUP_QUIET_S - 5)
     assert not gate.is_open
 

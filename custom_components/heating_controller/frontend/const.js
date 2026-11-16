@@ -12,7 +12,7 @@ export const ROLES = {
   comfort_temperature: "comfort",
   eco_offset: "eco",
   room_temperature: "roomTemp",
-  min_flow_temperature: "minFlow",
+  supply: "supply",
   heating_demand: "demand",
   radiator_not_heating: "radiatorAlert",
   additional_heat: "additionalHeat",

@@ -42,14 +42,18 @@ purpose-built Lovelace card operates it.
   a comfort switch of its own (e.g. a guest room), no helpers needed.
 - **PV-surplus boost** — the hub's PV-surplus switch (by hand or from an automation)
   raises the setpoint of rooms with PV boost.
-- **Minimum flow temperature per room** — reports the flow temperature this room's emitters
-  need to meet current demand, so a shared heat source's setpoint can be driven by whichever
-  room actually needs it (see `sensor.<room>_mindestvorlauftemperatur` /
-  `_minimum_flow_temperature`). A surplus gate suppresses the requirement while a room is
-  coasting above its setpoint on stored heat, so the value stays usable as a "does this
-  room need heat now" signal; `sensor.<room>_hold_flow_temperature` keeps reporting the
-  ungated requirement for diagnosis. Hold and recovery flow use the same design spread as
-  the valve power the factors are learned from. See [docs/mpc-guide.md](docs/mpc-guide.md).
+- **Flow requirements per room** — `sensor.<room>_hold_flow_temperature` reports the flow
+  this room's radiators need to hold its setpoint at the current outdoor temperature (the
+  feedforward of the flow control); `_gated_hold_flow_temperature` reads 0 while a surplus
+  gate sees the room coasting above its setpoint on stored heat (the heating limit);
+  `_boost_flow_temperature` carries the recovery flow while the room recovers after its
+  setpoint went up, 0 otherwise. Hold and recovery flow use the same design spread as the
+  valve power the factors are learned from. See [docs/mpc-guide.md](docs/mpc-guide.md).
+- **Supply per room** — `sensor.<room>_supply` judges the flow on the room's valves, the
+  same way the flow feedback does: undersupplied (valves fully open, room below target),
+  supplied, oversupplied (valves well closed or room above target), or not rated with a
+  reason (window open, frost protection, no heat, radiator not heating, boost, valve
+  opening unknown).
 - **TRV setpoints** — each TRV regulates the room with its own PI. The room hands it the
   active mode's target through `climate.set_temperature` and the room sensor's reading as
   external temperature (more often for a radiator marked covered), switches its
@@ -76,7 +80,7 @@ purpose-built Lovelace card operates it.
 - **Custom Lovelace card** (`custom:heating-controller-card`) — a single card per room
   showing room temperature, configurable header sensors (humidity, CO₂, PM2.5, …), mode
   control, comfort/eco setpoints, boost, the room's own comfort switch, and a detail
-  section with per-TRV state, window contacts, and minimum flow temperature — with a visual
+  section with per-TRV state, window contacts, and the room's supply — with a visual
   editor, no YAML required. See [`docs/card-design.md`](docs/card-design.md).
 - Fully bilingual UI (English/German), both backend (`strings.json`/`translations/`) and
   frontend card (`translations.js`).
@@ -190,13 +194,10 @@ The hub's device *Heizung* reports the lead rooms:
 
 - *Lead rooms hold flow temperature* — highest gated hold flow among the heating-limit lead
   rooms (attributes: `room` with the highest value, `rooms`).
-- *Lead rooms minimum flow temperature* — highest minimum flow among the flow lead rooms
-  (recovery only during a flow boost after a mode change).
 - *Lead rooms heating demand* — on while the hold flow reaches the flow threshold;
   unavailable while either is missing.
-- *Flow reserve hold* / *Flow reserve minimum* — heating curve minus the two flows above,
-  only with a heating curve entity; unavailable while the flow is 0 (all lead rooms in
-  their surplus buffer).
+- *Flow reserve hold* — heating curve minus the lead rooms' hold flow, only with a heating
+  curve; unavailable while the flow is 0 (all lead rooms in their surplus buffer).
 - *Irradiance &lt;surface&gt;* — sun on each surface some room uses (W/m², diagnostic),
   with the next 24 hours as attribute `forecast` (not recorded); unavailable when the last fetch is more
   than three hours old.

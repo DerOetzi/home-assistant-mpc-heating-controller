@@ -9,8 +9,9 @@ from heating_controller.const import (
     HUB_TITLE,
     HUB_VERSION,
     SUBENTRY_TYPE_ROOM,
-    FlowSupplyStatus,
     HeatMode,
+    RoomSupply,
+    SupplyReason,
 )
 from heating_controller.coordinator import (
     FLOW_DIP_TOLERANCE_S,
@@ -30,6 +31,7 @@ from homeassistant.util import slugify
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
+    async_mock_service,
 )
 
 TRV_EMITTER = {
@@ -483,108 +485,17 @@ async def test_min_flow_reports_normal_mode_demand_while_forced_frost(
     assert coordinator.normal_heat_mode == HeatMode.COMFORT
     assert coordinator.normal_target_temperature_c == 22.0
     assert coordinator.normal_result is not None
-    assert coordinator.normal_min_flow_temperature_c is not None
-    assert coordinator.normal_min_flow_temperature_c > 0
+    assert coordinator.normal_hold_flow_temperature_c > 0
     assert (
         coordinator.base_temperature_c == ENTRY_DATA["frost_protection_temperature_c"]
     )
     assert coordinator.trv_active is False
-    assert coordinator.flow_supply_status == FlowSupplyStatus.SOURCE_INACTIVE
+    assert coordinator.supply[:2] == (RoomSupply.NOT_RATED, SupplyReason.WINDOW_OPEN)
 
     coordinator.async_unload()
 
 
-async def test_flow_supply_status_undersupplied_when_running_below_requirement(
-    hass: HomeAssistant,
-) -> None:
-    _seed_entities(hass, flow_temp=31.0)
-    hass.states.async_set("sensor.outdoor_temperature", "5.0")
-    hass.states.async_set("sensor.wohnzimmer_temperatur", "22.0")
-    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
-    entry.add_to_hass(hass)
-
-    coordinator = _coordinator(hass, entry, _trvs())
-    _register_fake_climate_set_temperature(hass)
-    await coordinator.async_setup()
-    await coordinator.async_start()
-
-    assert coordinator.trv_active is True
-    required = coordinator.normal_min_flow_temperature_c
-    assert required is not None and required > 31.0
-    assert coordinator.flow_supply_status == FlowSupplyStatus.UNDERSUPPLIED
-
-    coordinator.async_unload()
-
-
-async def test_flow_supply_status_sufficient_when_flow_covers_requirement(
-    hass: HomeAssistant,
-) -> None:
-    _seed_entities(hass, flow_temp=60.0)
-    hass.states.async_set("sensor.outdoor_temperature", "5.0")
-    hass.states.async_set("sensor.wohnzimmer_temperatur", "22.0")
-    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
-    entry.add_to_hass(hass)
-
-    coordinator = _coordinator(hass, entry, _trvs())
-    _register_fake_climate_set_temperature(hass)
-    await coordinator.async_setup()
-    await coordinator.async_start()
-
-    assert coordinator.trv_active is True
-    required = coordinator.normal_min_flow_temperature_c
-    assert required is not None and required < 60.0
-    assert coordinator.flow_supply_status == FlowSupplyStatus.SUFFICIENT
-
-    coordinator.async_unload()
-
-
-async def test_flow_supply_status_below_threshold_for_a_never_binding_requirement(
-    hass: HomeAssistant,
-) -> None:
-    _seed_entities(hass)
-    # Close to the setpoint: at the design spread the hold flow only drops
-    # below the threshold for a small loss.
-    hass.states.async_set("sensor.outdoor_temperature", "21.5")
-    hass.states.async_set("sensor.wohnzimmer_temperatur", "22.5")
-    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
-    entry.add_to_hass(hass)
-
-    coordinator = _coordinator(hass, entry, _trvs())
-    _register_fake_climate_set_temperature(hass)
-    await coordinator.async_setup()
-    await coordinator.async_start()
-
-    required = coordinator.normal_min_flow_temperature_c
-    assert required is not None
-    assert 0 < required < coordinator.flow_threshold_c
-    assert coordinator.flow_supply_status == FlowSupplyStatus.BELOW_THRESHOLD
-    assert coordinator.normal_heat_mode == HeatMode.COMFORT
-    assert coordinator.normal_target_temperature_c == 22.0
-
-    coordinator.async_unload()
-
-
-async def test_flow_supply_status_no_requirement_when_ambient_holds_target(
-    hass: HomeAssistant,
-) -> None:
-    _seed_entities(hass)
-    hass.states.async_set("sensor.outdoor_temperature", "24.0")
-    hass.states.async_set("sensor.wohnzimmer_temperatur", "24.0")
-    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
-    entry.add_to_hass(hass)
-
-    coordinator = _coordinator(hass, entry, _trvs())
-    _register_fake_climate_set_temperature(hass)
-    await coordinator.async_setup()
-    await coordinator.async_start()
-
-    assert coordinator.normal_min_flow_temperature_c == 0
-    assert coordinator.flow_supply_status == FlowSupplyStatus.NO_REQUIREMENT
-
-    coordinator.async_unload()
-
-
-async def test_flow_supply_status_surplus_while_the_room_coasts_above_target(
+async def test_flow_gate_closes_while_the_room_coasts_above_target(
     hass: HomeAssistant,
 ) -> None:
     _seed_entities(hass)
@@ -604,8 +515,7 @@ async def test_flow_supply_status_surplus_while_the_room_coasts_above_target(
     await coordinator.async_start()
 
     assert coordinator.normal_flow_gate_closed is True
-    assert coordinator.normal_min_flow_temperature_c == 0
-    assert coordinator.flow_supply_status == FlowSupplyStatus.SURPLUS
+    assert coordinator.normal_gated_hold_flow_temperature_c == 0
     assert coordinator.normal_hold_flow_temperature_c > 0
 
     coordinator.async_unload()
@@ -626,7 +536,7 @@ async def test_entries_without_flow_gate_settings_fall_back_to_defaults(
     await coordinator.async_start()
 
     assert coordinator.normal_flow_gate_closed is False
-    assert coordinator.normal_min_flow_temperature_c > 0
+    assert coordinator.normal_gated_hold_flow_temperature_c > 0
 
     coordinator.async_unload()
 
@@ -889,7 +799,7 @@ async def test_closed_flow_gate_survives_a_restart(hass: HomeAssistant) -> None:
     await after_restart.async_start()
 
     assert after_restart.normal_flow_gate_closed is True
-    assert after_restart.flow_supply_status == FlowSupplyStatus.SURPLUS
+    assert after_restart.normal_gated_hold_flow_temperature_c == 0
     after_restart.async_unload()
 
     fresh_entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
@@ -1650,6 +1560,8 @@ async def test_nothing_is_computed_or_written_before_start(
         climate_calls.append(call)
 
     hass.services.async_register("climate", "set_temperature", climate_handler)
+    async_mock_service(hass, "switch", "turn_on")
+    async_mock_service(hass, "switch", "turn_off")
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
     entry.add_to_hass(hass)
     coordinator = _coordinator(hass, entry, _trvs())
@@ -1706,9 +1618,9 @@ async def test_flow_boost_after_a_mode_jump_until_the_room_is_close(
     recovery_c = coordinator.normal_recovery_flow_temperature_c
     assert recovery_c > 0
     assert coordinator.flow_boost_temperature_c == recovery_c
-    assert coordinator.normal_min_flow_temperature_c == recovery_c
     # A recovering room says nothing about the flow.
     assert coordinator.feedback_sample is None
+    assert coordinator.supply[:2] == (RoomSupply.NOT_RATED, SupplyReason.BOOST)
 
     target_c = coordinator.normal_target_temperature_c
     for room_c in (19.0, 19.5, 20.0, 20.5, target_c - 0.1):
@@ -1768,5 +1680,87 @@ async def test_feedback_sample_needs_a_known_demand(hass: HomeAssistant) -> None
 
     # No valve position configured: nothing to judge the flow by.
     assert coordinator.feedback_sample is None
+    assert coordinator.supply[:2] == (
+        RoomSupply.NOT_RATED,
+        SupplyReason.DEMAND_UNKNOWN,
+    )
+
+    coordinator.async_unload()
+
+
+@pytest.mark.parametrize(
+    ("valve_pct", "room_c", "expected"),
+    [
+        ("100", "18.5", RoomSupply.UNDERSUPPLIED),
+        ("85", "22.0", RoomSupply.SUPPLIED),
+        # Open, but well above the target: the TRV's own reading, not the flow.
+        ("95", "22.5", RoomSupply.OVERSUPPLIED),
+        ("30", "22.0", RoomSupply.OVERSUPPLIED),
+    ],
+)
+async def test_supply_judged_on_the_valves_like_the_feedback(
+    hass: HomeAssistant, freezer, valve_pct, room_c, expected
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set(VALVE_ENTITY, valve_pct)
+    hass.states.async_set("sensor.wohnzimmer_temperatur", room_c)
+    coordinator = await _setup_coordinator(hass, trvs=[_trv_with_valve()])
+    await _poll(hass, freezer, 5)
+
+    assert coordinator.trv_active is True
+    supply, reason, sample = coordinator.supply
+    assert supply is expected
+    assert reason is None
+    assert sample.demand_pct == float(valve_pct)
+
+    coordinator.async_unload()
+
+
+async def test_supply_not_rated_without_heat_at_the_valves(
+    hass: HomeAssistant, freezer
+) -> None:
+    _seed_entities(hass, heat_available=False)
+    hass.states.async_set(VALVE_ENTITY, "100")
+    coordinator = await _setup_coordinator(hass, trvs=[_trv_with_valve()])
+    await _poll(hass, freezer, 5)
+
+    supply, reason, sample = coordinator.supply
+    assert (supply, reason) == (RoomSupply.NOT_RATED, SupplyReason.NO_HEAT)
+    # The opening is still reported.
+    assert sample.demand_pct == 100.0
+
+    coordinator.async_unload()
+
+
+async def test_a_room_sensor_that_stopped_reporting_goes_stale(
+    hass: HomeAssistant, freezer
+) -> None:
+    from heating_controller.controller.mpc.sensors import ROOM_SENSOR_MAX_AGE_S
+
+    _seed_entities(hass)
+    _register_fake_climate_set_temperature(hass)
+    async_mock_service(hass, "switch", "turn_on")
+    async_mock_service(hass, "switch", "turn_off")
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+    coordinator = _coordinator(hass, entry, _trvs())
+    await coordinator.async_setup()
+    await coordinator.async_start()
+    await hass.async_block_till_done()
+    assert coordinator.mpc.get_room_temperature_result().room_sensor_temp_c == 18.5
+
+    # The sensor stays available with its last value; the poll reads it again.
+    freezer.tick(timedelta(seconds=ROOM_SENSOR_MAX_AGE_S + 60))
+    coordinator._refresh_temperature_inputs()
+
+    room = coordinator.mpc.get_room_temperature_result()
+    assert room.room_sensor_fallback
+    assert room.room_sensor_temp_c is None
+
+    # A report of the same value makes it current again.
+    hass.states.async_set("sensor.wohnzimmer_temperatur", "18.5")
+    coordinator._refresh_temperature_inputs()
+
+    assert coordinator.mpc.get_room_temperature_result().room_sensor_temp_c == 18.5
 
     coordinator.async_unload()

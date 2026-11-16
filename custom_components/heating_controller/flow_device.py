@@ -103,6 +103,10 @@ class FlowDevice:
         self.write_enabled = enabled
         self._notify()
 
+    def reset_feedback(self) -> None:
+        self.hub.reset_flow_feedback()
+        self._notify()
+
     @property
     def curve(self) -> HeatingCurve:
         n = self.numbers
