@@ -30,7 +30,6 @@ from . import frontend
 from .const import (
     ATTR_CAPACITY_FACTOR,
     ATTR_RESET_GAINS,
-    ATTR_SETPOINT_CORRECTION,
     ATTR_UA_FACTOR,
     CONF_ROOM_NAME,
     CONF_TRVS,
@@ -48,7 +47,6 @@ from .controller.mpc.models.capacity import (
     MIN_LEARNED_CAPACITY_FACTOR,
 )
 from .controller.mpc.models.loss import MAX_LEARNED_UA_FACTOR, MIN_LEARNED_UA_FACTOR
-from .controller.setpoint_correction import CORRECTION_LIMIT_C, CORRECTION_STEP_C
 from .coordinator import HeatingRoomCoordinator
 from .flow_device import FlowDevice
 from .hot_water_device import HotWaterDevice
@@ -64,7 +62,7 @@ from .store import (
     GainStore,
     HubStore,
     LearningFactorsStore,
-    SetpointCorrectionStore,
+    async_remove_setpoint_correction_store,
     async_remove_valve_curve_store,
 )
 
@@ -87,13 +85,6 @@ _REMOVED_TARGET_BAND_KEY = "target_band_c"
 _REMOVED_SETPOINT_MODE_KEY = "trv_setpoint_mode"
 
 
-def _correction_step(value: float) -> float:
-    steps = value / CORRECTION_STEP_C
-    if abs(steps - round(steps)) > 1e-9:
-        raise vol.Invalid(f"must be a multiple of {CORRECTION_STEP_C} K")
-    return round(steps) * CORRECTION_STEP_C
-
-
 RECALIBRATE_SCHEMA = vol.All(
     vol.Schema(
         {
@@ -109,18 +100,12 @@ RECALIBRATE_SCHEMA = vol.All(
                 ),
             ),
             vol.Optional(ATTR_RESET_GAINS): cv.boolean,
-            vol.Optional(ATTR_SETPOINT_CORRECTION): vol.All(
-                vol.Coerce(float),
-                vol.Range(min=-CORRECTION_LIMIT_C, max=CORRECTION_LIMIT_C),
-                _correction_step,
-            ),
         }
     ),
     cv.has_at_least_one_key(
         ATTR_UA_FACTOR,
         ATTR_CAPACITY_FACTOR,
         ATTR_RESET_GAINS,
-        ATTR_SETPOINT_CORRECTION,
     ),
 )
 
@@ -301,7 +286,7 @@ async def _async_remove_room_stores(
     await FlowGateStateStore(hass, room_name, room_id).async_remove()
     await async_remove_valve_curve_store(hass, room_name, room_id)
     await GainStore(hass, room_name, room_id).async_remove()
-    await SetpointCorrectionStore(hass, room_name, room_id).async_remove()
+    await async_remove_setpoint_correction_store(hass, room_name, room_id)
 
 
 def _referenced_coordinators(
@@ -336,7 +321,6 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 call.data.get(ATTR_UA_FACTOR),
                 call.data.get(ATTR_CAPACITY_FACTOR),
                 call.data.get(ATTR_RESET_GAINS, False),
-                call.data.get(ATTR_SETPOINT_CORRECTION),
             )
 
     hass.services.async_register(DOMAIN, SERVICE_UNBLOCK, async_handle_unblock)

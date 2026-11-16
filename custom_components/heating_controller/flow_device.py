@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 from collections.abc import Callable
@@ -28,6 +29,7 @@ from .control.flow import (
     FlowInputs,
     HeatingCurve,
 )
+from .control.flow_feedback import FeedbackFreeze
 
 if TYPE_CHECKING:
     from .hub import HeatingHub
@@ -43,7 +45,6 @@ FLOW_NUMBER_DEFAULTS: dict[str, float] = {
     "curve_flow_warm": 29.0,
     "curve_bump": 0.0,
     "curve_bump_width": 0.0,
-    "margin": 1.0,
     "hysteresis": 0.5,
     "hold_time_min": 30.0,
     "charge_raise_max": 4.0,
@@ -71,6 +72,8 @@ class FlowDevice:
         self.controller = FlowController(self._config(), time.time())
         self.decision: FlowDecision | None = None
         self.last_error: str | None = None
+        # The last decision wanted a new value that did not go out.
+        self._unwritten = False
         self._listeners: list[Callable[[], None]] = []
         self._context = Context()
 
@@ -84,7 +87,6 @@ class FlowDevice:
             maximum=self._maximum,
             step=self._step,
             fallback=self._fallback,
-            margin_k=n["margin"],
             hysteresis_k=n["hysteresis"],
             hold_s=n["hold_time_min"] * 60,
             threshold_c=self.threshold_c,
@@ -168,34 +170,86 @@ class FlowDevice:
     # --- Control -----------------------------------------------------------
 
     async def async_evaluate(self) -> None:
+        if not self.hub.started:
+            return
         now_ts = time.time()
         actual = self.actual
         self.controller.observe_actual(actual, now_ts)
-        lead = self.hub.lead_min_flow
+        hub = self.hub
+        feedback = hub.flow_feedback
+        inputs = FlowInputs(
+            outdoor_c=hub.outdoor_temperature_c,
+            feedforward_flow_c=hub.lead_feedforward_flow.value_c,
+            charge_flow_c=hub.charge_flow_c,
+            actual=actual,
+            heating_on=hub.heating_on,
+            reachable=hub.heat_source_reachable,
+            feedback_k=feedback.feedback_k,
+            boost_flow_c=hub.lead_boost_flow.value_c,
+            design_flow_c=hub.design_flow_c,
+        )
+        bounds = self.controller.bounds(inputs, self.curve)
+        lifted = (
+            None
+            if bounds is None or inputs.feedforward_flow_c is None
+            else inputs.feedforward_flow_c + inputs.feedback_k
+        )
+        feedback.update(
+            hub.feedback_samples(),
+            self._step,
+            self._freeze_reason(inputs, bounds is None),
+            now_ts,
+            at_lower_limit=lifted is not None and lifted <= bounds.lower_c,
+            at_upper_limit=lifted is not None and lifted >= bounds.upper_c,
+        )
         decision = self.controller.decide(
-            FlowInputs(
-                outdoor_c=self.hub.outdoor_temperature_c,
-                lead_min_flow_c=lead.value_c,
-                charge_flow_c=self.hub.charge_flow_c,
-                actual=actual,
-                heating_on=self.hub.heating_on,
-                reachable=self.hub.heat_source_reachable,
-            ),
+            dataclasses.replace(inputs, feedback_k=feedback.feedback_k),
             self.curve,
             now_ts,
         )
         self.decision = decision
+        written = False
         if (
             decision.write is not None
             and self.write_enabled
-            and self.hub.request_write(decision.priority)
+            and hub.request_write(decision.priority)
         ):
-            await self._async_write(decision.write, actual, now_ts)
+            written = await self._async_write(decision.write, actual, now_ts)
+        self._unwritten = decision.reason == "hold" or (
+            decision.write is not None and not written
+        )
         self._notify()
+
+    def _freeze_reason(
+        self, inputs: FlowInputs, no_feedforward: bool
+    ) -> FeedbackFreeze | None:
+        """Why the feedback must not move now; None if it may.
+
+        The valves only say something about the flow when the decided value
+        reaches the heat source and the heat source heats the radiators.
+        """
+        if not self.write_enabled:
+            return FeedbackFreeze.WRITE_OFF
+        if inputs.heating_on is False:
+            return FeedbackFreeze.HEATING_OFF
+        if not inputs.reachable:
+            return FeedbackFreeze.UNREACHABLE
+        if self.hub.hot_water_charging:
+            return FeedbackFreeze.HOT_WATER
+        measured = self.hub.measured_flow_c
+        if measured is not None and measured < self.threshold_c:
+            return FeedbackFreeze.DEFROST
+        if no_feedforward:
+            return FeedbackFreeze.FALLBACK
+        if inputs.boost_flow_c is not None:
+            return FeedbackFreeze.BOOST
+        if self._unwritten:
+            return FeedbackFreeze.NOT_WRITTEN
+        return None
 
     async def _async_write(
         self, value: float, actual: float | None, now_ts: float
-    ) -> None:
+    ) -> bool:
         domain = self.actuator_entity.split(".", 1)[0]
         if domain == "climate":
             service, data = "set_temperature", {"temperature": value}
@@ -214,10 +268,11 @@ class FlowDevice:
             _LOGGER.warning(
                 "Writing %s to %s failed: %s", value, self.actuator_entity, err
             )
-            return
+            return False
         self.last_error = None
         self.controller.written(value, actual, now_ts)
         _LOGGER.info("Flow actuator %s set to %s", self.actuator_entity, value)
+        return True
 
     # --- Listeners ---------------------------------------------------------
 

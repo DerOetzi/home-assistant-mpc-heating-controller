@@ -38,21 +38,22 @@ export const curveFlowAt = (curve, outdoor) => {
 export const curveSeries = (curve, outdoorValues) =>
   outdoorValues.map((outdoor) => curveFlowAt(curve, outdoor));
 
-// The highest hold flow among the given rooms plus the margin, per outdoor value.
-export const envelopeSeries = (rooms, margin) => {
+// The highest hold flow among the given rooms plus the flow feedback, per
+// outdoor value.
+export const envelopeSeries = (rooms, feedback) => {
   const chosen = rooms ?? [];
   if (!chosen.length) return [];
   return chosen[0].flow_c.map((_, index) => {
     const values = chosen
       .map((room) => room.flow_c[index])
       .filter((value) => Number.isFinite(value));
-    return values.length ? Math.round((Math.max(...values) + margin) * 10) / 10 : null;
+    return values.length ? Math.round((Math.max(...values) + feedback) * 10) / 10 : null;
   });
 };
 
 // What the flow device recommends: the envelope of the flow lead rooms.
-export const recommendationSeries = (rooms, margin) =>
-  envelopeSeries((rooms ?? []).filter((room) => room.lead), margin);
+export const recommendationSeries = (rooms, feedback) =>
+  envelopeSeries((rooms ?? []).filter((room) => room.lead), feedback);
 
 // Linear interpolation on the outdoor grid; null outside it.
 export const valueAt = (outdoorValues, series, outdoor) => {

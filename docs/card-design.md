@@ -62,8 +62,7 @@ again does nothing, so you can't accidentally toggle back to automatic mode with
 tap on the same spot.
 
 **Details** (expanded): room sensor, each TRV (current vs. target temperature, plus the
-valve opening it reports, e.g. "21.1 °C → 22 °C · 34 %"), the setpoint correction for
-the room-sensor error (e.g. "+0.5 K"), window contacts, and the room's additional heat (`sensor.<room>_additional_heat`: steady gain, day
+valve opening it reports, e.g. "21.1 °C → 22 °C · 34 %"), window contacts, and the room's additional heat (`sensor.<room>_additional_heat`: steady gain, day
 profile and sun, see the MPC guide's "Gains and sun"), in whatever order you've set — tap any
 row to open its more-info dialog. The additional heat shows what the model may use; while
 terms are still being learned, their unconfirmed total follows in brackets, e.g.
@@ -139,15 +138,16 @@ temperature is the one currently limiting the system.
 plots flow temperature over outdoor temperature:
 
 - the heat source's curve, as set in the flow device's curve numbers;
-- each room's comfort hold flow plus the margin — chips under the chart show or hide a
+- each room's comfort hold flow plus the flow feedback — chips under the chart show or hide a
   room; flow lead rooms (marked with a dot) start visible, the rest hidden, dashed when
   shown;
-- the recommendation (highest lead room plus margin) as a thin grey line;
+- the recommendation (highest lead room plus feedback) as a thin grey line;
 - a trial curve (dashed) with its own cold/warm flow, raise and raise width. "Copy
   heating curve" resets it; "Ends from rooms" puts its cold and warm ends on the
-  highest hold flow plus margin of all rooms, the lead rooms or the rooms shown.
+  highest hold flow plus feedback of all rooms, the lead rooms or the rooms shown.
   Below, the tightest point of both curves against the recommendation: the smallest
-  reserve inside the curve's range, red when negative.
+  reserve inside the curve's range, red when negative. Then the valve feedback in K
+  with the lead demand and its room.
 
 Tap or hover the chart to read every value at one outdoor temperature; a dotted line
 marks the current one. The trial curve and the visible rooms are kept in the browser

@@ -2,10 +2,12 @@
 
 The heat source either follows its own weather-compensated curve with an
 offset (Daikin "leaving water offset") or takes a fixed flow setpoint. In
-both cases the target is the flow the flow lead rooms need, plus a margin,
-raised around a planned hot-water charge, and never below the lowest flow
-the heat source usefully delivers. The controller decides what to write
-and when; the caller writes and reports back.
+both cases the target is the flow the flow lead rooms need to hold their
+setpoint (feedforward) plus the valve feedback, raised for a room that
+recovers after a mode change and around a planned hot-water charge, and
+never below the lowest flow the heat source usefully delivers. The
+controller decides what to write and when; the caller writes and reports
+back.
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ from .write_budget import WritePriority
 # fallback is written. Right after a start or reload the rooms have no
 # estimate yet; a fallback then would cost two writes for nothing.
 FALLBACK_GRACE_S = 300.0
+# The feedback may lift the target at most this far above the feedforward.
+FEEDFORWARD_HEADROOM_K = 6.0
 
 
 class ActuatorMode(StrEnum):
@@ -29,6 +33,7 @@ class ActuatorMode(StrEnum):
 
 class FlowSource(StrEnum):
     LEAD = "lead"
+    BOOST = "boost"
     CHARGE = "charge"
     THRESHOLD = "threshold"
     FALLBACK = "fallback"
@@ -67,7 +72,6 @@ class FlowControlConfig:
     maximum: float
     step: float
     fallback: float
-    margin_k: float
     hysteresis_k: float
     hold_s: float
     # Lowest target: below it the heat source does not usefully heat.
@@ -77,13 +81,27 @@ class FlowControlConfig:
 @dataclass(frozen=True)
 class FlowInputs:
     outdoor_c: float | None
-    lead_min_flow_c: float | None
+    # Highest hold flow of the flow lead rooms; None while unknown.
+    feedforward_flow_c: float | None
     # Flow the rooms need around a planned hot-water charge; None outside.
     charge_flow_c: float | None
     # The actuator's current value as the heat source reports it.
     actual: float | None
     heating_on: bool | None
     reachable: bool
+    feedback_k: float = 0.0
+    # Recovery flow of the lead rooms after a mode change; None without.
+    boost_flow_c: float | None = None
+    # The radiators' design flow; caps what the feedback may ask for.
+    design_flow_c: float | None = None
+
+
+@dataclass(frozen=True)
+class FeedbackBounds:
+    """Where feedforward plus feedback is cut off."""
+
+    lower_c: float
+    upper_c: float
 
 
 @dataclass(frozen=True)
@@ -112,8 +130,8 @@ class FlowController:
 
     def _round(self, value: float) -> float:
         cfg = self.config
-        # Up to the next step: the flow never falls below the target, so the
-        # margin stays whole. The epsilon keeps values on a step where they are.
+        # Up to the next step: the flow never falls below the target. The
+        # epsilon keeps values on a step where they are.
         stepped = math.ceil(value / cfg.step - 1e-9) * cfg.step
         return max(cfg.minimum, min(cfg.maximum, round(stepped, 3)))
 
@@ -143,13 +161,36 @@ class FlowController:
     def _held(self, now_ts: float) -> bool:
         return now_ts - self.last_write_ts < self.config.hold_s
 
+    def _curve_flow(self, inputs: FlowInputs, curve: HeatingCurve) -> float | None:
+        return curve.flow_at(inputs.outdoor_c) if inputs.outdoor_c is not None else None
+
+    def bounds(self, inputs: FlowInputs, curve: HeatingCurve) -> FeedbackBounds | None:
+        """Limits of feedforward plus feedback; None without a feedforward.
+
+        Up to the feedforward plus headroom, what the actuator can reach and
+        the radiators' design flow; never below the threshold.
+        """
+        cfg = self.config
+        ff = inputs.feedforward_flow_c
+        if ff is None:
+            return None
+        upper = ff + FEEDFORWARD_HEADROOM_K
+        if cfg.mode is ActuatorMode.OFFSET:
+            curve_flow = self._curve_flow(inputs, curve)
+            if curve_flow is None:
+                return None
+            upper = min(upper, curve_flow + cfg.maximum)
+        else:
+            upper = min(upper, cfg.maximum)
+        if inputs.design_flow_c is not None:
+            upper = min(upper, inputs.design_flow_c)
+        return FeedbackBounds(cfg.threshold_c, max(cfg.threshold_c, upper))
+
     def decide(
         self, inputs: FlowInputs, curve: HeatingCurve, now_ts: float
     ) -> FlowDecision:
         cfg = self.config
-        curve_flow = (
-            curve.flow_at(inputs.outdoor_c) if inputs.outdoor_c is not None else None
-        )
+        curve_flow = self._curve_flow(inputs, curve)
 
         if inputs.heating_on is False:
             return FlowDecision(None, None, None, reason="heating_off")
@@ -157,7 +198,8 @@ class FlowController:
             return FlowDecision(None, None, None, reason="unreachable")
 
         needs_curve = cfg.mode is ActuatorMode.OFFSET
-        if inputs.lead_min_flow_c is None or (needs_curve and curve_flow is None):
+        bounds = self.bounds(inputs, curve)
+        if inputs.feedforward_flow_c is None or bounds is None:
             self._charge_active = False
             target = (
                 None
@@ -196,8 +238,10 @@ class FlowController:
             )
 
         self._missing_since = None
-        lead = inputs.lead_min_flow_c + cfg.margin_k
+        lead = min(inputs.feedforward_flow_c + inputs.feedback_k, bounds.upper_c)
         target, source = lead, FlowSource.LEAD
+        if inputs.boost_flow_c is not None and inputs.boost_flow_c > target:
+            target, source = inputs.boost_flow_c, FlowSource.BOOST
         if inputs.charge_flow_c is not None and inputs.charge_flow_c > target:
             target, source = inputs.charge_flow_c, FlowSource.CHARGE
         if target < cfg.threshold_c:

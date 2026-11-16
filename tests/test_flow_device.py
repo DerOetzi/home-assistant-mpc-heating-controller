@@ -258,9 +258,9 @@ async def test_curve_recommendation_from_the_lead_rooms_hold_flow(
     assert float(cold.state) > float(warm.state) > 0
 
     recommendation = hass.states.get("sensor.vorlauf_heating_curve_recommendation_cold")
-    assert float(recommendation.state) == pytest.approx(
-        float(cold.state) + 1.0, abs=0.06
-    )
+    # Without valve feedback yet: the hold flow itself.
+    assert recommendation.attributes["feedback_k"] == 0.0
+    assert float(recommendation.state) == pytest.approx(float(cold.state), abs=0.06)
     assert recommendation.attributes["room"] == "Wohnzimmer"
     assert recommendation.attributes["current_curve_flow_c"] == 54.0
     assert recommendation.attributes["difference_k"] == pytest.approx(
@@ -275,3 +275,41 @@ async def test_curve_recommendation_from_the_lead_rooms_hold_flow(
     assert len(room["flow_c"]) == len(outdoor)
     assert room["flow_c"][outdoor.index(-13.0)] == float(cold.state)
     assert room["flow_c"][outdoor.index(18.0)] == float(warm.state)
+
+
+def _hub(hass: HomeAssistant):
+    return hass.config_entries.async_entries(DOMAIN)[0].runtime_data
+
+
+async def test_feedback_frozen_while_not_writing(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    await _setup(hass)
+    await _tick(hass, freezer)
+
+    state = hass.states.get("sensor.vorlauf_flow_feedback")
+    assert state.state == "0.0"
+    assert state.attributes["frozen"] is True
+    assert state.attributes["frozen_reason"] == "write_off"
+
+
+async def test_feedback_frozen_below_the_threshold(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    await _setup(hass)
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": "switch.vorlauf_write_flow"}, blocking=True
+    )
+    # Defrost: the measured flow drops below the threshold.
+    hass.states.async_set("sensor.flow_temperature", "20.0")
+    await _tick(hass, freezer)
+
+    assert _hub(hass).flow_feedback.frozen == "defrost"
+
+
+async def test_feedback_kept_in_the_hub_store(hass: HomeAssistant) -> None:
+    await _setup(hass)
+    hub = _hub(hass)
+    hub.flow_feedback.feedback_k = 2.0
+
+    assert hub._export()["flow_feedback"]["feedback_k"] == 2.0

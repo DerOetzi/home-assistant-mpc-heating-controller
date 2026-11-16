@@ -170,8 +170,10 @@ export class HeatingControllerCurveCard extends HTMLElement {
       rooms,
       outdoorValues,
       curve,
-      margin: Number(sensor.attributes.margin_k ?? 0),
+      feedback: Number(sensor.attributes.feedback_k ?? 0),
       outdoorNow: sensor.attributes.outdoor_temperature_c,
+      leadDemand: sensor.attributes.lead_demand_pct,
+      leadRoom: sensor.attributes.lead_room,
     };
   }
 
@@ -323,12 +325,12 @@ export class HeatingControllerCurveCard extends HTMLElement {
     if (action === "source") {
       this._experiment = { ...data.curve };
     } else {
-      // The envelope of the chosen rooms plus margin at the curve's two ends;
+      // The envelope of the chosen rooms plus feedback at the curve's two ends;
       // bump and width stay.
       const chosen = data.rooms.filter((room) =>
         action === "lead" ? room.lead : action === "shown" ? this._visible.has(room.name) : true
       );
-      const recommendation = envelopeSeries(chosen, data.margin);
+      const recommendation = envelopeSeries(chosen, data.feedback);
       const at = (outdoor) => valueAt(data.outdoorValues, recommendation, outdoor);
       const cold = at(data.curve.outdoorCold);
       const warm = at(data.curve.outdoorWarm);
@@ -366,13 +368,13 @@ export class HeatingControllerCurveCard extends HTMLElement {
     const xs = data.outdoorValues;
     const source = curveSeries(data.curve, xs);
     const experiment = curveSeries(this._experiment, xs);
-    const recommendation = recommendationSeries(data.rooms, data.margin);
-    // Rooms are drawn with the margin, like the recommendation, so every line
+    const recommendation = recommendationSeries(data.rooms, data.feedback);
+    // Rooms are drawn with the feedback, like the recommendation, so every line
     // reads directly as "the curve needs to be at least here".
     const shown = data.rooms
       .map((room, index) => ({
         ...room,
-        flow_c: envelopeSeries([room], data.margin),
+        flow_c: envelopeSeries([room], data.feedback),
         color: ROOM_COLORS[index % ROOM_COLORS.length],
       }))
       .filter((room) => this._visible.has(room.name));
@@ -447,7 +449,12 @@ export class HeatingControllerCurveCard extends HTMLElement {
             outdoor: num(point.outdoor, 0, locale),
           })}</div>`
         : "";
+    const feedback = `<div>${t(hass, "curve_feedback", {
+      feedback: `${data.feedback > 0 ? "+" : ""}${num(data.feedback, 1, locale)}`,
+      demand: Number.isFinite(data.leadDemand) ? num(data.leadDemand, 0, locale) : "–",
+      room: escapeHtml(data.leadRoom ?? "–"),
+    })}</div>`;
     this.shadowRoot.querySelector(".summary").innerHTML =
-      line(t(hass, "curve_experiment"), tight) + line(t(hass, "curve_source"), sourceTight);
+      line(t(hass, "curve_experiment"), tight) + line(t(hass, "curve_source"), sourceTight) + feedback;
   }
 }

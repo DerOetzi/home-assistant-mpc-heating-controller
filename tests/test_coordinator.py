@@ -15,7 +15,6 @@ from heating_controller.const import (
 from heating_controller.coordinator import (
     FLOW_DIP_TOLERANCE_S,
     FLOW_TEMPERATURE_MAX_GAP_S,
-    ROOM_SENSOR_STARTUP_GRACE_S,
     HeatingRoomCoordinator,
 )
 from heating_controller.profiles import StatusMatch, TrvBinding
@@ -181,6 +180,8 @@ def _seed_entities(
     hass.states.async_set("climate.heat_source", "heat" if heat_available else "off")
     hass.states.async_set("sensor.flow_temperature", str(flow_temp))
     hass.states.async_set("input_number.flow_threshold", "30.0")
+    # The hub's startup gate waits for every entity it writes.
+    hass.states.async_set("switch.heizung_wohnzimmer_trv_active", "off")
 
 
 def _register_fake_climate_set_temperature(hass: HomeAssistant) -> list[ServiceCall]:
@@ -208,6 +209,8 @@ async def test_setup_seeds_state_and_computes_result(hass: HomeAssistant) -> Non
 
     await coordinator.async_setup()
 
+    await coordinator.async_start()
+
     assert coordinator.state.is_comfort() is True
     assert coordinator.current_heat_mode == HeatMode.COMFORT
     assert coordinator.is_automation_active is True
@@ -230,6 +233,7 @@ async def test_periodic_sensor_poll_keeps_room_temperature_fresh(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.mpc.get_room_temperature_result().valid is True
 
@@ -254,6 +258,8 @@ async def test_window_open_forces_frost_protection(hass: HomeAssistant) -> None:
 
     await coordinator.async_setup()
 
+    await coordinator.async_start()
+
     assert coordinator.current_heat_mode == HeatMode.FROST_PROTECTION
     coordinator.async_unload()
 
@@ -268,6 +274,7 @@ async def test_manual_selection_bypasses_forced_frost_protection_for_eco(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.current_heat_mode == HeatMode.FROST_PROTECTION
 
@@ -288,6 +295,7 @@ async def test_manual_selection_bypasses_forced_frost_protection_for_comfort(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.current_heat_mode == HeatMode.FROST_PROTECTION
 
@@ -308,6 +316,7 @@ async def test_manual_frost_protection_selection_keeps_automation_deactivated(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     await coordinator.async_set_manual_heat_mode(HeatMode.COMFORT)
     assert coordinator.is_automation_active is False
@@ -329,6 +338,7 @@ async def test_unblock_reactivates_automation_and_reasserts_forced_frost_protect
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     await coordinator.async_set_manual_heat_mode(HeatMode.COMFORT)
     assert coordinator.is_automation_active is False
@@ -349,6 +359,7 @@ async def test_manual_override_blocks_until_unblocked(hass: HomeAssistant) -> No
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.current_heat_mode == HeatMode.COMFORT
     assert coordinator.is_automation_active is True
@@ -374,6 +385,7 @@ async def test_heating_unavailable_disables_learning_and_keeps_the_mode(
     coordinator = _coordinator(hass, entry, _trvs())
     calls = _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.current_heat_mode == HeatMode.COMFORT
     assert calls[-1].data["temperature"] == 22.0
@@ -392,6 +404,7 @@ async def test_heat_source_off_with_hot_flow_is_inactive_but_keeps_the_mode(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.trv_active is False
     assert coordinator.current_heat_mode == HeatMode.COMFORT
@@ -409,6 +422,7 @@ async def test_heat_source_heat_mode_but_flow_below_threshold_is_inactive(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.trv_active is False
     assert coordinator.current_heat_mode == HeatMode.COMFORT
@@ -426,6 +440,7 @@ async def test_heat_source_heat_mode_at_the_threshold_is_active(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.trv_active is True
 
@@ -442,6 +457,7 @@ async def test_heat_source_heat_mode_and_hot_flow_is_active(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.trv_active is True
     assert coordinator.current_heat_mode == HeatMode.COMFORT
@@ -459,6 +475,7 @@ async def test_min_flow_reports_normal_mode_demand_while_forced_frost(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
     hass.states.async_set("binary_sensor.fenster_wohnzimmer", "on")
     await hass.async_block_till_done()
 
@@ -489,6 +506,7 @@ async def test_flow_supply_status_undersupplied_when_running_below_requirement(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.trv_active is True
     required = coordinator.normal_min_flow_temperature_c
@@ -510,6 +528,7 @@ async def test_flow_supply_status_sufficient_when_flow_covers_requirement(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.trv_active is True
     required = coordinator.normal_min_flow_temperature_c
@@ -533,6 +552,7 @@ async def test_flow_supply_status_below_threshold_for_a_never_binding_requiremen
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     required = coordinator.normal_min_flow_temperature_c
     assert required is not None
@@ -556,6 +576,7 @@ async def test_flow_supply_status_no_requirement_when_ambient_holds_target(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.normal_min_flow_temperature_c == 0
     assert coordinator.flow_supply_status == FlowSupplyStatus.NO_REQUIREMENT
@@ -580,6 +601,7 @@ async def test_flow_supply_status_surplus_while_the_room_coasts_above_target(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.normal_flow_gate_closed is True
     assert coordinator.normal_min_flow_temperature_c == 0
@@ -601,6 +623,7 @@ async def test_entries_without_flow_gate_settings_fall_back_to_defaults(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.normal_flow_gate_closed is False
     assert coordinator.normal_min_flow_temperature_c > 0
@@ -620,6 +643,7 @@ async def test_trv_active_switch_turned_off_when_unavailable(
         switch_calls.append(call)
 
     _seed_entities(hass, heat_available=False)
+    hass.states.async_set("switch.heizung_wohnzimmer_trv_active", "on")
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
     entry.add_to_hass(hass)
 
@@ -629,6 +653,8 @@ async def test_trv_active_switch_turned_off_when_unavailable(
     hass.services.async_register("switch", "turn_off", switch_handler)
 
     await coordinator.async_setup()
+
+    await coordinator.async_start()
 
     assert coordinator.trv_active is False
     off_calls = [call for call in switch_calls if call.service == "turn_off"]
@@ -666,6 +692,7 @@ async def test_trv_target_already_reported_is_not_rewritten(
     hass.services.async_register("switch", "turn_on", switch_handler)
     hass.services.async_register("switch", "turn_off", switch_handler)
     await coordinator.async_setup()
+    await coordinator.async_start()
     await hass.async_block_till_done()
     assert writes
 
@@ -695,6 +722,7 @@ async def test_trv_target_differing_from_reported_is_written(
     coordinator = _coordinator(hass, entry, _trvs())
     calls = _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
     assert calls
     written_target_c = calls[-1].data["temperature"]
     reported_target_c = written_target_c + 1.0
@@ -740,6 +768,8 @@ async def test_trv_active_switch_already_in_state_is_not_rewritten(
     hass.services.async_register("switch", "turn_off", switch_handler)
 
     await coordinator.async_setup()
+
+    await coordinator.async_start()
     await hass.async_block_till_done()
 
     assert coordinator.trv_active is True
@@ -771,6 +801,7 @@ async def test_setup_tolerates_missing_heat_source_climate_entity(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.trv_active is True
     assert coordinator.current_heat_mode == HeatMode.COMFORT
@@ -787,6 +818,7 @@ async def test_house_and_room_switch_both_gate_comfort(hass: HomeAssistant) -> N
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     # The room's own switch starts off.
     assert coordinator.state.is_comfort() is False
@@ -815,6 +847,7 @@ async def test_room_off_the_house_switch_follows_only_its_own(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     await coordinator.async_set_house_comfort(False)
     await coordinator.async_set_room_comfort(True)
@@ -840,6 +873,7 @@ async def test_closed_flow_gate_survives_a_restart(hass: HomeAssistant) -> None:
     closing_entry.add_to_hass(hass)
     before_restart = _coordinator(hass, closing_entry, _trvs())
     await before_restart.async_setup()
+    await before_restart.async_start()
     assert before_restart.normal_flow_gate_closed is True
     before_restart.async_unload()
 
@@ -852,6 +886,7 @@ async def test_closed_flow_gate_survives_a_restart(hass: HomeAssistant) -> None:
     )
     after_restart = _coordinator(hass, restarted_entry, _trvs())
     await after_restart.async_setup()
+    await after_restart.async_start()
 
     assert after_restart.normal_flow_gate_closed is True
     assert after_restart.flow_supply_status == FlowSupplyStatus.SURPLUS
@@ -861,39 +896,14 @@ async def test_closed_flow_gate_survives_a_restart(hass: HomeAssistant) -> None:
     fresh_entry.add_to_hass(hass)
     without_stored_state = _coordinator(hass, fresh_entry, _trvs())
     await without_stored_state.async_setup()
+    await without_stored_state.async_start()
 
     assert without_stored_state.normal_flow_gate_closed is False
     without_stored_state.async_unload()
 
 
-async def test_compute_waits_for_the_room_sensor_after_startup(
+async def test_compute_falls_back_to_trvs_without_the_room_sensor(
     hass: HomeAssistant,
-) -> None:
-    _seed_entities(hass)
-    hass.states.async_set("sensor.wohnzimmer_temperatur", "unavailable")
-    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
-    entry.add_to_hass(hass)
-
-    coordinator = _coordinator(hass, entry, _trvs())
-    calls = _register_fake_climate_set_temperature(hass)
-    await coordinator.async_setup()
-
-    assert coordinator.last_result is None
-    assert coordinator.normal_result is None
-    # The TRV holds the mode target on its own reading meanwhile.
-    assert [call.data["temperature"] for call in calls] == [22.0]
-
-    hass.states.async_set("sensor.wohnzimmer_temperatur", "21.0")
-    await hass.async_block_till_done()
-
-    assert coordinator.last_result is not None
-    assert coordinator.last_result.input.room_temp_c == 21.0
-
-    coordinator.async_unload()
-
-
-async def test_compute_falls_back_to_trvs_when_room_sensor_stays_silent(
-    hass: HomeAssistant, freezer
 ) -> None:
     _seed_entities(hass)
     hass.states.async_set("sensor.wohnzimmer_temperatur", "unavailable")
@@ -903,11 +913,7 @@ async def test_compute_falls_back_to_trvs_when_room_sensor_stays_silent(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
-    assert coordinator.last_result is None
-
-    freezer.tick(timedelta(seconds=ROOM_SENSOR_STARTUP_GRACE_S + 1))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await coordinator.async_start()
 
     assert coordinator.last_result is not None
     assert coordinator.last_result.input.room_temp_c == 18.0
@@ -925,6 +931,7 @@ async def test_flow_threshold_follows_the_linked_helper(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.flow_threshold_c == 30.0
     assert coordinator.trv_active is True
@@ -954,6 +961,7 @@ async def test_flow_threshold_falls_back_to_the_default(hass: HomeAssistant) -> 
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.flow_threshold_c == DEFAULT_FLOW_THRESHOLD_C
 
@@ -971,6 +979,7 @@ async def test_flow_threshold_falls_back_while_the_helper_is_unavailable(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.flow_threshold_c == DEFAULT_FLOW_THRESHOLD_C
 
@@ -985,6 +994,7 @@ async def _setup_coordinator(
     coordinator = _coordinator(hass, entry, trvs or _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
     return coordinator
 
 
@@ -1103,6 +1113,7 @@ async def test_a_burst_of_state_changes_recomputes_once(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     recomputes = 0
     recompute = coordinator._async_recompute_locked
@@ -1145,6 +1156,7 @@ async def test_flow_temperature_comes_from_the_flow_entity(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.current_flow_temperature_c == 42.0
     assert coordinator.trv_active is True
@@ -1180,6 +1192,7 @@ async def test_flow_back_above_the_threshold_ends_the_dip(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     start = time.time()
     now = [start]
@@ -1210,6 +1223,7 @@ async def test_unreachable_heat_source_keeps_its_last_known_heat_state(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
     assert coordinator.trv_active is True
 
     hass.states.async_set("climate.heat_source", "unavailable")
@@ -1239,6 +1253,7 @@ async def test_heat_source_unreachable_since_startup_stays_inactive(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.trv_active is False
     assert coordinator.current_heat_mode == HeatMode.COMFORT
@@ -1257,6 +1272,7 @@ async def test_opening_a_window_writes_frost_protection_at_once(
     coordinator = _coordinator(hass, entry, _trvs())
     calls = _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     hass.states.async_set("binary_sensor.fenster_wohnzimmer", "on")
     await hass.async_block_till_done()
@@ -1287,6 +1303,7 @@ async def test_unavailable_flow_entity_keeps_the_last_flow_temperature(
     hass.services.async_register("switch", "turn_on", switch_handler)
     hass.services.async_register("switch", "turn_off", switch_handler)
     await coordinator.async_setup()
+    await coordinator.async_start()
     assert coordinator.trv_active is True
 
     # A template reload drops the sensor for a moment.
@@ -1318,6 +1335,7 @@ async def test_flow_entity_unavailable_since_startup_stays_inactive(
     coordinator = _coordinator(hass, entry, _trvs())
     _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
 
     assert coordinator.current_flow_temperature_c is None
     assert coordinator.trv_active is False
@@ -1366,16 +1384,17 @@ async def test_unavailable_valve_position_is_reported_missing(
     coordinator.async_unload()
 
 
-async def test_a_trv_silent_for_half_an_hour_has_no_known_demand(
+async def test_a_trv_silent_for_75_minutes_has_no_known_demand(
     hass: HomeAssistant, freezer
 ) -> None:
     _seed_entities(hass)
     hass.states.async_set(VALVE_ENTITY, "100")
     coordinator = await _setup_coordinator(hass, trvs=[_trv_with_valve()])
 
-    for _ in range(5):
+    for _ in range(14):
         await _poll(hass, freezer, 5)
-    # An unchanged opening is not reported again; the TRV is still current.
+    # An unchanged opening is not reported again; a TRV with constant values
+    # reports about once an hour and is still current.
     assert coordinator.room_demand_pct == 100.0
 
     for _ in range(2):
@@ -1508,6 +1527,7 @@ async def test_nothing_is_written_to_a_trv_while_it_adapts(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _seed_entities(hass)
+    hass.states.async_set("switch.heizung_wohnzimmer_trv_active", "on")
     hass.states.async_set(ADAPTATION_ENTITY, "in_progress")
     now = [time.time()]
     monkeypatch.setattr("heating_controller.coordinator.time.time", lambda: now[0])
@@ -1569,6 +1589,7 @@ async def _setup_with_calls(
     coordinator = _coordinator(hass, entry, _trvs())
     calls = _register_fake_climate_set_temperature(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
     await hass.async_block_till_done()
     return coordinator, calls
 
@@ -1599,102 +1620,52 @@ async def _setup_recording(
     entry.add_to_hass(hass)
     coordinator = _coordinator(hass, entry, _trvs())
     await coordinator.async_setup()
+    await coordinator.async_start()
     await hass.async_block_till_done()
     return coordinator, climate_calls, switch_calls
 
 
-async def test_startup_with_an_unknown_heat_source_sets_the_mode_target_only(
+async def test_an_unknown_heat_source_cuts_heat_but_keeps_the_mode(
     hass: HomeAssistant,
 ) -> None:
     _seed_entities(hass)
+    hass.states.async_set("switch.heizung_wohnzimmer_trv_active", "on")
     hass.states.async_set("climate.heat_source", "unavailable")
     coordinator, climate_calls, switch_calls = await _setup_recording(hass)
 
+    assert coordinator.current_heat_mode == HeatMode.COMFORT
     assert [call.data["temperature"] for call in climate_calls] == [22.0]
-    assert switch_calls == []
+    assert [call.service for call in switch_calls] == ["turn_off"]
 
     coordinator.async_unload()
 
 
-async def test_startup_without_a_flow_temperature_sets_the_mode_target_only(
+async def test_nothing_is_computed_or_written_before_start(
     hass: HomeAssistant,
 ) -> None:
     _seed_entities(hass)
-    hass.states.async_set("sensor.flow_temperature", "unavailable")
-    coordinator, climate_calls, switch_calls = await _setup_recording(hass)
+    climate_calls: list[ServiceCall] = []
 
-    assert [call.data["temperature"] for call in climate_calls] == [22.0]
-    assert switch_calls == []
+    async def climate_handler(call: ServiceCall) -> None:
+        climate_calls.append(call)
 
-    coordinator.async_unload()
-
-
-async def test_the_heat_switch_follows_once_the_heat_source_reports(
-    hass: HomeAssistant,
-) -> None:
-    _seed_entities(hass)
-    hass.states.async_set("climate.heat_source", "unavailable")
-    coordinator, climate_calls, switch_calls = await _setup_recording(hass)
-
-    hass.states.async_set("climate.heat_source", "heat")
+    hass.services.async_register("climate", "set_temperature", climate_handler)
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+    coordinator = _coordinator(hass, entry, _trvs())
+    await coordinator.async_setup()
+    hass.states.async_set("sensor.wohnzimmer_temperatur", "19.0")
     await hass.async_block_till_done()
 
-    assert coordinator.trv_active is True
-    assert coordinator.current_heat_mode == HeatMode.COMFORT
+    assert coordinator.last_result is None
+    assert climate_calls == []
+
+    await coordinator.async_start()
+    await hass.async_block_till_done()
+
     assert coordinator.last_result is not None
+    assert coordinator.last_result.input.room_temp_c == 19.0
     assert [call.data["temperature"] for call in climate_calls] == [22.0]
-    assert switch_calls and all(call.service == "turn_on" for call in switch_calls)
-
-    coordinator.async_unload()
-
-
-async def test_a_heat_source_unknown_past_the_grace_cuts_heat_but_keeps_the_mode(
-    hass: HomeAssistant, freezer
-) -> None:
-    _seed_entities(hass)
-    hass.states.async_set("climate.heat_source", "unavailable")
-    coordinator, climate_calls, switch_calls = await _setup_recording(hass)
-
-    freezer.tick(timedelta(minutes=5))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
-
-    assert coordinator.current_heat_mode == HeatMode.COMFORT
-    assert climate_calls and climate_calls[-1].data["temperature"] == 22.0
-    assert switch_calls and switch_calls[-1].service == "turn_off"
-
-    coordinator.async_unload()
-
-
-async def test_an_open_window_forces_frost_protection_during_the_grace(
-    hass: HomeAssistant,
-) -> None:
-    _seed_entities(hass)
-    hass.states.async_set("climate.heat_source", "unavailable")
-    hass.states.async_set("binary_sensor.fenster_wohnzimmer", "on")
-    coordinator, climate_calls, switch_calls = await _setup_recording(hass)
-
-    assert coordinator.current_heat_mode == HeatMode.FROST_PROTECTION
-    assert climate_calls and climate_calls[-1].data["temperature"] == 8.0
-    # Whether the TRVs get heat is still unknown: the switches wait.
-    assert switch_calls == []
-
-    coordinator.async_unload()
-
-
-async def test_a_mode_the_user_picked_goes_through_during_the_grace(
-    hass: HomeAssistant,
-) -> None:
-    _seed_entities(hass)
-    hass.states.async_set("climate.heat_source", "unavailable")
-    coordinator, climate_calls, switch_calls = await _setup_recording(hass)
-
-    await coordinator.async_set_manual_heat_mode(HeatMode.FROST_PROTECTION)
-    await hass.async_block_till_done()
-
-    assert coordinator.current_heat_mode == HeatMode.FROST_PROTECTION
-    assert climate_calls and climate_calls[-1].data["temperature"] == 8.0
-    assert switch_calls == []
 
     coordinator.async_unload()
 
@@ -1712,5 +1683,90 @@ async def test_setup_removes_the_old_valve_curve_file(
 
     await coordinator.async_setup()
 
+    await coordinator.async_start()
+
     assert key not in hass_storage
+    coordinator.async_unload()
+
+
+async def test_flow_boost_after_a_mode_jump_until_the_room_is_close(
+    hass: HomeAssistant, freezer
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set(VALVE_ENTITY, "100")
+    coordinator = await _setup_coordinator(hass, trvs=[_trv_with_valve()])
+    await coordinator.async_set_manual_heat_mode(HeatMode.ECO)
+    await _poll(hass, freezer, 5)
+    assert coordinator.flow_boost_active is False
+    assert coordinator.flow_boost_temperature_c is None
+
+    await coordinator.async_set_manual_heat_mode(HeatMode.COMFORT)
+    await _poll(hass, freezer, 1)
+    assert coordinator.flow_boost_active is True
+    recovery_c = coordinator.normal_recovery_flow_temperature_c
+    assert recovery_c > 0
+    assert coordinator.flow_boost_temperature_c == recovery_c
+    assert coordinator.normal_min_flow_temperature_c == recovery_c
+    # A recovering room says nothing about the flow.
+    assert coordinator.feedback_sample is None
+
+    target_c = coordinator.normal_target_temperature_c
+    for room_c in (19.0, 19.5, 20.0, 20.5, target_c - 0.1):
+        hass.states.async_set("sensor.wohnzimmer_temperatur", f"{room_c:.1f}")
+        await _poll(hass, freezer, 5)
+    await _poll(hass, freezer, 5)
+    assert coordinator.flow_boost_active is False
+
+    coordinator.async_unload()
+
+
+async def test_flow_boost_ends_after_the_recovery_horizon(
+    hass: HomeAssistant, freezer
+) -> None:
+    _seed_entities(hass)
+    coordinator = await _setup_coordinator(hass)
+    await coordinator.async_set_manual_heat_mode(HeatMode.ECO)
+    await _poll(hass, freezer, 5)
+    await coordinator.async_set_manual_heat_mode(HeatMode.COMFORT)
+    await _poll(hass, freezer, 1)
+    assert coordinator.flow_boost_active is True
+
+    for _ in range(6 * 12):
+        hass.states.async_set("sensor.wohnzimmer_temperatur", "18.5")
+        await _poll(hass, freezer, 5)
+    assert coordinator.flow_boost_active is False
+
+    coordinator.async_unload()
+
+
+async def test_feedback_sample_from_valve_and_room_sensor(
+    hass: HomeAssistant, freezer
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set(VALVE_ENTITY, "95")
+    coordinator = await _setup_coordinator(hass, trvs=[_trv_with_valve()])
+    await _poll(hass, freezer, 5)
+
+    sample = coordinator.feedback_sample
+    assert sample.room == "Wohnzimmer"
+    assert sample.demand_pct == 95.0
+    assert sample.deficit_c == pytest.approx(
+        coordinator.normal_target_temperature_c - 18.5, abs=0.01
+    )
+
+    # An open window takes the room out.
+    hass.states.async_set("binary_sensor.fenster_wohnzimmer", "on")
+    await _poll(hass, freezer, 1)
+    assert coordinator.feedback_sample is None
+
+    coordinator.async_unload()
+
+
+async def test_feedback_sample_needs_a_known_demand(hass: HomeAssistant) -> None:
+    _seed_entities(hass)
+    coordinator = await _setup_coordinator(hass)
+
+    # No valve position configured: nothing to judge the flow by.
+    assert coordinator.feedback_sample is None
+
     coordinator.async_unload()

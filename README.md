@@ -6,8 +6,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A Home Assistant custom integration for **room heating with self-regulating TRVs** —
-one hub per house with the rooms as its sub-entries. The TRVs get each room's setpoint plus
-a slow correction from the room sensor; a self-calibrating grey-box thermal model per room
+one hub per house with the rooms as its sub-entries. The TRVs get each room's setpoint and
+the room sensor's reading; a self-calibrating grey-box thermal model per room
 turns its learned losses into the flow temperature the heat source should deliver. A
 purpose-built Lovelace card operates it.
 
@@ -51,16 +51,16 @@ purpose-built Lovelace card operates it.
   ungated requirement for diagnosis. Hold and recovery flow use the same design spread as
   the valve power the factors are learned from. See [docs/mpc-guide.md](docs/mpc-guide.md).
 - **TRV setpoints** — each TRV regulates the room with its own PI. The room hands it the
-  active mode's target through `climate.set_temperature`, plus a slow setpoint correction
-  from the room sensor (0.5 K steps every two hours, at most ±3 K), switches its
+  active mode's target through `climate.set_temperature` and the room sensor's reading as
+  external temperature (more often for a radiator marked covered), switches its
   heat-available switch with the heat source, and drops the setpoint to frost protection
-  while a window is open. Without an outdoor temperature only learning pauses. See
+  while a window is open. TRVs sharing a room share their load (Danfoss load balancing). Without an outdoor temperature only learning pauses. See
   [docs/mpc-guide.md](docs/mpc-guide.md#trv-control).
 - **Persisted learning** — each room's learned `ua_factor`/`capacity_factor` survive
   restarts (`homeassistant.helpers.storage.Store`, one file per room) and are removed
   cleanly if the room is deleted from the hub. The admin-only
   `heating_controller.recalibrate` service sets or resets them, resets a room's learned
-  gains and sets its setpoint correction.
+  gains.
 - **Learning only when gains are small** — learning pauses while the sun is up and for two
   hours after sunset, while the outdoor temperature is missing or the flow temperature has
   had no reading for over 16 minutes, and while a room's optional *block learning* entity is
@@ -146,14 +146,14 @@ source's flow itself.
    missing for 5 minutes.
 
 The device *Vorlauf* then holds the heating curve as numbers (two points and an optional
-raise around 0 °C, as the heat source has it), margin, hysteresis, hold time, the most a
+raise around 0 °C, as the heat source has it), hysteresis, hold time, the most a
 hot-water charge may raise the flow. The flow threshold replaces the hub's threshold
 entity: in offset mode the curve's warm end (*Flow threshold effective*), in setpoint mode
 a number on the device. The target never drops below it. *Write flow* starts off: the device computes and shows *Flow target* and
 *Actuator target* but writes nothing until switched on. See
 [Flow control](docs/mpc-guide.md#flow-control). *Heating curve recommendation cold* /
 *warm* report the curve points the flow lead rooms need (hold flow at comfort with the
-learned heat-loss factor, plus margin); each room reports its own as *Hold flow
+learned heat-loss factor, plus the valve feedback *Flow feedback*); each room reports its own as *Hold flow
 temperature at curve cold/warm end*. See
 [Setting the heating curve](docs/mpc-guide.md#setting-the-heating-curve).
 
@@ -190,7 +190,8 @@ The hub's device *Heizung* reports the lead rooms:
 
 - *Lead rooms hold flow temperature* — highest gated hold flow among the heating-limit lead
   rooms (attributes: `room` with the highest value, `rooms`).
-- *Lead rooms minimum flow temperature* — highest minimum flow among the flow lead rooms.
+- *Lead rooms minimum flow temperature* — highest minimum flow among the flow lead rooms
+  (recovery only during a flow boost after a mode change).
 - *Lead rooms heating demand* — on while the hold flow reaches the flow threshold;
   unavailable while either is missing.
 - *Flow reserve hold* / *Flow reserve minimum* — heating curve minus the two flows above,
@@ -238,8 +239,8 @@ What the controller does with each entity:
 - **Valve opening** — the heat the radiator really gives off, see
   [docs/mpc-guide.md](docs/mpc-guide.md#valve-position-the-heat-the-radiators-really-get).
   The highest opening of the room is its demand. An opening counts as unknown once the
-  TRV reported nothing for 30 minutes, neither its opening nor its temperature: an unchanged
-  opening is not reported again, and a Zigbee battery device that hangs stays available
+  TRV reported nothing for 75 minutes, neither its opening nor its temperature: an unchanged
+  opening is not reported again (a TRV with constant values reports about once an hour), and a Zigbee battery device that hangs stays available
   with its last values.
 - **Heat available** — switched on while the heat source delivers heat, so the TRV knows
   whether opening its valve can help. A flow dip below the threshold (e.g. a defrost)
@@ -251,8 +252,7 @@ What the controller does with each entity:
 - **Mounted mode** — while the TRV is in mounting mode the room learns nothing.
 
 A room none of whose TRVs reports a valve opening has no measured demand: it learns nothing
-(status `valve_position_missing`), its setpoint correction moves only while the room holds
-still, and its radiators are not checked.
+(status `valve_position_missing`) and its radiators are not checked.
 
 **Danfoss Ally:** set the algorithm scale factor on the device to 1 (Zigbee2MQTT:
 `algorithm_scale_factor`), the quickest response of the TRV's own regulation. The controller

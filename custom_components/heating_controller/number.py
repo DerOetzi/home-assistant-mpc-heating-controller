@@ -131,7 +131,6 @@ FLOW_NUMBERS = (
     FlowNumberSpec("curve_flow_warm", UnitOfTemperature.CELSIUS, 15, 60, 0.5, True),
     FlowNumberSpec("curve_bump", UnitOfTemperature.KELVIN, -10, 10, 0.5),
     FlowNumberSpec("curve_bump_width", UnitOfTemperature.KELVIN, 0, 20, 0.5),
-    FlowNumberSpec("margin", UnitOfTemperature.KELVIN, 0, 10, 0.5),
     FlowNumberSpec("hysteresis", UnitOfTemperature.KELVIN, 0, 5, 0.1),
     FlowNumberSpec("hold_time_min", UnitOfTime.MINUTES, 5, 240, 5),
     FlowNumberSpec("charge_raise_max", UnitOfTemperature.KELVIN, 0, 15, 0.5),
@@ -140,7 +139,7 @@ FLOW_NUMBERS = (
 
 
 class FlowNumber(FlowEntity, RestoreNumber):
-    """A setting of the flow device: heating curve, margins, timing."""
+    """A setting of the flow device: heating curve, hysteresis, timing."""
 
     _attr_entity_category = EntityCategory.CONFIG
     _attr_mode = NumberMode.BOX

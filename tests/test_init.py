@@ -190,52 +190,6 @@ async def test_recalibrate_resets_gains_and_keeps_the_factors(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_recalibrate_sets_the_setpoint_correction_and_persists_it(
-    hass: HomeAssistant, hass_admin_user: MockUser
-) -> None:
-    entry = await _setup_room(hass)
-    coordinator = hass.data[DOMAIN][entry.entry_id]
-    coordinator.mpc.recalibrate_learning_factors(
-        LearningFactors(ua_factor=0.9, capacity_factor=1.3)
-    )
-
-    await hass.services.async_call(
-        DOMAIN,
-        "recalibrate",
-        {"entity_id": "button.wohnzimmer_unblock", "setpoint_correction": -3.0},
-        blocking=True,
-        context=Context(user_id=hass_admin_user.id),
-    )
-
-    assert coordinator.setpoint_correction.correction_c == -3.0
-    assert await coordinator.setpoint_correction_store.async_load() == -3.0
-    assert coordinator.mpc.learned_ua_factor == 0.9
-    assert coordinator.mpc.learned_capacity_factor == 1.3
-
-    assert await hass.config_entries.async_unload(entry.entry_id)
-
-
-@pytest.mark.parametrize("correction_c", [3.5, -3.5, 0.3])
-async def test_recalibrate_rejects_a_correction_off_the_grid(
-    hass: HomeAssistant, hass_admin_user: MockUser, correction_c: float
-) -> None:
-    entry = await _setup_room(hass)
-
-    with pytest.raises(vol.Invalid):
-        await hass.services.async_call(
-            DOMAIN,
-            "recalibrate",
-            {
-                "entity_id": "button.wohnzimmer_unblock",
-                "setpoint_correction": correction_c,
-            },
-            blocking=True,
-            context=Context(user_id=hass_admin_user.id),
-        )
-
-    assert await hass.config_entries.async_unload(entry.entry_id)
-
-
 async def test_migration_drops_the_planner_options_and_target_band(
     hass: HomeAssistant,
 ) -> None:

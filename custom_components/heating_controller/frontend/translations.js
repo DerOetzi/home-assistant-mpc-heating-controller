@@ -24,7 +24,6 @@ export const TRANSLATIONS = {
     window_open: "Open",
     window_closed: "Closed",
     row_min_flow: "Minimum flow temperature",
-    row_setpoint_correction: "Setpoint correction",
     row_additional_heat: "Additional heat",
     row_additional_heat_learning: "{value} (learning: {ungated})",
 
@@ -108,6 +107,7 @@ export const TRANSLATIONS = {
     curve_rooms_lead: "Lead rooms",
     curve_rooms_shown: "Shown",
     curve_tightest: "{curve}: tightest point {reserve} K at {outdoor} °C",
+    curve_feedback: "Valve feedback {feedback} K · lead demand {demand} % ({room})",
     curve_error_entity:
       "Please pick the flow device's \"Hold flow curves\" sensor.",
   },
@@ -128,7 +128,6 @@ export const TRANSLATIONS = {
     window_open: "Offen",
     window_closed: "Geschlossen",
     row_min_flow: "Mindestvorlauftemperatur",
-    row_setpoint_correction: "Sollwert-Korrektur",
     row_additional_heat: "Zusatzwärme",
     row_additional_heat_learning: "{value} (lernt: {ungated})",
 
@@ -199,6 +198,7 @@ export const TRANSLATIONS = {
     curve_rooms_lead: "Leiträume",
     curve_rooms_shown: "Ausgewählte",
     curve_tightest: "{curve}: knappste Stelle {reserve} K bei {outdoor} °C",
+    curve_feedback: "Ventil-Rückkopplung {feedback} K · Leit-Demand {demand} % ({room})",
     curve_error_entity:
       "Bitte den Sensor „Haltevorlauf-Kurven“ des Vorlauf-Geräts wählen.",
 

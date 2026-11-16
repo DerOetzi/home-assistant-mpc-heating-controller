@@ -25,7 +25,6 @@ from homeassistant.core import (
 )
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
-    async_call_later,
     async_track_entity_registry_updated_event,
     async_track_state_change_event,
     async_track_time_interval,
@@ -81,7 +80,13 @@ from .const import (
     HeatMode,
     PanelRadiatorType,
 )
-from .controller.mpc.controller import FlowGateConfig, RoomMpcController
+from .control.flow_feedback import DemandSample
+from .controller.mpc.controller import (
+    FLOW_RECOVERY_HORIZON_S,
+    FlowGateConfig,
+    RoomMpcController,
+)
+from .controller.mpc.learner import JUMP_MIN_TARGET_STEP_C
 from .controller.mpc.math_helper import clamp, round_to_step
 from .controller.mpc.models.gains import GainBreakdown, profile_index
 from .controller.mpc.results import RoomMpcResult
@@ -92,15 +97,21 @@ from .controller.mpc.types import (
     RoomThermalConfig,
     TrvConfig,
 )
-from .controller.setpoint_correction import SetpointCorrection
 from .controller.state import HeatingStateConfig, HeatingStateController
+from .controller.trv_inputs import (
+    LOAD_MEAN_INTERVAL_S,
+    ExternalTemperatureSchedule,
+    load_room_mean,
+    raw_value,
+)
 from .irradiance import IrradianceProvider, SunSeries
 from .profiles import TrvBinding
+from .startup_gate import entity_ready
 from .store import (
     FlowGateStateStore,
     GainStore,
     LearningFactorsStore,
-    SetpointCorrectionStore,
+    async_remove_setpoint_correction_store,
     async_remove_valve_curve_store,
 )
 
@@ -120,10 +131,10 @@ TARGET_TEMPERATURE_TOLERANCE_C = 0.01
 TARGET_WRITE_SETTLE_S = 120.0
 # Without a target_temp_step attribute the TRV takes setpoints in this step.
 DEFAULT_TARGET_TEMPERATURE_STEP_C = 0.5
-# The setpoint correction waits this long after a window closed or the mode's
-# target changed: the room is still on its way back.
-CORRECTION_WINDOW_CLOSED_S = 3600
-CORRECTION_TARGET_SETTLED_S = 2 * 3600
+# A room recovers with a raised flow (boost) only after its mode's setpoint
+# went up by a jump, until it is this close to the new setpoint or the
+# recovery horizon has passed.
+FLOW_BOOST_DONE_BELOW_C = 0.2
 # Heat stays available while the flow dips below the threshold for less than
 # this: a defrost drops the flow by about 10 K for one 10-minute report.
 FLOW_DIP_TOLERANCE_S = 20 * 60
@@ -137,18 +148,6 @@ WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S = 30 * 60
 WINDOW_CLOSED_SUPPRESS_CAPACITY_LEARNING_S = 10 * 60
 
 SUNSET_LEARNING_DELAY = timedelta(hours=2)
-
-# After startup a configured room sensor often reports a few seconds after the
-# TRVs. Computing in between falls back to the TRV average, which can sit well
-# below the room sensor and reopen a restored surplus gate. Wait this long for
-# the room sensor before accepting the fallback.
-ROOM_SENSOR_STARTUP_GRACE_S = 5 * 60
-
-# Right after startup the heat source may not have reported yet, and the room
-# would read as unheated. That is overwritten seconds later and costs switch
-# writes on every restart, so heat_available waits until the heat source was
-# read once, or has been missing for a full poll cycle.
-STARTUP_GRACE_S = SENSOR_POLL_INTERVAL_MINUTES * 60
 
 # The heat pump reports its flow temperature about every 10 minutes and drops
 # out for a poll now and then. Learning pauses only once no reading came for
@@ -306,7 +305,8 @@ class HeatingRoomCoordinator:
         # Set by the hub when some room has sun surfaces.
         self.sun_provider: IrradianceProvider | None = None
         self.workday_entity: str | None = None
-        self._awaiting_room_sensor = bool(self.data.get(CONF_ROOM_SENSOR_ENTITY))
+        # Computes and writes only once the hub's startup gate opened.
+        self.running = False
 
         self.blocked = False
         self.trv_active = True
@@ -318,19 +318,25 @@ class HeatingRoomCoordinator:
         self.normal_result: RoomMpcResult | None = None
         self.normal_heat_mode: HeatMode | None = None
         self.normal_target_temperature_c: float | None = None
-        # The setpoint handed to the TRVs before the correction: the active
-        # mode's, or frost protection for an open window.
+        # The setpoint handed to the TRVs: the active mode's, or frost
+        # protection for an open window.
         self.mode_target_temperature_c: float | None = None
-        # The active mode's own setpoint, and since when it holds; an open
-        # window does not change it.
+        # The active mode's own setpoint; an open window does not change it.
         self._settled_target_c: float | None = None
-        self._mode_target_since_ts = 0.0
-        # Since when every window has been closed; None while one is open.
-        self._windows_closed_since_ts: float | None = None
-        self.setpoint_correction = SetpointCorrection(time.time())
-        self.setpoint_correction_store = SetpointCorrectionStore(
-            hass, self.room_name, room_id
-        )
+        # Since when the room recovers after a raised mode setpoint.
+        self._flow_boost_since_ts: float | None = None
+        # External temperature writes per TRV since setup, and when each TRV
+        # gets the room sensor's reading next.
+        self.trv_external_writes: dict[str, int] = {}
+        self._external_schedules: dict[str, ExternalTemperatureSchedule] = {
+            trv.external_temperature_entity: ExternalTemperatureSchedule()
+            for trv in trvs
+            if trv.external_temperature_entity
+        }
+        # TRVs handed back their own sensor since setup (room without sensor).
+        self._external_off_sent: set[str] = set()
+        # The room's mean load last handed to its TRVs; None if they work alone.
+        self.load_room_mean: int | None = None
         self._started_ts = 0.0
 
         self._unsub: list[Callable[[], None]] = []
@@ -407,17 +413,13 @@ class HeatingRoomCoordinator:
             self._persisted_flow_gate_state = flow_gate_state
 
         await async_remove_valve_curve_store(self.hass, self.room_name, self.room_id)
-
-        correction_c = await self.setpoint_correction_store.async_load()
-        self.setpoint_correction = SetpointCorrection(
-            self._started_ts, correction_c or 0.0
+        await async_remove_setpoint_correction_store(
+            self.hass, self.room_name, self.room_id
         )
 
         for entity_id in self.data.get(CONF_WINDOW_CONTACT_ENTITIES, []):
             self.state.update_window_state(entity_id, self._is_on(entity_id))
         self.mpc.set_window_open(self.state.is_window_open, time.time())
-        if not self.state.is_window_open:
-            self._windows_closed_since_ts = self._started_ts
         self._update_window_unknown()
 
         if self._learning_block_entity:
@@ -429,21 +431,22 @@ class HeatingRoomCoordinator:
         self._update_learning_paused(time.time())
 
         room_sensor_entity = self.data.get(CONF_ROOM_SENSOR_ENTITY)
-        if self._awaiting_room_sensor:
-            self._unsub.append(
-                async_call_later(
-                    self.hass,
-                    ROOM_SENSOR_STARTUP_GRACE_S,
-                    self._async_handle_room_sensor_grace_expired,
-                )
-            )
 
+        trvs_with_external = [
+            trv for trv in self._trvs if trv.external_temperature_entity
+        ]
         tracked_entities = list(self._trv_entity_ids)
         tracked_entities.extend(
             entity_id for entity_id in self._valve_position_entities if entity_id
         )
         tracked_entities.extend(self._adaptation_status_entities)
         tracked_entities.extend(self._mounted_mode_entities)
+        # A covered radiator wants the room sensor's reading more often.
+        tracked_entities.extend(
+            trv.radiator_covered_entity
+            for trv in trvs_with_external
+            if trv.radiator_covered_entity
+        )
         tracked_entities.extend(self.data.get(CONF_WINDOW_CONTACT_ENTITIES, []))
         tracked_entities.append(self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY])
         tracked_entities.append(self._flow_temperature_entity)
@@ -455,6 +458,8 @@ class HeatingRoomCoordinator:
             tracked_entities.append(self._learning_block_entity)
         if room_sensor_entity:
             tracked_entities.append(room_sensor_entity)
+        # Written entities that come back after an outage get their value again.
+        tracked_entities.extend(self._rewrite_entities)
 
         self._unsub.append(
             async_track_state_change_event(
@@ -478,8 +483,60 @@ class HeatingRoomCoordinator:
                 self.hass, self._async_handle_sensor_poll, SENSOR_POLL_INTERVAL
             )
         )
+        if any(trv.shares_load for trv in self._trvs):
+            self._unsub.append(
+                async_track_time_interval(
+                    self.hass,
+                    self._async_handle_load_sharing,
+                    timedelta(seconds=LOAD_MEAN_INTERVAL_S),
+                )
+            )
 
+    @property
+    def required_entities(self) -> list[str]:
+        """What the room cannot start without: what it writes and reads to write."""
+        entity_ids = [
+            entity_id
+            for trv in self._trvs
+            for entity_id in (
+                trv.climate_entity,
+                trv.heat_available_entity,
+                trv.adaptation_status_entity,
+                trv.external_temperature_entity,
+                trv.load_balancing_entity,
+                trv.load_room_mean_entity,
+            )
+            if entity_id
+        ]
+        entity_ids.append(self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY])
+        entity_ids.append(self._flow_temperature_entity)
+        for entity_id in (
+            self.data.get(CONF_ROOM_SENSOR_ENTITY),
+            self._heat_source_climate_entity,
+        ):
+            if entity_id:
+                entity_ids.append(entity_id)
+        return entity_ids
+
+    @property
+    def _rewrite_entities(self) -> list[str]:
+        return [
+            entity_id
+            for trv in self._trvs
+            for entity_id in (
+                trv.external_temperature_entity,
+                trv.load_balancing_entity,
+                trv.load_room_mean_entity,
+            )
+            if entity_id
+        ]
+
+    async def async_start(self) -> None:
+        """The hub's inputs are there: compute and write from now on."""
+        self.running = True
+        self._refresh_temperature_inputs()
         await self._async_recompute()
+        await self._async_update_load_sharing(time.time())
 
     def async_unload(self) -> None:
         for unsub in self._unsub:
@@ -503,8 +560,6 @@ class HeatingRoomCoordinator:
         if room_sensor_entity:
             room_sensor_temp_c = self._float_state(room_sensor_entity)
             self.mpc.set_room_sensor_temperature(room_sensor_temp_c)
-            if room_sensor_temp_c is not None:
-                self._awaiting_room_sensor = False
 
         self.mpc.set_outdoor_temperature(
             self._float_state(self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY])
@@ -523,18 +578,6 @@ class HeatingRoomCoordinator:
         ):
             return
         self.hass.config_entries.async_schedule_reload(self.hub_entry.entry_id)
-
-    async def _async_handle_room_sensor_grace_expired(self, _now: Any) -> None:
-        if not self._awaiting_room_sensor:
-            return
-        _LOGGER.warning(
-            "Room sensor for room %s did not report within %s s after startup; "
-            "falling back to TRV temperatures",
-            self.room_name,
-            ROOM_SENSOR_STARTUP_GRACE_S,
-        )
-        self._awaiting_room_sensor = False
-        await self._async_recompute()
 
     async def _async_handle_sensor_poll(self, _now: Any) -> None:
         self._refresh_temperature_inputs()
@@ -732,11 +775,31 @@ class HeatingRoomCoordinator:
 
     @callback
     def _async_handle_state_change(self, event: Event[EventStateChangedData]) -> None:
-        self._apply_state_change(event.data["entity_id"], event.data["new_state"])
+        entity_id = event.data["entity_id"]
+        if entity_id in self._rewrite_entities:
+            self._handle_rewrite_entity(entity_id, event.data["old_state"])
+        self._apply_state_change(entity_id, event.data["new_state"])
         if self._pending_recompute is None:
             self._pending_recompute = self.hass.async_create_task(
                 self._async_recompute_after_burst()
             )
+
+    @callback
+    def _handle_rewrite_entity(self, entity_id: str, old_state: State | None) -> None:
+        """A written entity back from an outage gets its value at once."""
+        if old_state is not None and old_state.state != STATE_UNAVAILABLE:
+            return
+        if not self.running or not entity_ready(self.hass, entity_id):
+            return
+        schedule = self._external_schedules.get(entity_id)
+        if schedule is not None:
+            schedule.reset()
+        self._external_off_sent.discard(entity_id)
+        if any(
+            entity_id in (trv.load_balancing_entity, trv.load_room_mean_entity)
+            for trv in self._trvs
+        ):
+            self.hass.async_create_task(self._async_update_load_sharing(time.time()))
 
     async def _async_recompute_after_burst(self) -> None:
         await asyncio.sleep(RECOMPUTE_DEBOUNCE_S)
@@ -760,8 +823,6 @@ class HeatingRoomCoordinator:
         elif entity_id == self.data.get(CONF_ROOM_SENSOR_ENTITY):
             room_sensor_temp_c = self._float_from_state(new_state)
             self.mpc.set_room_sensor_temperature(room_sensor_temp_c)
-            if room_sensor_temp_c is not None:
-                self._awaiting_room_sensor = False
 
         elif entity_id == self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY]:
             self.mpc.set_outdoor_temperature(self._float_from_state(new_state))
@@ -776,10 +837,6 @@ class HeatingRoomCoordinator:
             )
             self.mpc.set_window_open(is_open, time.time())
             self._update_window_unknown()
-            if is_open:
-                self._windows_closed_since_ts = None
-            elif was_open:
-                self._windows_closed_since_ts = time.time()
             if was_open and not is_open:
                 self.mpc.suppress_learning_for_interval(
                     WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S,
@@ -790,6 +847,8 @@ class HeatingRoomCoordinator:
             self._learning_blocked = self._bool_from_state(new_state)
 
     async def _async_handle_learning_cycle(self, _now: Any) -> None:
+        if not self.running:
+            return
         self.mpc.run_learning_cycle()
         await self._async_persist_learning_factors()
         self._notify_listeners()
@@ -806,21 +865,8 @@ class HeatingRoomCoordinator:
         ua_factor: float | None,
         capacity_factor: float | None,
         reset_gains: bool = False,
-        setpoint_correction_c: float | None = None,
     ) -> None:
         """Set the factors; one left out keeps its learned value."""
-        if setpoint_correction_c is not None:
-            self.setpoint_correction.set(time.time(), setpoint_correction_c)
-            await self.setpoint_correction_store.async_save(
-                self.setpoint_correction.correction_c
-            )
-            _LOGGER.info(
-                "Set setpoint correction for room %s to %+.1f K",
-                self.room_name,
-                self.setpoint_correction.correction_c,
-            )
-            # Hands the TRVs the new setpoint now rather than next cycle.
-            await self._async_recompute()
         if reset_gains:
             self.mpc.gain_model.reset()
             await self.gain_store.async_save(self.mpc.gain_model.export())
@@ -900,6 +946,8 @@ class HeatingRoomCoordinator:
             await self._async_recompute_locked()
 
     async def _async_recompute_locked(self) -> None:
+        if not self.running:
+            return
         self.mpc.set_flow_threshold_c(self.flow_threshold_c)
         if self.hot_water_charge_provider is not None:
             self.mpc.set_external_hot_water_charge(self.hot_water_charge_provider())
@@ -915,7 +963,6 @@ class HeatingRoomCoordinator:
             )
         )
         self.trv_active = self._compute_trv_active(now_ts)
-        heat_source_pending = self._heat_source_pending()
         self.state.set_trv_active(self.trv_active)
         self.mpc.set_heat_available(self.trv_active)
         if self.trv_active:
@@ -932,29 +979,32 @@ class HeatingRoomCoordinator:
             self.state.determine_base_target_temperature(self.state.current_heat_mode)
         )
         if normal_target != self._settled_target_c:
+            previous_c = self._settled_target_c
             self._settled_target_c = normal_target
-            self._mode_target_since_ts = now_ts
-        frost_protection = display_mode is HeatMode.FROST_PROTECTION
-        await self._async_update_setpoint_correction(now_ts, frost_protection)
-        await self._async_write_setpoints(
-            mode_target, apply_correction=not frost_protection
-        )
-
-        if self._awaiting_room_sensor:
-            if not heat_source_pending:
-                await self._async_apply_trv_active_switches(self.trv_active)
-            self._notify_listeners()
-            return
+            if (
+                previous_c is not None
+                and normal_target - previous_c >= JUMP_MIN_TARGET_STEP_C
+            ):
+                self._flow_boost_since_ts = now_ts
+            elif previous_c is not None and normal_target < previous_c:
+                self._flow_boost_since_ts = None
+        self._update_flow_boost_end(normal_target, now_ts)
+        await self._async_write_setpoints(mode_target)
+        await self._async_write_external_temperatures(now_ts)
 
         self.normal_heat_mode = self.state.current_heat_mode
         self.normal_target_temperature_c = normal_target
-        normal_compute = self.mpc.compute(normal_target, apply_side_effects=False)
+        normal_compute = self.mpc.compute(
+            normal_target, apply_side_effects=False, recovery=self.flow_boost_active
+        )
         self.normal_result = normal_compute.result if normal_compute.valid else None
 
         # Frost protection for an open window is no mode change for the
         # learner.
         actual_compute = self.mpc.compute(
-            mode_target, mode_target_temperature_c=normal_target
+            mode_target,
+            mode_target_temperature_c=normal_target,
+            recovery=self.flow_boost_active,
         )
         if actual_compute.valid:
             self.last_result = actual_compute.result
@@ -965,8 +1015,7 @@ class HeatingRoomCoordinator:
                 actual_compute.error,
             )
 
-        if not heat_source_pending:
-            await self._async_apply_trv_active_switches(self.trv_active)
+        await self._async_apply_trv_active_switches(self.trv_active)
         await self._async_persist_learning_factors()
         await self._async_persist_flow_gate_state()
         self._notify_listeners()
@@ -996,75 +1045,175 @@ class HeatingRoomCoordinator:
         ]
         return max(openings) if openings else None
 
-    def _correction_room_temperature_c(self) -> float | None:
-        """The room sensor's reading; the TRVs' own does not count.
+    def _update_flow_boost_end(self, target_c: float, now_ts: float) -> None:
+        if self._flow_boost_since_ts is None:
+            return
+        room_c = (
+            self.normal_result.input.room_temp_c
+            if self.normal_result is not None
+            else None
+        )
+        if now_ts - self._flow_boost_since_ts >= FLOW_RECOVERY_HORIZON_S or (
+            room_c is not None and room_c >= target_c - FLOW_BOOST_DONE_BELOW_C
+        ):
+            self._flow_boost_since_ts = None
 
-        A TRV regulates on its own reading, so correcting for it would chase
-        nothing. A room without a room sensor stays uncorrected.
+    @property
+    def flow_boost_active(self) -> bool:
+        """The room recovers after its mode's setpoint went up."""
+        return self._flow_boost_since_ts is not None
+
+    @property
+    def flow_boost_temperature_c(self) -> float | None:
+        """The recovery flow while the room recovers; None otherwise."""
+        if not self.flow_boost_active:
+            return None
+        return self.normal_recovery_flow_temperature_c
+
+    @property
+    def feedback_sample(self) -> DemandSample | None:
+        """The room's valve demand for the flow feedback; None if not usable.
+
+        Left out: an open window, frost protection, a radiator that does not
+        heat, a running boost, and a TRV whose opening is unknown.
         """
+        if (
+            self.state.is_window_open
+            or self.current_heat_mode is HeatMode.FROST_PROTECTION
+            or self.radiators_not_heating
+            or self.flow_boost_active
+        ):
+            return None
+        demands = [
+            self._trv_demand_pct(index)
+            for index, entity_id in enumerate(self._valve_position_entities)
+            if entity_id
+        ]
+        if not demands or any(demand is None for demand in demands):
+            return None
+        target_c = self._settled_target_c
+        room_c = self._room_sensor_temperature_c()
+        if room_c is None and self.normal_result is not None:
+            room_c = self.normal_result.input.room_temp_c
+        deficit_c = (
+            None if target_c is None or room_c is None else round(target_c - room_c, 2)
+        )
+        return DemandSample(self.room_name, max(demands), deficit_c)
+
+    def _room_sensor_temperature_c(self) -> float | None:
+        """The room sensor's reading; None without one or while it is stale."""
         room = self.mpc.get_room_temperature_result()
         if not room.valid or room.room_sensor_fallback:
             return None
         return room.room_sensor_temp_c
 
-    def _correction_allowed(self, now_ts: float) -> bool:
-        """Whether the room is settled enough to judge its error."""
-        return (
-            self._windows_closed_since_ts is not None
-            and now_ts - self._windows_closed_since_ts >= CORRECTION_WINDOW_CLOSED_S
-            and now_ts - self._mode_target_since_ts >= CORRECTION_TARGET_SETTLED_S
-            and self.trv_active
-            and not self.mpc.hot_water_charging
-            and not any(
-                self._adaptation_running(trv, now_ts) or self._trv_uncalibrated(trv)
-                for trv in self._trvs
-            )
-        )
+    async def _async_write_external_temperatures(self, now_ts: float) -> None:
+        """Hand the TRVs that take one the room sensor's reading.
 
-    async def _async_update_setpoint_correction(
-        self, now_ts: float, frost_protection: bool
-    ) -> None:
-        room_temperature_c = self._correction_room_temperature_c()
-        if room_temperature_c is not None:
-            self.setpoint_correction.add_sample(
-                now_ts, room_temperature_c, self.room_demand_pct
-            )
-        target_c = self.mode_target_temperature_c
-        if (
-            frost_protection
-            or target_c is None
-            or not self.setpoint_correction.due(now_ts)
-            or not self._correction_allowed(now_ts)
-        ):
-            return
-        if self.setpoint_correction.evaluate(now_ts, target_c):
-            _LOGGER.info(
-                "Setpoint correction for room %s now %+.1f K",
-                self.room_name,
-                self.setpoint_correction.correction_c,
-            )
-            await self.setpoint_correction_store.async_save(
-                self.setpoint_correction.correction_c
-            )
-
-    def _in_startup_grace(self) -> bool:
-        return time.time() - self._started_ts < STARTUP_GRACE_S
-
-    def _heat_source_pending(self) -> bool:
-        """The heat source has not reported since startup, within the grace.
-
-        Its state and the flow temperature both decide whether the TRVs get
-        heat; until both were seen the room is not known to be unheated.
-        Without a heat source entity the room is unheated by configuration,
-        nothing to wait for.
+        While the reading is unknown nothing is sent, and the TRV returns to
+        its own sensor after its timeout. A room without a room sensor hands
+        its TRVs back their own once.
         """
-        if not self._heat_source_climate_entity:
-            return False
-        known = (
-            self._last_heat_source_state is not None
-            and self._flow_temperature_c is not None
+        has_room_sensor = bool(self.data.get(CONF_ROOM_SENSOR_ENTITY))
+        room_c = self._room_sensor_temperature_c()
+        for trv in self._trvs:
+            entity_id = trv.external_temperature_entity
+            if entity_id is None or self._adaptation_running(trv, now_ts):
+                continue
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state == STATE_UNAVAILABLE:
+                continue
+            if not has_room_sensor:
+                off_value = trv.external_off_value
+                if (
+                    off_value is not None
+                    and entity_id not in self._external_off_sent
+                    and self._float_from_state(state) != off_value
+                ):
+                    await self._async_set_number(entity_id, off_value)
+                    self._count_external_write(entity_id)
+                self._external_off_sent.add(entity_id)
+                continue
+            if room_c is None:
+                continue
+            covered = trv.radiator_covered_entity is not None and self._is_on(
+                trv.radiator_covered_entity
+            )
+            schedule = self._external_schedules[entity_id]
+            if not schedule.due(room_c, covered, now_ts):
+                continue
+            await self._async_set_number(
+                entity_id, raw_value(room_c, trv.external_scale)
+            )
+            schedule.sent(room_c, covered, now_ts)
+            self._count_external_write(entity_id)
+
+    def _count_external_write(self, entity_id: str) -> None:
+        self.trv_external_writes[entity_id] = (
+            self.trv_external_writes.get(entity_id, 0) + 1
         )
-        return not known and self._in_startup_grace()
+
+    async def _async_set_number(self, entity_id: str, value: float) -> None:
+        await self.hass.services.async_call(
+            "number",
+            "set_value",
+            {"entity_id": entity_id, "value": value},
+            blocking=False,
+        )
+
+    async def _async_handle_load_sharing(self, _now: Any) -> None:
+        await self._async_update_load_sharing(time.time())
+
+    async def _async_update_load_sharing(self, now_ts: float) -> None:
+        """Share the load between the room's TRVs, if it has two or more.
+
+        Each TRV takes part only while it gets the room's mean load, so a
+        TRV that cannot get it, or the only one in its room, works alone.
+        """
+        if not self.running:
+            return
+        sharing = [trv for trv in self._trvs if trv.shares_load]
+        balance = len(sharing) >= 2
+        for trv in self._trvs:
+            entity_id = trv.load_balancing_entity
+            if entity_id is None or self._adaptation_running(trv, now_ts):
+                continue
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state not in (STATE_ON, STATE_OFF):
+                continue
+            wanted = balance and trv.shares_load
+            if (state.state == STATE_ON) != wanted:
+                await self.hass.services.async_call(
+                    "switch",
+                    "turn_on" if wanted else "turn_off",
+                    {"entity_id": entity_id},
+                    blocking=False,
+                )
+        if not balance:
+            self.load_room_mean = None
+            return
+        mean = load_room_mean(
+            [
+                (
+                    self._float_from_state(state),
+                    state.last_reported.timestamp() if state is not None else None,
+                )
+                for trv in sharing
+                for state in (self.hass.states.get(trv.load_estimate_entity),)
+            ],
+            now_ts,
+        )
+        self.load_room_mean = mean
+        if mean is None:
+            return
+        for trv in sharing:
+            entity_id = trv.load_room_mean_entity
+            if self._adaptation_running(trv, now_ts):
+                continue
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state == STATE_UNAVAILABLE:
+                continue
+            await self._async_set_number(entity_id, mean)
 
     @staticmethod
     def _trv_setpoint_c(state: State, target_c: float) -> float:
@@ -1078,13 +1227,8 @@ class HeatingRoomCoordinator:
             setpoint_c = clamp(setpoint_c, min_c, max_c)
         return setpoint_c
 
-    async def _async_write_setpoints(
-        self, mode_target_c: float, apply_correction: bool
-    ) -> None:
+    async def _async_write_setpoints(self, target_c: float) -> None:
         """Hand every TRV the room's setpoint; it regulates on its own."""
-        target_c = mode_target_c + (
-            self.setpoint_correction.correction_c if apply_correction else 0.0
-        )
         now_ts = time.time()
         for trv in self._trvs:
             entity_id = trv.climate_entity
@@ -1257,6 +1401,10 @@ class HeatingRoomCoordinator:
     def normal_recovery_flow_temperature_c(self) -> float | None:
         result = self.normal_result
         return result.recovery_flow_temperature_c if result else None
+
+    @property
+    def design_flow_temperature_c(self) -> float:
+        return self.mpc.design_flow_temperature_c
 
     @property
     def normal_recovery_flow_saturated(self) -> bool | None:

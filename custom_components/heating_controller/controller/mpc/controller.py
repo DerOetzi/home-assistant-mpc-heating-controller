@@ -202,6 +202,11 @@ class RoomMpcController:
         return [monitor.not_heating for monitor in self._radiator_monitors]
 
     @property
+    def design_flow_temperature_c(self) -> float:
+        """The radiators' design flow, the top of every flow search."""
+        return self._emitter_model.flow_search_max_c
+
+    @property
     def hot_water_charging(self) -> bool:
         """A hot water charge takes the flow, seen on it or by the hot water
         control."""
@@ -274,12 +279,14 @@ class RoomMpcController:
         target_temperature_c: float,
         apply_side_effects: bool = True,
         mode_target_temperature_c: float | None = None,
+        recovery: bool = True,
     ) -> RoomMpcComputeResult:
         """Compute the flow requirements and feed the learner.
 
         The TRVs regulate the room themselves; the demand is what their
         valves report. The learner judges the room on the mode's setpoint,
-        target_temperature_c where none is given.
+        target_temperature_c where none is given. Without recovery the
+        recovery flow is still computed but not part of the recommendation.
         """
         now_ts = time.time()
         if apply_side_effects:
@@ -374,7 +381,7 @@ class RoomMpcController:
             0.0 if flow_gate_closed else (hold_flow_temperature_c or 0.0)
         )
         recommended_flow_temperature_c = max(
-            gated_hold_flow_c, recovery_flow.flow_temperature_c
+            gated_hold_flow_c, recovery_flow.flow_temperature_c if recovery else 0.0
         )
 
         if apply_side_effects:

@@ -73,6 +73,7 @@ async def async_setup_entry(
             FlowActuatorActualSensor(flow),
             FlowEffectiveCurveSensor(flow),
             FlowTargetSensor(flow),
+            FlowFeedbackSensor(flow),
             FlowActuatorTargetSensor(flow),
             FlowThresholdSensor(flow),
             FlowCurveRecommendationSensor(flow, CurveEnd.COLD),
@@ -394,22 +395,61 @@ class FlowTargetSensor(_FlowTemperatureSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         decision = self._flow.decision
-        lead = self._flow.hub.lead_min_flow
+        hub = self._flow.hub
+        lead = hub.lead_feedforward_flow
+        boost = hub.lead_boost_flow
         return {
             "source": None
             if decision is None or decision.source is None
             else str(decision.source),
             "reason": None if decision is None else decision.reason,
-            "lead_min_flow_c": lead.value_c,
+            "feedforward_flow_c": lead.value_c,
             "room": lead.room,
+            "feedback_k": hub.flow_feedback.feedback_k,
+            "boost_flow_c": boost.value_c,
+            "boost_room": boost.room,
             "threshold_c": self._flow.threshold_c,
         }
 
 
-class FlowCurveRecommendationSensor(_FlowTemperatureSensor):
-    """Curve point the flow lead rooms need: hold flow at comfort plus margin.
+class FlowFeedbackSensor(FlowEntity, SensorEntity):
+    """The valve feedback added to the feedforward flow."""
 
-    Learned UA, no gains. Compare with the curve number of the same end.
+    _attr_translation_key = "flow_feedback"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.KELVIN
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, flow: FlowDevice) -> None:
+        super().__init__(flow, "flow_feedback")
+
+    @property
+    def native_value(self) -> float:
+        return self._flow.hub.flow_feedback.feedback_k
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        feedback = self._flow.hub.flow_feedback
+        lead = feedback.lead
+        last = feedback.last_change_ts
+        return {
+            "lead_demand_pct": None if lead is None else lead.demand_pct,
+            "lead_room": None if lead is None else lead.room,
+            "lead_deficit_c": None if lead is None else lead.deficit_c,
+            "feedforward_flow_c": self._flow.hub.lead_feedforward_flow.value_c,
+            "frozen": feedback.frozen is not None,
+            "frozen_reason": None if feedback.frozen is None else str(feedback.frozen),
+            "last_change": None
+            if last is None
+            else dt_util.utc_from_timestamp(last).isoformat(),
+        }
+
+
+class FlowCurveRecommendationSensor(_FlowTemperatureSensor):
+    """Curve point the flow lead rooms need: hold flow at comfort plus feedback.
+
+    Learned UA, no gains; the valve feedback stands for what the model
+    misses. Compare with the curve number of the same end.
     """
 
     def __init__(self, flow: FlowDevice, end: CurveEnd) -> None:
@@ -429,7 +469,7 @@ class FlowCurveRecommendationSensor(_FlowTemperatureSensor):
         lead = self._lead()
         if lead.value_c is None:
             return None
-        return round(lead.value_c + self._flow.numbers["margin"], 1)
+        return round(lead.value_c + self._flow.hub.flow_feedback.feedback_k, 1)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -439,7 +479,7 @@ class FlowCurveRecommendationSensor(_FlowTemperatureSensor):
         return {
             "outdoor_temperature_c": self._flow.numbers[f"curve_outdoor_{self._end}"],
             "lead_hold_flow_c": lead.value_c,
-            "margin_k": self._flow.numbers["margin"],
+            "feedback_k": self._flow.hub.flow_feedback.feedback_k,
             "room": lead.room,
             "rooms": lead.rooms,
             "current_curve_flow_c": current_c,
@@ -450,7 +490,7 @@ class FlowCurveRecommendationSensor(_FlowTemperatureSensor):
 class FlowHoldCurvesSensor(_FlowTemperatureSensor):
     """Every room's comfort hold flow over the curve's outdoor range.
 
-    State: the flow lead rooms' highest hold flow plus margin at the current
+    State: the flow lead rooms' highest hold flow plus feedback at the current
     outdoor value, the curve point they would ask for right now. The curves
     feed the heating curve card; they change only with the learned UA and
     are left out of the recorder.
@@ -479,7 +519,7 @@ class FlowHoldCurvesSensor(_FlowTemperatureSensor):
         ]
         if not values:
             return None
-        return round(max(values) + self._flow.numbers["margin"], 1)
+        return round(max(values) + self._flow.hub.flow_feedback.feedback_k, 1)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -487,9 +527,13 @@ class FlowHoldCurvesSensor(_FlowTemperatureSensor):
         cold = math.floor(numbers["curve_outdoor_cold"]) - self._EXTEND_K
         warm = math.ceil(numbers["curve_outdoor_warm"]) + self._EXTEND_K
         outdoor_values = [float(value) for value in range(cold, warm + 1)]
+        feedback = self._flow.hub.flow_feedback
+        lead = feedback.lead
         return {
             "outdoor_temperature_c": self._flow.hub.outdoor_temperature_c,
-            "margin_k": numbers["margin"],
+            "feedback_k": feedback.feedback_k,
+            "lead_demand_pct": None if lead is None else lead.demand_pct,
+            "lead_room": None if lead is None else lead.room,
             "outdoor_c": outdoor_values,
             "rooms": self._flow.hub.hold_flow_curves(outdoor_values),
         }
@@ -812,8 +856,9 @@ class HeatingDemandSensor(_DiagnosticSensor):
     def extra_state_attributes(self) -> dict[str, Any]:
         return {
             "trv_target_temps": self._coordinator.trv_target_temperatures,
-            "setpoint_correction": self._coordinator.setpoint_correction.correction_c,
             "trv_setpoint_writes": dict(self._coordinator.trv_setpoint_writes),
+            "trv_external_writes": dict(self._coordinator.trv_external_writes),
+            "load_room_mean": self._coordinator.load_room_mean,
             "trv_valve_positions": self._coordinator.trv_valve_positions,
         }
 

@@ -1,17 +1,18 @@
-"""What the room hands its TRVs: setpoint and correction."""
+"""What the room hands its TRVs: setpoint, room temperature, shared load."""
 
+import time
 from datetime import timedelta
 
 import pytest
 from heating_controller.const import DOMAIN, HeatMode
-from heating_controller.controller.setpoint_correction import CORRECTION_INTERVAL_S
 from heating_controller.coordinator import HeatingRoomCoordinator
-from heating_controller.profiles import StatusMatch
+from heating_controller.profiles import StatusMatch, TrvBinding
 from homeassistant.core import HomeAssistant, ServiceCall, State
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from test_coordinator import (
     ADAPTATION_ENTITY,
     ENTRY_DATA,
+    TRV_EMITTER,
     _coordinator,
     _seed_entities,
     _trvs,
@@ -33,6 +34,7 @@ def _record_calls(hass: HomeAssistant) -> list[ServiceCall]:
     hass.services.async_register("climate", "set_temperature", handler)
     hass.services.async_register("switch", "turn_on", handler)
     hass.services.async_register("switch", "turn_off", handler)
+    hass.services.async_register("number", "set_value", handler)
     return calls
 
 
@@ -44,6 +46,7 @@ async def _setup(
     coordinator = _coordinator(hass, entry, _trvs(**trv_overrides))
     calls = _record_calls(hass)
     await coordinator.async_setup()
+    await coordinator.async_start()
     await hass.async_block_till_done()
     return coordinator, calls
 
@@ -160,133 +163,230 @@ async def test_an_adapting_trv_gets_frost_protection_after_the_run(
     coordinator.async_unload()
 
 
-async def _run_hours(
+EXTERNAL = "number.heizung_wohnzimmer_external_measured_room_sensor"
+COVERED = "switch.heizung_wohnzimmer_radiator_covered"
+EXTERNAL_TRV = {
+    "external_temperature_entity": EXTERNAL,
+    "external_scale": 100.0,
+    "external_off_value": -8000.0,
+    "radiator_covered_entity": COVERED,
+}
+
+
+def _numbers(calls: list[ServiceCall], entity_id: str) -> list[float]:
+    return [
+        call.data["value"]
+        for call in calls
+        if call.domain == "number" and call.data["entity_id"] == entity_id
+    ]
+
+
+async def _report(
     hass: HomeAssistant,
     coordinator: HeatingRoomCoordinator,
     freezer,
-    hours: float,
+    minutes: int,
     room_c: float,
 ) -> None:
-    """Room sensor reports room_c every 5 min for the given hours."""
-    for _ in range(int(hours * 12)):
+    """Room sensor reports room_c every 5 min for the given minutes."""
+    for _ in range(minutes // 5):
         freezer.tick(timedelta(minutes=5))
         hass.states.async_set(ROOM_SENSOR, str(room_c), force_update=True)
         await hass.async_block_till_done()
         await coordinator._async_recompute()
 
 
-async def _setup_for_correction(
-    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, room_c: float = 21.0
+async def _setup_external(
+    hass: HomeAssistant, covered: str = "off"
 ) -> tuple[HeatingRoomCoordinator, list[ServiceCall]]:
     _seed_entities(hass)
-    hass.states.async_set(ROOM_SENSOR, str(room_c))
-    coordinator, calls = await _setup(hass)
-    return coordinator, calls
+    hass.states.async_set(EXTERNAL, "-8000")
+    hass.states.async_set(COVERED, covered)
+    return await _setup(hass, **EXTERNAL_TRV)
 
 
-async def test_the_correction_steps_at_night_as_well(
-    hass: HomeAssistant, freezer, monkeypatch: pytest.MonkeyPatch
+async def test_the_room_sensor_goes_to_an_exposed_trv_rarely(
+    hass: HomeAssistant, freezer
 ) -> None:
-    coordinator, calls = await _setup_for_correction(hass, monkeypatch)
-    monkeypatch.setattr(coordinator, "is_sun_condition_met", lambda _ts: True)
+    coordinator, calls = await _setup_external(hass)
+    assert _numbers(calls, EXTERNAL) == [1850.0]
 
-    await _run_hours(hass, coordinator, freezer, CORRECTION_INTERVAL_S / 3600, 21.0)
-    assert coordinator.setpoint_correction.correction_c == 0.5
-    assert _setpoints(calls)[-1] == 22.5
+    # A change waits for the shortest spacing.
+    await _report(hass, coordinator, freezer, 25, 18.7)
+    assert _numbers(calls, EXTERNAL) == [1850.0]
+    await _report(hass, coordinator, freezer, 5, 18.7)
+    assert _numbers(calls, EXTERNAL) == [1850.0, 1870.0]
 
-
-async def test_a_cold_room_raises_the_setpoint_step_by_step(
-    hass: HomeAssistant, freezer, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    coordinator, calls = await _setup_for_correction(hass, monkeypatch)
-
-    await _run_hours(hass, coordinator, freezer, CORRECTION_INTERVAL_S / 3600, 21.0)
-    assert coordinator.setpoint_correction.correction_c == 0.5
-    assert _setpoints(calls)[-1] == 22.5
-    assert await coordinator.setpoint_correction_store.async_load() == 0.5
-
-    await _run_hours(hass, coordinator, freezer, CORRECTION_INTERVAL_S / 3600, 21.0)
-    assert coordinator.setpoint_correction.correction_c == 1.0
-    assert _setpoints(calls)[-1] == 23.0
+    # Without a change only after the longest one.
+    await _report(hass, coordinator, freezer, 145, 18.7)
+    assert _numbers(calls, EXTERNAL) == [1850.0, 1870.0]
+    await _report(hass, coordinator, freezer, 5, 18.7)
+    assert _numbers(calls, EXTERNAL) == [1850.0, 1870.0, 1870.0]
+    assert coordinator.trv_external_writes == {EXTERNAL: 3}
 
     coordinator.async_unload()
 
 
-async def test_a_small_room_error_leaves_the_setpoint(
-    hass: HomeAssistant, freezer, monkeypatch: pytest.MonkeyPatch
+async def test_a_covered_radiator_gets_the_room_sensor_often(
+    hass: HomeAssistant, freezer
 ) -> None:
-    coordinator, calls = await _setup_for_correction(hass, monkeypatch, 21.8)
+    coordinator, calls = await _setup_external(hass, covered="on")
 
-    await _run_hours(hass, coordinator, freezer, 2.5, 21.8)
-
-    assert coordinator.setpoint_correction.correction_c == 0.0
-    assert set(_setpoints(calls)) == {22.0}
+    await _report(hass, coordinator, freezer, 5, 18.6)
+    assert _numbers(calls, EXTERNAL) == [1850.0, 1860.0]
+    await _report(hass, coordinator, freezer, 20, 18.6)
+    assert _numbers(calls, EXTERNAL) == [1850.0, 1860.0]
+    await _report(hass, coordinator, freezer, 5, 18.6)
+    assert _numbers(calls, EXTERNAL) == [1850.0, 1860.0, 1860.0]
 
     coordinator.async_unload()
 
 
-async def test_a_fully_open_valve_does_not_raise_the_setpoint(
-    hass: HomeAssistant, freezer, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    coordinator, _calls = await _setup_for_correction(hass, monkeypatch)
-    monkeypatch.setattr(
-        HeatingRoomCoordinator, "room_demand_pct", property(lambda _self: 100.0)
-    )
+async def test_covering_a_radiator_sends_at_once(hass: HomeAssistant) -> None:
+    coordinator, calls = await _setup_external(hass)
 
-    await _run_hours(hass, coordinator, freezer, 2.5, 21.0)
-
-    assert coordinator.setpoint_correction.correction_c == 0.0
-
-    coordinator.async_unload()
-
-
-async def test_an_opened_window_holds_the_correction(
-    hass: HomeAssistant, freezer, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    coordinator, _calls = await _setup_for_correction(hass, monkeypatch)
-    await _run_hours(hass, coordinator, freezer, 1.5, 21.0)
-    hass.states.async_set(WINDOW, "on")
-    await hass.async_block_till_done()
-    await _run_hours(hass, coordinator, freezer, 0.25, 21.0)
-    hass.states.async_set(WINDOW, "off")
+    hass.states.async_set(COVERED, "on")
     await hass.async_block_till_done()
 
-    # Due, but the window is closed for less than an hour.
-    await _run_hours(hass, coordinator, freezer, 0.75, 21.0)
-    assert coordinator.setpoint_correction.correction_c == 0.0
-
-    await _run_hours(hass, coordinator, freezer, 0.5, 21.0)
-    assert coordinator.setpoint_correction.correction_c == 0.5
+    assert _numbers(calls, EXTERNAL) == [1850.0, 1850.0]
 
     coordinator.async_unload()
 
 
-async def test_frost_protection_ignores_the_correction(
-    hass: HomeAssistant, freezer, monkeypatch: pytest.MonkeyPatch
+async def test_an_unknown_room_sensor_sends_nothing(
+    hass: HomeAssistant, freezer
 ) -> None:
-    coordinator, calls = await _setup_for_correction(hass, monkeypatch)
-    await _run_hours(hass, coordinator, freezer, 2.0, 21.0)
-    assert coordinator.setpoint_correction.correction_c == 0.5
-
-    hass.states.async_set(WINDOW, "on")
-    await hass.async_block_till_done()
-
-    assert _setpoints(calls)[-1] == 8.0
-
-    coordinator.async_unload()
-
-
-async def test_without_a_room_sensor_reading_nothing_is_corrected(
-    hass: HomeAssistant, freezer, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    coordinator, _calls = await _setup_for_correction(hass, monkeypatch)
-    for _ in range(30):
+    coordinator, calls = await _setup_external(hass)
+    for _ in range(36):
         freezer.tick(timedelta(minutes=5))
         hass.states.async_set(ROOM_SENSOR, "unavailable", force_update=True)
         await hass.async_block_till_done()
         await coordinator._async_recompute()
 
-    assert coordinator.setpoint_correction.correction_c == 0.0
+    assert _numbers(calls, EXTERNAL) == [1850.0]
+
+    coordinator.async_unload()
+
+
+async def test_without_a_room_sensor_the_trv_gets_its_own_back_once(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set(EXTERNAL, "1850")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={k: v for k, v in ENTRY_DATA.items() if k != "room_sensor_entity"},
+    )
+    entry.add_to_hass(hass)
+    coordinator = _coordinator(hass, entry, _trvs(**EXTERNAL_TRV))
+    calls = _record_calls(hass)
+    await coordinator.async_setup()
+    await coordinator.async_start()
+    await hass.async_block_till_done()
+    await coordinator._async_recompute()
+
+    assert _numbers(calls, EXTERNAL) == [-8000.0]
+
+    coordinator.async_unload()
+
+
+def _sharing_trv(name: str) -> TrvBinding:
+    return TrvBinding(
+        climate_entity=f"climate.heizung_{name}",
+        emitter=TRV_EMITTER,
+        load_balancing_entity=f"switch.heizung_{name}_load_balancing_enable",
+        load_estimate_entity=f"sensor.heizung_{name}_load_estimate",
+        load_room_mean_entity=f"number.heizung_{name}_load_room_mean",
+    )
+
+
+async def _setup_sharing(
+    hass: HomeAssistant, trvs: list[TrvBinding]
+) -> tuple[HeatingRoomCoordinator, list[ServiceCall]]:
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA)
+    entry.add_to_hass(hass)
+    coordinator = _coordinator(hass, entry, trvs)
+    calls = _record_calls(hass)
+    await coordinator.async_setup()
+    await coordinator.async_start()
+    await hass.async_block_till_done()
+    return coordinator, calls
+
+
+def _seed_sharing(hass: HomeAssistant, name: str, load: str) -> None:
+    hass.states.async_set(
+        f"climate.heizung_{name}", "heat", {"current_temperature": 18.0}
+    )
+    hass.states.async_set(f"switch.heizung_{name}_load_balancing_enable", "off")
+    hass.states.async_set(f"sensor.heizung_{name}_load_estimate", load)
+    hass.states.async_set(f"number.heizung_{name}_load_room_mean", "-8000")
+
+
+async def test_two_trvs_share_the_room_load(hass: HomeAssistant, freezer) -> None:
+    _seed_entities(hass)
+    _seed_sharing(hass, "gross", "438")
+    _seed_sharing(hass, "klein", "287")
+    coordinator, calls = await _setup_sharing(
+        hass, [_sharing_trv("gross"), _sharing_trv("klein")]
+    )
+
+    switched_on = [
+        call.data["entity_id"]
+        for call in calls
+        if call.domain == "switch" and call.service == "turn_on"
+    ]
+    assert "switch.heizung_gross_load_balancing_enable" in switched_on
+    assert "switch.heizung_klein_load_balancing_enable" in switched_on
+    assert _numbers(calls, "number.heizung_gross_load_room_mean") == [362]
+    assert _numbers(calls, "number.heizung_klein_load_room_mean") == [362]
+    assert coordinator.load_room_mean == 362
+
+    # An unknown load leaves the other alone in the mean.
+    hass.states.async_set("sensor.heizung_klein_load_estimate", "-8000")
+    calls.clear()
+    await coordinator._async_update_load_sharing(time.time())
+    assert _numbers(calls, "number.heizung_gross_load_room_mean") == [438]
+
+    coordinator.async_unload()
+
+
+async def test_a_switch_back_from_an_outage_shares_at_once(
+    hass: HomeAssistant,
+) -> None:
+    _seed_entities(hass)
+    _seed_sharing(hass, "gross", "438")
+    _seed_sharing(hass, "klein", "287")
+    hass.states.async_set("switch.heizung_klein_load_balancing_enable", "unavailable")
+    coordinator, calls = await _setup_sharing(
+        hass, [_sharing_trv("gross"), _sharing_trv("klein")]
+    )
+    calls.clear()
+
+    hass.states.async_set("switch.heizung_klein_load_balancing_enable", "off")
+    await hass.async_block_till_done()
+
+    assert [
+        call.data["entity_id"]
+        for call in calls
+        if call.domain == "switch" and call.service == "turn_on"
+    ] == ["switch.heizung_klein_load_balancing_enable"]
+
+    coordinator.async_unload()
+
+
+async def test_a_single_trv_works_alone(hass: HomeAssistant) -> None:
+    _seed_entities(hass)
+    _seed_sharing(hass, "gross", "438")
+    hass.states.async_set("switch.heizung_gross_load_balancing_enable", "on")
+    coordinator, calls = await _setup_sharing(hass, [_sharing_trv("gross")])
+
+    assert [
+        call.data["entity_id"]
+        for call in calls
+        if call.domain == "switch" and call.service == "turn_off"
+    ] == ["switch.heizung_gross_load_balancing_enable"]
+    assert _numbers(calls, "number.heizung_gross_load_room_mean") == []
+    assert coordinator.load_room_mean is None
 
     coordinator.async_unload()
 

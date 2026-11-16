@@ -123,34 +123,17 @@ def _setpoint_correction_storage_key(room_name: str, entry_id: str) -> str:
     return f"{DOMAIN}_{slugify(room_name)}_{entry_id}_setpoint_correction"
 
 
-class SetpointCorrectionStore:
-    """The room's setpoint correction, so a restart keeps it."""
-
-    def __init__(self, hass: HomeAssistant, room_name: str, entry_id: str) -> None:
-        self._room_name = room_name
-        self._store: Store[dict] = Store(
-            hass,
-            STORAGE_VERSION,
-            _setpoint_correction_storage_key(room_name, entry_id),
-        )
-
-    async def async_load(self) -> float | None:
-        data = await self._store.async_load()
-        if data is None:
-            return None
-        return float(data.get("correction_c", 0.0))
-
-    async def async_save(self, correction_c: float) -> None:
-        await self._store.async_save(
-            {"room_name": self._room_name, "correction_c": correction_c}
-        )
-
-    async def async_remove(self) -> None:
-        await self._store.async_remove()
+async def async_remove_setpoint_correction_store(
+    hass: HomeAssistant, room_name: str, entry_id: str
+) -> None:
+    """Delete the setpoint correction a former version kept."""
+    await Store(
+        hass, STORAGE_VERSION, _setpoint_correction_storage_key(room_name, entry_id)
+    ).async_remove()
 
 
 class HubStore:
-    """The hub's own state: write budget and heating season."""
+    """The hub's own state: write budget, heating season, flow feedback."""
 
     def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
         self._store: Store[dict] = Store(

@@ -32,6 +32,11 @@ ROLE_VALVE_POSITION = "valve_position"
 ROLE_HEAT_AVAILABLE = "heat_available"
 ROLE_ADAPTATION_STATUS = "adaptation_status"
 ROLE_MOUNTED_MODE = "mounted_mode"
+ROLE_EXTERNAL_TEMPERATURE = "external_temperature"
+ROLE_RADIATOR_COVERED = "radiator_covered"
+ROLE_LOAD_BALANCING = "load_balancing"
+ROLE_LOAD_ESTIMATE = "load_estimate"
+ROLE_LOAD_ROOM_MEAN = "load_room_mean"
 
 _ENTITY_SCHEMA = vol.Schema(
     {
@@ -89,6 +94,24 @@ PROFILE_SCHEMA = vol.Schema(
             ),
             # A binary sensor that is on while the TRV is in mounting mode.
             vol.Optional(ROLE_MOUNTED_MODE): _ENTITY_SCHEMA,
+            # A number taking the room sensor's reading in °C times scale;
+            # off_value tells the TRV to use its own sensor.
+            vol.Optional(ROLE_EXTERNAL_TEMPERATURE): _ENTITY_SCHEMA.extend(
+                {
+                    vol.Optional("scale", default=1.0): vol.All(
+                        vol.Coerce(float), vol.Range(min=0, min_included=False)
+                    ),
+                    vol.Optional("off_value"): vol.Coerce(float),
+                }
+            ),
+            # A switch the user turns on for a covered radiator: the TRV then
+            # regulates on the external reading alone and needs it more often.
+            vol.Optional(ROLE_RADIATOR_COVERED): _ENTITY_SCHEMA,
+            # Load sharing between the TRVs of a room: a switch, the TRV's
+            # own load (sensor) and the room's mean handed back (number).
+            vol.Optional(ROLE_LOAD_BALANCING): _ENTITY_SCHEMA,
+            vol.Optional(ROLE_LOAD_ESTIMATE): _ENTITY_SCHEMA,
+            vol.Optional(ROLE_LOAD_ROOM_MEAN): _ENTITY_SCHEMA,
         },
     }
 )
@@ -143,6 +166,8 @@ class DeviceProfile:
     entities: Mapping[str, EntityMatch]
     adaptation_busy: StatusMatch | None = None
     adaptation_ready: StatusMatch | None = None
+    external_scale: float = 1.0
+    external_off_value: float | None = None
 
     def matches_device(self, device: dr.DeviceEntry, integrations: set[str]) -> bool:
         return (
@@ -165,6 +190,22 @@ class TrvBinding:
     adaptation_busy: StatusMatch | None = None
     adaptation_ready: StatusMatch | None = None
     mounted_mode_entity: str | None = None
+    external_temperature_entity: str | None = None
+    external_scale: float = 1.0
+    external_off_value: float | None = None
+    radiator_covered_entity: str | None = None
+    load_balancing_entity: str | None = None
+    load_estimate_entity: str | None = None
+    load_room_mean_entity: str | None = None
+
+    @property
+    def shares_load(self) -> bool:
+        """The TRV takes part in a room's load sharing."""
+        return bool(
+            self.load_balancing_entity
+            and self.load_estimate_entity
+            and self.load_room_mean_entity
+        )
 
     @property
     def entity_ids(self) -> list[str]:
@@ -176,6 +217,11 @@ class TrvBinding:
                 self.heat_available_entity,
                 self.adaptation_status_entity,
                 self.mounted_mode_entity,
+                self.external_temperature_entity,
+                self.radiator_covered_entity,
+                self.load_balancing_entity,
+                self.load_estimate_entity,
+                self.load_room_mean_entity,
             )
             if entity_id
         ]
@@ -190,6 +236,7 @@ def _status_match(config: dict[str, Any]) -> StatusMatch:
 def _profile_from_config(key: str, config: dict[str, Any]) -> DeviceProfile:
     entities = config["entities"]
     adaptation = entities.get(ROLE_ADAPTATION_STATUS)
+    external = entities.get(ROLE_EXTERNAL_TEMPERATURE) or {}
     return DeviceProfile(
         key=key,
         name=config["name"],
@@ -210,6 +257,8 @@ def _profile_from_config(key: str, config: dict[str, Any]) -> DeviceProfile:
             if adaptation and "ready" in adaptation
             else None
         ),
+        external_scale=external.get("scale", 1.0),
+        external_off_value=external.get("off_value"),
     )
 
 
@@ -333,4 +382,11 @@ def resolve_trv(
             profile.adaptation_ready if ROLE_ADAPTATION_STATUS in entity_ids else None
         ),
         mounted_mode_entity=entity_ids.get(ROLE_MOUNTED_MODE),
+        external_temperature_entity=entity_ids.get(ROLE_EXTERNAL_TEMPERATURE),
+        external_scale=profile.external_scale,
+        external_off_value=profile.external_off_value,
+        radiator_covered_entity=entity_ids.get(ROLE_RADIATOR_COVERED),
+        load_balancing_entity=entity_ids.get(ROLE_LOAD_BALANCING),
+        load_estimate_entity=entity_ids.get(ROLE_LOAD_ESTIMATE),
+        load_room_mean_entity=entity_ids.get(ROLE_LOAD_ROOM_MEAN),
     )

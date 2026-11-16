@@ -20,6 +20,11 @@ ALL_Z2M_PROPERTIES = (
     ("switch", "switch_heat_available", "_heat_available"),
     ("sensor", "adaptation_run_status", "_adaptation_run_status"),
     ("binary_sensor", "mounted_mode_active", "_mounted_mode_active"),
+    ("number", "external_measured_room_sensor", "_external_measured_room_sensor"),
+    ("switch", "switch_radiator_covered", "_radiator_covered"),
+    ("switch", "switch_load_balancing_enable", "_load_balancing_enable"),
+    ("sensor", "load_estimate", "_load_estimate"),
+    ("number", "load_room_mean", "_load_room_mean"),
 )
 
 
@@ -66,6 +71,19 @@ async def test_a_zigbee2mqtt_ally_binds_all_its_entities(hass: HomeAssistant) ->
     )
     assert trv.adaptation_ready.matches(State("sensor.a", "found"))
     assert not trv.adaptation_ready.matches(State("sensor.a", "none"))
+    assert (
+        trv.external_temperature_entity
+        == "number.heizung_wohnzimmer_external_measured_room_sensor"
+    )
+    assert trv.external_scale == 100.0
+    assert trv.external_off_value == -8000.0
+    assert trv.radiator_covered_entity == "switch.heizung_wohnzimmer_radiator_covered"
+    assert (
+        trv.load_balancing_entity == "switch.heizung_wohnzimmer_load_balancing_enable"
+    )
+    assert trv.load_estimate_entity == "sensor.heizung_wohnzimmer_load_estimate"
+    assert trv.load_room_mean_entity == "number.heizung_wohnzimmer_load_room_mean"
+    assert trv.shares_load
     assert trv.emitter == TRV_EMITTER
 
 
@@ -92,6 +110,9 @@ async def test_a_missing_optional_entity_is_left_out(hass: HomeAssistant) -> Non
     assert trv.adaptation_busy is None
     assert trv.adaptation_ready is None
     assert trv.mounted_mode_entity is None
+    assert trv.external_temperature_entity is None
+    assert trv.radiator_covered_entity is None
+    assert not trv.shares_load
 
 
 async def test_a_zha_ally_binds_by_its_unique_ids(hass: HomeAssistant) -> None:

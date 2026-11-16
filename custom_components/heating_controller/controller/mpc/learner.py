@@ -32,9 +32,9 @@ from .types import (
 MIN_HISTORY_SAMPLES = 5
 
 # The learner judges the room against the setpoint of its mode, not against
-# the setpoint written to the TRVs: the setpoint correction steps that one in
-# 0.5 K steps, and frost protection for an open window is no mode change. The
-# correction leaves an error of up to 0.3 K either way, plus a sensor step; a room within this below its mode's setpoint counts as near it.
+# the setpoint written to the TRVs: frost protection for an open window is no
+# mode change. The TRVs hold the room within a few tenths either way, plus a
+# sensor step; a room within this below its mode's setpoint counts as near it.
 LEARNER_SETPOINT_TOLERANCE_C = 0.4
 
 # Capacity is learned from jump stretches: the mode's setpoint steps and the

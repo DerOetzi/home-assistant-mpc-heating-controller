@@ -52,12 +52,14 @@ from .const import (
     CurveEnd,
     RoofOrientation,
 )
+from .control.flow_feedback import DemandSample, FlowFeedback
 from .control.heating_season import HeatingSeason
 from .control.write_budget import WriteBudget, WritePriority
 from .coordinator import HeatingRoomCoordinator
 from .flow_device import FlowDevice
 from .hot_water_device import HotWaterDevice
 from .irradiance import IrradianceProvider, SurfaceGeometry, building_surfaces
+from .startup_gate import StartupGate
 from .store import HubStore
 
 HUB_TICK = timedelta(minutes=1)
@@ -115,6 +117,9 @@ class HeatingHub:
         # A start counts as a fresh value; the gap runs from here.
         self.flow_seen_ts = time.time()
         self.season = HeatingSeason()
+        self.flow_feedback = FlowFeedback()
+        # Nothing computes or writes before the inputs are there.
+        self.startup_gate = StartupGate(hass, self._async_start)
         self.season_on_threshold_h = DEFAULT_SEASON_ON_THRESHOLD_H
         self.season_hold_threshold_h = DEFAULT_SEASON_HOLD_THRESHOLD_H
         self.season_off_after_h = DEFAULT_SEASON_OFF_AFTER_H
@@ -157,6 +162,7 @@ class HeatingHub:
         stored = await self._store.async_load()
         self.write_budget.restore(stored.get("write_budget", {}))
         self.season.restore(stored.get("heating_season", {}))
+        self.flow_feedback.restore(stored.get("flow_feedback", {}))
         surfaces = self.used_surfaces()
         if surfaces:
             self.irradiance = IrradianceProvider(
@@ -184,9 +190,26 @@ class HeatingHub:
         self._unsub.append(
             async_track_time_interval(self.hass, self._async_tick, HUB_TICK)
         )
+        gate = self.startup_gate
+        for room in self.rooms.values():
+            gate.require(room.required_entities)
+        gate.require([self.flow_curve_entity, self._heat_source_entity])
+        if self.flow is not None:
+            gate.require([self.flow.actuator_entity])
+        gate.async_start()
+
+    @property
+    def started(self) -> bool:
+        return self.startup_gate.is_open
+
+    async def _async_start(self) -> None:
+        for room in self.rooms.values():
+            await room.async_start()
         self._tick(time.time())
+        self._notify_listeners()
 
     def async_unload(self) -> None:
+        self.startup_gate.async_stop()
         if self.hot_water is not None:
             self.hot_water.async_unload()
         if self.irradiance is not None:
@@ -205,6 +228,7 @@ class HeatingHub:
         return {
             "write_budget": self.write_budget.export(),
             "heating_season": self.season.export(),
+            "flow_feedback": self.flow_feedback.export(),
         }
 
     @callback
@@ -213,6 +237,8 @@ class HeatingHub:
         self._notify_listeners()
 
     def _tick(self, now_ts: float) -> None:
+        if not self.started:
+            return
         if (
             self._flow_temperature_entity
             and self._float_state(self._flow_temperature_entity) is not None
@@ -368,10 +394,51 @@ class HeatingHub:
 
     @property
     def lead_min_flow(self) -> LeadValue:
-        """Flow the flow lead rooms need, recovery included."""
+        """Flow the flow lead rooms need after the gate, boost included."""
         return self._lead(
             CONF_LEAD_FLOW, lambda room: room.normal_min_flow_temperature_c
         )
+
+    @property
+    def lead_feedforward_flow(self) -> LeadValue:
+        """Hold flow of the flow lead rooms, ungated: the feedforward."""
+        return self._lead(
+            CONF_LEAD_FLOW, lambda room: room.normal_hold_flow_temperature_c
+        )
+
+    @property
+    def lead_boost_flow(self) -> LeadValue:
+        """Recovery flow of the flow lead rooms that recover after a mode change."""
+        return self._lead(CONF_LEAD_FLOW, lambda room: room.flow_boost_temperature_c)
+
+    @property
+    def design_flow_c(self) -> float | None:
+        """Highest design flow of the flow lead rooms' radiators."""
+        return self._lead(
+            CONF_LEAD_FLOW, lambda room: room.design_flow_temperature_c
+        ).value_c
+
+    def feedback_samples(self) -> list[DemandSample]:
+        """Valve demand of the flow lead rooms the feedback may use."""
+        return [
+            sample
+            for room in self.rooms.values()
+            if room.data.get(CONF_LEAD_FLOW)
+            and (sample := room.feedback_sample) is not None
+        ]
+
+    @property
+    def measured_flow_c(self) -> float | None:
+        if not self._flow_temperature_entity:
+            return None
+        return self._float_state(self._flow_temperature_entity)
+
+    @property
+    def hot_water_charging(self) -> bool:
+        """A hot-water charge takes the flow, as any room or the device sees it."""
+        if self.hot_water is not None and self.hot_water.charging:
+            return True
+        return any(room.mpc.hot_water_charging for room in self.rooms.values())
 
     def lead_curve_hold_flow(self, end: CurveEnd) -> LeadValue:
         """Flow the flow lead rooms need at one end of the curve, at comfort."""

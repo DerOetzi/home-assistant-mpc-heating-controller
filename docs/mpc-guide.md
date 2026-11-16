@@ -1,7 +1,7 @@
 # The heating model (MPC)
 
-Each room hands its TRVs the mode's setpoint plus a slow correction for the gap between the
-TRV's own reading and the room sensor; the TRVs regulate the room themselves. Alongside, a
+Each room hands its TRVs the mode's setpoint and the room sensor's reading; the TRVs
+regulate the room themselves. Alongside, a
 model of the room learns how it loses and stores heat, and turns that into the flow
 temperature the heat source should deliver. This page covers what to expect from that in
 day-to-day use — for what the fields of the hub and the rooms actually do, see below.
@@ -128,7 +128,7 @@ losses are.
   [Radiator lag and the room observer](#radiator-lag-and-the-room-observer)) has to equal
   what the room lost plus what it stored. The factor that balances this is the target, and each balance moves the learned
   factor 30 % of the way there. A stretch starts once the room is near its mode setpoint — no more than 0.1 K above it
-  or 0.4 K below (the setpoint correction leaves up to 0.3 K, plus a sensor step); a room still coasting down on the evening's heat with the valve
+  or 0.4 K below (a TRV holds the room within a few tenths, plus a sensor step); a room still coasting down on the evening's heat with the valve
   shut would end far below where it started, one recovering from below far above (status
   `coasting` until then) — or once it has held its temperature for an
   hour (trend below 0.05 K/h), counted from the start of that hour, so a room its
@@ -160,8 +160,8 @@ losses are.
   A stretch rejected for drift reports the
   drift in `last_drift_c`.
 - **Mode setpoint.** The learner judges against the setpoint of the room's mode
-  (comfort, eco …), not the value written to the TRV: neither the setpoint correction nor
-  frost protection on an open window count as a setpoint change.
+  (comfort, eco …), not the value written to the TRV: frost protection on an open window
+  counts as no setpoint change.
 - **Capacity factor (`capacity_factor`): jump stretches.** A held room hardly moves, so
   the capacity is learned where it does: after the mode setpoint jumps by at least 0.5 K
   (comfort/eco switch). The stretch starts at
@@ -226,16 +226,12 @@ data:
   ua_factor: 1.0
   capacity_factor: 1.0
   reset_gains: true
-  setpoint_correction: 1.0
 ```
 
 A factor that is left out stays as it is, so a reset needs an explicit `1.0`; at least one
 value (or a reset) is required. The call discards the heat-loss stretch and any jump
 stretch in progress, because they were measured with the old factors. A new capacity factor also resets the airing factor to its start value. `reset_gains: true` forgets the
 learned steady gain, day profile and sun terms (see [Gains and sun](#gains-and-sun)).
-`setpoint_correction` sets the room's [setpoint correction](#setpoint-correction) in 0.5 K
-steps within ±3 K and hands the TRVs the new setpoint at once; the automatic correction
-takes its next step two hours later at the earliest. It leaves the learned factors alone.
 
 ## Gains and sun
 
@@ -341,10 +337,10 @@ the simulation, so it asks for a lower flow.
 ## TRV control
 
 Each TRV regulates the room on its own: its PI opens the valve by its own reading. There is
-no planner and no valve curve; the room only hands it three things:
+no planner and no valve curve; the room hands it these things:
 
 - **Setpoint** — the active mode's target (comfort, eco, boost, frost protection, plus a PV
-  boost if on) plus the room's setpoint correction (below), always through
+  boost if on), always through
   `climate.set_temperature`. Rounded to the climate entity's `target_temp_step` (0.5 K
   without one) and clamped to its `min_temp`/`max_temp`. It does not depend on the model:
   the setpoint goes out without an outdoor temperature, without a room sensor reading and
@@ -358,32 +354,48 @@ no planner and no valve curve; the room only hands it three things:
   room is open and returns to the mode target as soon as all are closed. The TRV's own
   open-window flag (Danfoss Ally: `window_open_external`) is not written by the
   integration; set it from an automation if wanted.
+- **Room temperature** and **shared load** — see below, for TRVs whose profile has the
+  entities.
 
 The attribute `trv_setpoint_writes` of the room's "Valve opening" sensor counts the setpoint
-writes per TRV since setup, `trv_target_temps` the target each TRV has, `setpoint_correction`
-the room's correction and `trv_valve_positions` the opening each TRV reports right now
-(`pi_heating_demand`, `null` without a valve-position entity). The recorder keeps
-`trv_setpoint_writes` and `setpoint_correction`; the history of targets and openings is on
+writes per TRV since setup, `trv_external_writes` the room temperature writes,
+`trv_target_temps` the target each TRV has, `load_room_mean` the mean load last handed to
+the TRVs (`null` while they work alone) and `trv_valve_positions` the opening each TRV
+reports right now (`pi_heating_demand`, `null` without a valve-position entity). The
+recorder keeps the write counts and the mean load; the history of targets and openings is on
 the TRV entities.
 
-### Setpoint correction
+### Room temperature to the TRV
 
-The TRV measures at the radiator, warmer than the room, so a room sensor reading below the
-setpoint is common. Every two hours the room compares the mode's target with the room
-sensor's time-weighted mean over the last hour and moves the correction by 0.5 K, up to
-±3 K, when the error is 0.3 K or more. One value per room, for all its TRVs; it is stored and
-survives a restart. A step needs a settled room:
+The TRV measures at the radiator, warmer than the room. A TRV whose profile names an
+external temperature entity gets the room sensor's reading instead (Danfoss Ally:
+`external_measured_room_sensor`, in 0.01 °C — the profile's `scale` converts), so all TRVs
+of a room work on the same measurement. How the TRV uses it depends on its radiator, set by
+the user on the TRV's radiator-covered switch (`radiator_covered`); the integration only
+reads it:
 
-- the room sensor's own reading (not the TRVs standing in for it), with at least two values
-  in the hour and one near its start, spanning no more than 0.3 K;
-- windows closed for at least an hour, the mode's target unchanged for two hours (frost
-  protection for an open window is no change of it);
-- heat available, no hot-water charge, no TRV adapting or uncalibrated.
+- **Exposed** (switch off or none): the TRV keeps regulating on its own sensor and offsets
+  it by the room sensor. The reading goes out on a change of 0.1 K but at most every
+  30 minutes, and at least every 2.5 hours (the Ally drops it after 3 hours).
+- **Covered** (switch on): the TRV regulates on the room sensor alone. On a change every
+  5 minutes at most, at least every 25 minutes (the Ally drops it after 35 minutes).
+  Switching it sends the reading at once.
 
-A step up waits while the room's valves (the highest opening, averaged over the hour) are at
-90 % or more — more setpoint would only wind up; a step down waits while they are shut. A
-room without a valve reading steps on its temperature alone. The correction stays across mode
-changes and is left out in frost protection. A room without a room sensor stays uncorrected.
+While the room sensor's reading is unknown or stale nothing is sent; the TRV returns to its
+own sensor after its timeout. A room without a room sensor hands its TRVs the profile's
+`off_value` once (Ally: −8000, own sensor). Nothing is written to a TRV running an
+adaptation.
+
+### Shared load
+
+TRVs of one room whose profile names a load-balancing switch, a load estimate and a mean
+load (Danfoss Ally: `load_balancing_enable`, `load_estimate`, `load_room_mean`) share the
+room's load: with two or more of them the integration turns load balancing on and every
+15 minutes hands each the mean of their load estimates, leaving out one that reported
+nothing for 90 minutes or reports below −500 (unknown). A room with a single such TRV turns
+it off. The radiators then open alike instead of one at its limit while the other has room
+to spare, which also keeps the flow feedback (highest opening) from raising the flow for
+nothing.
 
 While a TRV calibrates its valve (adaptation run, reported by the device profile's
 adaptation status entity) no setpoint and no heat-available switch is written to it: a
@@ -437,10 +449,9 @@ full output, 50 % about 87 %. A TRV without such an entity counts with the room'
 reported opening. If the entity goes stale or
 unavailable, the room's learning stops (status
 `valve_position_missing`) until it reports again. The same holds once the TRV reported
-nothing for 30 minutes, neither its opening nor its own temperature (an unchanged opening is
-not reported again). The room's demand is the highest opening among the TRVs with a
-current one; with none it is unknown, and the setpoint correction moves without its demand
-check and the radiators are not checked. A room none of whose TRVs has such an
+nothing for 75 minutes, neither its opening nor its own temperature (an unchanged opening is
+not reported again; a TRV with constant values reports about once an hour). The room's demand is the highest opening among the TRVs with a
+current one; with none it is unknown and the radiators are not checked. A room none of whose TRVs has such an
 entity never learns: without a measured opening it has no heat to balance.
 
 ## Radiator lag and the room observer
@@ -493,10 +504,22 @@ pauses for both factors (status `outdoor_temperature_missing`) and the model's v
 the heat balance starts a new stretch. Feed the outdoor entity a measured value or nothing:
 an estimate during an outage would be learned from as if it were measured.
 
-Right after startup the heat source may not have reported yet. Until the heat source entity
-has reported a known state *and* a valid flow temperature has come in, or for at most 5
-minutes, the room leaves the heat-available switches alone; setpoints go out at once. If the heat source is still unknown after the 5 minutes, the switches go
-off.
+### After a restart
+
+After Home Assistant starts, the integrations restore their entities over a minute or more.
+Until then the hub computes, writes and learns nothing. It waits for the entities it needs:
+per TRV the climate entity and the profile's heat-available switch, adaptation status,
+external temperature and load entities; per room the room sensor when one is configured;
+the outdoor temperature, the flow temperature entity, the heat source, and the flow
+device's actuator. Window contacts and other optional inputs are not waited for. Once all
+of them have a known state and none came in for 30 seconds, or 3 minutes after the start
+at the latest, every room runs once in full (setpoints, heat-available switches, room
+temperature and load to the TRVs), then the flow and hot water. On the timeout the log
+warns `Starting after 180 s without …` with the entities still missing. A reload of the
+integration starts at once.
+
+A TRV entity the hub writes to (external temperature, load balancing, mean load) that
+comes back after being unavailable gets its value again at once.
 
 ### Hot-water charges
 
@@ -552,8 +575,9 @@ The hub sums this up over the **lead rooms**, marked per room by two checkboxes:
   live off their neighbours or are heated by something else are better left out, or they
   keep the heat pump running for nothing.
 - **Lead room for the flow temperature** — *Lead rooms minimum flow temperature* is the
-  highest minimum flow (recovery included) among them, the flow the heating curve should
-  reach.
+  highest minimum flow (flow boost included) among them. The flow control takes their
+  ungated hold flow as feedforward and their valve openings as feedback (see
+  [Flow control](#flow-control)).
 
 With an effective heating curve entity on the hub, *Flow reserve hold* and *Flow reserve
 minimum* report the curve minus each value: negative means the curve does not reach what a
@@ -581,19 +605,40 @@ as no demand.
 With a flow control sub-entry the integration owns the heat source's flow. Every minute it
 works out:
 
-- **Target flow** = *Lead rooms minimum flow temperature* + margin (default 1 K). A planned
-  hot-water charge can raise it further (up to *Flow raise for hot water at most* above
-  that). Never below the flow threshold. Attribute `source` says
-  which won: `lead`, `charge`, `threshold` or `fallback`.
+- **Feedforward** = highest ungated hold flow of the flow lead rooms (what the learned
+  model says they need at their setpoint).
+- **Feedback** `feedback_k` (*Flow feedback*, K): what the valves say the model misses.
+  The lead demand is the highest valve opening among the flow lead rooms, leaving out
+  rooms with an open window, in frost protection, with a radiator that does not heat,
+  in a flow boost or with an unknown opening.
+  - **Up** one actuator step: a room above 90 % open and at least 0.1 K below its target
+    (mode setpoint against the room sensor), or a room at 98 % or more. At most every 30 minutes, the first
+    30 minutes after a start too.
+  - **Down** one step: the lead demand below 80 % for 2 hours at a stretch; then again
+    after another 2 hours.
+  - Limited to ±5 K. No step that the target limits would cut off anyway.
+  - **Frozen** (no step, the timers stand still) while *Write flow* is off, the heat source
+    does not heat or is unreachable, a hot-water charge runs, the measured flow is below
+    the threshold (defrost), the lead flow is missing (fallback), a flow boost runs, or the
+    last wanted value has not gone out (budget, hold time). The value survives restarts.
+- **Target flow** = feedforward + feedback, at most feedforward + 6 K, the curve plus the
+  highest offset (setpoint mode: the highest setpoint) and the radiators' design flow.
+  A **flow boost** (a lead room recovering after its mode setpoint went up) raises it to
+  that room's recovery flow; a planned hot-water charge can raise it further (up to
+  *Flow raise for hot water at most* above that). Never below the flow threshold.
+  Attribute `source` says which won: `lead`, `boost`, `charge`, `threshold` or
+  `fallback`; further attributes `feedforward_flow_c`, `room`, `feedback_k`,
+  `boost_flow_c`, `boost_room`.
+- *Flow feedback* attributes: `lead_demand_pct`, `lead_room`, `lead_deficit_c`,
+  `feedforward_flow_c`, `frozen`, `frozen_reason`, `last_change`.
 - **Actuator value**: in offset mode target minus the heat source's curve at the current
   outdoor value, in setpoint mode the target itself. Rounded up to the step, so the flow
-  never falls below the target and the margin stays whole; clamped to the limits.
+  never falls below the target; clamped to the limits.
 
 It writes only when all hold:
 
 - *Write flow* is on (off = shadow: the values show, nothing is written);
-- the unrounded need differs from the reported value by at least the hysteresis (so the
-  margin can shrink by at most the hysteresis before a write);
+- the unrounded need differs from the reported value by at least the hysteresis;
 - the hold time (default 30 min) has passed since the last write;
 - the hub's write budget allows it.
 
@@ -680,8 +725,12 @@ The minimum flow temperature is the larger of two requirements:
 
 - **Hold** — the flow needed to hold the setpoint at the current outdoor temperature (see
   the surplus gate below).
-- **Recovery** — for a room below its setpoint, the lowest flow that brings it back within
-  six hours with its valves fully open. It is found by simulating the room with the same
+- **Recovery** (flow boost) — only after the mode's setpoint went up by at least 0.5 K
+  (not after a window closed), until the room is within 0.2 K
+  of it or six hours have passed: the lowest flow that brings it back within six hours
+  with its valves fully open. Outside a flow boost the recovery flow is still shown
+  (`recovery_flow_temperature_c`) but not asked for; the valve feedback of the flow
+  control covers a room that stays short. It is found by simulating the room with the same
   radiator, heat-loss and capacity model the observer uses, including the learned
   factors. A room within 0.1 K of its setpoint counts as there, and a room whose outdoor
   temperature is above its setpoint asks for no recovery at all.
@@ -733,7 +782,7 @@ the floor in exactly that case. It closes only when both signals agree:
 - the TRVs report their valves shut (the room's valve opening at 0 %), **and**
 - the room is above its current target by more than **"close above setpoint"**
 
-While a TRV that reports its opening has been silent for 30 minutes the gate stays as it is:
+While a TRV that reports its opening has been silent for 75 minutes the gate stays as it is:
 its valve may well be open.
 
 Both are needed. Demand alone also reads 0 % for a room sitting exactly at setpoint, which
@@ -776,7 +825,8 @@ target, `ua_factor` and `ua_last_learned` — a factor that has not been learned
 makes the point provisional.
 
 The flow device turns these into *Heating curve recommendation cold* / *warm*: the highest
-value among the flow lead rooms plus the margin. Attributes `room`, `rooms`,
+value among the flow lead rooms plus the flow feedback `feedback_k` (what the valves say
+the model misses). Attributes `room`, `rooms`, `feedback_k`,
 `current_curve_flow_c` (the curve number of that end) and `difference_k` (current minus
 recommended; positive means the curve is set higher than the lead rooms need). Read it
 before changing the heat source's curve:
@@ -794,7 +844,8 @@ before changing the heat source's curve:
 
 *Hold flow curves* (flow device, diagnostic) carries every room's comfort hold flow over
 the curve's outdoor range, 2 K beyond each end, in whole degrees: attributes `outdoor_c`,
-`rooms` (`name`, `lead`, `flow_c`), `margin_k` and the current `outdoor_temperature_c`.
-Its state is the lead rooms' highest hold flow plus margin at the current outdoor value.
+`rooms` (`name`, `lead`, `flow_c`), `feedback_k`, `lead_demand_pct`, `lead_room` and the
+current `outdoor_temperature_c`. Its state is the lead rooms' highest hold flow plus
+feedback at the current outdoor value.
 The curves stay out of the recorder. The heating curve card draws them (see
 [`card-design.md`](card-design.md#heating-curve-card)).

@@ -31,8 +31,9 @@ SENSOR_OUTLIER_DRIFT_MAX_INTERVAL_S = 2 * SENSOR_POLL_INTERVAL_MINUTES * 60
 # A valve opening counts as unknown once its TRV reported nothing for this
 # long, neither the opening nor its own temperature. An unchanged opening is
 # not reported again, so the age runs from the TRV's last report; a Zigbee
-# battery device that hangs stays available with its last values.
-VALVE_POSITION_MAX_AGE_S = 30 * 60
+# battery device that hangs stays available with its last values. A TRV with
+# constant values reports about once an hour; the age leaves room for that.
+VALVE_POSITION_MAX_AGE_S = 75 * 60
 
 
 class SensorEntry:

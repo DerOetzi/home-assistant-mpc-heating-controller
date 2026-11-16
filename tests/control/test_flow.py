@@ -21,7 +21,6 @@ def _config(**overrides) -> FlowControlConfig:
         "maximum": 10.0,
         "step": 1.0,
         "fallback": 0.0,
-        "margin_k": 1.0,
         "hysteresis_k": 0.5,
         "hold_s": 1800.0,
         "threshold_c": 29.0,
@@ -33,7 +32,8 @@ def _config(**overrides) -> FlowControlConfig:
 def _inputs(**overrides) -> FlowInputs:
     values = {
         "outdoor_c": 8.0,
-        "lead_min_flow_c": 33.0,
+        "feedforward_flow_c": 33.0,
+        "feedback_k": 1.0,
         "charge_flow_c": None,
         "actual": 0.0,
         "heating_on": True,
@@ -54,7 +54,7 @@ def test_curve_matches_the_template() -> None:
     assert CURVE.flow_at(1.0) == round(54 - 25 / 31 * 14 + 1, 1)
 
 
-def test_offset_brings_curve_to_lead_flow_plus_margin() -> None:
+def test_offset_brings_curve_to_feedforward_plus_feedback() -> None:
     controller = FlowController(_config(), T0 - 3600)
     decision = controller.decide(_inputs(), CURVE, T0)
 
@@ -66,9 +66,9 @@ def test_offset_brings_curve_to_lead_flow_plus_margin() -> None:
     assert decision.source is FlowSource.LEAD
 
 
-def test_offset_rounds_up_so_the_margin_stays_whole() -> None:
+def test_offset_rounds_up_so_the_flow_stays_above_target() -> None:
     controller = FlowController(_config(), T0 - 3600)
-    decision = controller.decide(_inputs(lead_min_flow_c=31.4), CURVE, T0)
+    decision = controller.decide(_inputs(feedforward_flow_c=31.4), CURVE, T0)
 
     # 31.4 + 1 = 32.4 against curve 37.06 -> -4.66 -> -4, not -5
     assert decision.value == -4.0
@@ -95,7 +95,9 @@ def test_setpoint_never_below_threshold() -> None:
         _config(mode=ActuatorMode.SETPOINT, minimum=20, maximum=55, threshold_c=29.0),
         T0 - 3600,
     )
-    decision = controller.decide(_inputs(lead_min_flow_c=0.0, actual=35.0), CURVE, T0)
+    decision = controller.decide(
+        _inputs(feedforward_flow_c=0.0, actual=35.0), CURVE, T0
+    )
 
     assert decision.source is FlowSource.THRESHOLD
     assert decision.target_flow_c == 29.0
@@ -104,7 +106,7 @@ def test_setpoint_never_below_threshold() -> None:
 
 def test_offset_never_below_threshold() -> None:
     controller = FlowController(_config(), T0 - 3600)
-    decision = controller.decide(_inputs(lead_min_flow_c=0.0), CURVE, T0)
+    decision = controller.decide(_inputs(feedforward_flow_c=0.0), CURVE, T0)
 
     # Threshold 29 against curve 37.06 -> -8.06 -> -8, not the -10 limit.
     assert decision.source is FlowSource.THRESHOLD
@@ -119,18 +121,18 @@ def test_hold_time_and_hysteresis_keep_writes_rare() -> None:
     # Cloud still shows the old value: no external change, no new write.
     controller.observe_actual(0.0, T0 + 60)
     assert controller.external_change_ts is None
-    held = controller.decide(_inputs(lead_min_flow_c=40.0), CURVE, T0 + 600)
+    held = controller.decide(_inputs(feedforward_flow_c=40.0), CURVE, T0 + 600)
     assert held.write is None
     assert held.reason == "hold"
 
     controller.observe_actual(-3.0, T0 + 900)
     small = controller.decide(
-        _inputs(lead_min_flow_c=33.3, actual=-3.0), CURVE, T0 + 4000
+        _inputs(feedforward_flow_c=33.3, actual=-3.0), CURVE, T0 + 4000
     )
     assert small.write is None
 
     later = controller.decide(
-        _inputs(lead_min_flow_c=36.0, actual=-3.0), CURVE, T0 + 4000
+        _inputs(feedforward_flow_c=36.0, actual=-3.0), CURVE, T0 + 4000
     )
     assert later.write == 0.0
 
@@ -155,8 +157,10 @@ def _enter_fallback(controller: FlowController, **overrides) -> float:
 
 def test_fallback_when_lead_value_missing() -> None:
     controller = FlowController(_config(fallback=0.0), T0 - 3600)
-    ts = _enter_fallback(controller, lead_min_flow_c=None, actual=-3.0)
-    decision = controller.decide(_inputs(lead_min_flow_c=None, actual=-3.0), CURVE, ts)
+    ts = _enter_fallback(controller, feedforward_flow_c=None, actual=-3.0)
+    decision = controller.decide(
+        _inputs(feedforward_flow_c=None, actual=-3.0), CURVE, ts
+    )
 
     assert decision.source is FlowSource.FALLBACK
     assert decision.write == 0.0
@@ -164,7 +168,7 @@ def test_fallback_when_lead_value_missing() -> None:
 
     controller.written(0.0, -3.0, ts)
     again = controller.decide(
-        _inputs(lead_min_flow_c=None, actual=-3.0), CURVE, ts + 60
+        _inputs(feedforward_flow_c=None, actual=-3.0), CURVE, ts + 60
     )
     assert again.write is None
 
@@ -180,7 +184,7 @@ def test_fallback_when_outdoor_missing_in_offset_mode() -> None:
 def test_fallback_waits_out_a_start() -> None:
     # Right after a start or reload the rooms have no estimate yet.
     controller = FlowController(_config(), T0)
-    first = controller.decide(_inputs(lead_min_flow_c=None, actual=2.0), CURVE, T0)
+    first = controller.decide(_inputs(feedforward_flow_c=None, actual=2.0), CURVE, T0)
     assert first.source is FlowSource.FALLBACK
     assert first.value == 0.0
     assert first.write is None
@@ -194,10 +198,10 @@ def test_fallback_waits_out_a_start() -> None:
 
 def test_fallback_grace_restarts_after_values_return() -> None:
     controller = FlowController(_config(), T0 - 3600)
-    controller.decide(_inputs(lead_min_flow_c=None, actual=2.0), CURVE, T0)
+    controller.decide(_inputs(feedforward_flow_c=None, actual=2.0), CURVE, T0)
     controller.decide(_inputs(actual=2.0), CURVE, T0 + 240)
     decision = controller.decide(
-        _inputs(lead_min_flow_c=None, actual=2.0), CURVE, T0 + 300
+        _inputs(feedforward_flow_c=None, actual=2.0), CURVE, T0 + 300
     )
     assert decision.write is None
     assert decision.reason == "fallback_wait"
@@ -205,8 +209,8 @@ def test_fallback_grace_restarts_after_values_return() -> None:
 
 def test_leaving_fallback_is_not_held() -> None:
     controller = FlowController(_config(), T0 - 3600)
-    ts = _enter_fallback(controller, lead_min_flow_c=None, actual=-3.0)
-    controller.decide(_inputs(lead_min_flow_c=None, actual=-3.0), CURVE, ts)
+    ts = _enter_fallback(controller, feedforward_flow_c=None, actual=-3.0)
+    controller.decide(_inputs(feedforward_flow_c=None, actual=-3.0), CURVE, ts)
     controller.written(0.0, -3.0, ts)
     decision = controller.decide(_inputs(actual=0.0), CURVE, ts + 120)
 
@@ -234,5 +238,40 @@ def test_nothing_while_heating_off_or_unreachable() -> None:
 
 def test_clamped_to_actuator_range() -> None:
     controller = FlowController(_config(), T0 - 3600)
-    decision = controller.decide(_inputs(lead_min_flow_c=60.0), CURVE, T0)
+    decision = controller.decide(_inputs(feedforward_flow_c=60.0), CURVE, T0)
     assert decision.value == 10.0
+
+
+def test_feedback_capped_at_feedforward_plus_headroom() -> None:
+    controller = FlowController(_config(), T0 - 3600)
+    decision = controller.decide(_inputs(feedback_k=9.0), CURVE, T0)
+
+    # 33 + 9 = 42 is cut to 33 + 6 = 39.
+    assert decision.target_flow_c == 39.0
+
+
+def test_feedback_capped_at_design_flow() -> None:
+    controller = FlowController(_config(), T0 - 3600)
+    decision = controller.decide(_inputs(feedback_k=5.0, design_flow_c=35.0), CURVE, T0)
+    assert decision.target_flow_c == 35.0
+
+
+def test_bounds_follow_threshold_and_actuator_range() -> None:
+    controller = FlowController(_config(maximum=1.0), T0 - 3600)
+    bounds = controller.bounds(_inputs(), CURVE)
+
+    # Curve 37.1 + offset 1 is below 33 + 6.
+    assert bounds.lower_c == 29.0
+    assert round(bounds.upper_c, 2) == 38.1
+    assert controller.bounds(_inputs(feedforward_flow_c=None), CURVE) is None
+
+
+def test_boost_raises_the_target() -> None:
+    controller = FlowController(_config(), T0 - 3600)
+    decision = controller.decide(_inputs(boost_flow_c=42.0), CURVE, T0)
+
+    assert decision.source is FlowSource.BOOST
+    assert decision.target_flow_c == 42.0
+
+    lower = controller.decide(_inputs(boost_flow_c=30.0), CURVE, T0)
+    assert lower.source is FlowSource.LEAD

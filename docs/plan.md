@@ -24,7 +24,7 @@ Pfade unten sind relativ zum Repo. Abkürzung `CC/` = `custom_components/heating
 
 ## Zielbild
 
-Raum regelt der TRV selbst (eigener PI, Sollwert über `climate.set_temperature` = Typ 1). Integration setzt je Raum nur Sollwert des Modus (plus langsame Raumfehler-Korrektur), `heat_available` und bei offenem Fenster Frostschutz-Soll (Fenster-Flag am TRV bleibt bei Automationen), beobachtet `pi_heating_demand`, lernt daraus UA, Kapazität (Masse; Lüften zunächst nur beobachtet), G und Sonne und regelt damit den gemeinsamen Vorlauf: Vorsteuerung aus Modell (Haltevorlauf), asymmetrische Rückkopplung auf höchsten Demand der Vorlauf-Leiträume, Boost nur nach Moduswechsel aus Kapazität. Kein Planer, keine Ventilkennlinie.
+Raum regelt der TRV selbst (eigener PI, Sollwert über `climate.set_temperature` = Typ 1). Integration setzt je Raum nur Sollwert des Modus, Raumsensor-Wert als externe Temperatur, Lastausgleich in Räumen mit 2+ TRVs, `heat_available` und bei offenem Fenster Frostschutz-Soll (Fenster-Flag am TRV bleibt bei Automationen), beobachtet `pi_heating_demand`, lernt daraus UA, Kapazität (Masse; Lüften zunächst nur beobachtet), G und Sonne und regelt damit den gemeinsamen Vorlauf: Vorsteuerung aus Modell (Haltevorlauf), asymmetrische Rückkopplung auf höchsten Demand der Vorlauf-Leiträume, Boost nur nach Moduswechsel aus Kapazität. Kein Planer, keine Ventilkennlinie.
 
 ## Reihenfolge
 
@@ -32,7 +32,7 @@ Raum regelt der TRV selbst (eigener PI, Sollwert über `climate.set_temperature`
 |---|---|---|
 | 1 | 1d Kapazität beobachten | läuft seit Neustart 15.11., bis Neustart A |
 | 2 | 2a–2g Umbau TRV-Ansteuerung | umgesetzt, Neustart A am 15.11. erfolgt; Beobachtung läuft |
-| 3 | 3 Vorlauf-Rückkopplung, Neustart B | nach 2, ein paar Tage Betrieb ohne Auffälligkeit (Takten, Raumfehler) |
+| 3 | Vorlauf-Rückkopplung, Raumsensor an TRV + Lastausgleich (Sollwertkorrektur entfernt), Neustart B | umgesetzt, Neustart B ausstehend; danach `radiator_covered` Wohnzimmer groß an (Nutzer), anzeigen was `current_temperature` mit externem Sensor zeigt; danach `feedback_k`, Einfrieren und Leit-Demand in Tagesauswertung beobachten |
 | 4 | 4a Gewinne auswerten | parallel, kein Code |
 | 5 | Boiler-Modus TRV (5, ~01.12.) | Z2M 2.15.0 da, kein anderer Neustart in den 3 Tagen davor |
 | 6 | 4b Gewinne im Lerner, 4c Vorsteuerung mit Gewinnen + Boost, Neustart C | Nutzer hat 4a freigegeben, 3 läuft stabil |
@@ -55,32 +55,7 @@ Wenige Tage, Moduswechsel selten (nur Dani, Urlaub) — Ergebnis eher Plausibili
 
 2a–2g umgesetzt, Neustart A am 15.11. erfolgt.
 
-In Tagesauswertung: Raumfehler je Raum, Korrekturverlauf, Ventiltakten je TRV (Faktor 1), Schreibzahl, Fenster-Ablauf, UA-Lernstatus `valve_position_missing` in ruhigen Nächten (TRV 30 min still), `lead_min_flow` gegen Haltevorlauf (Recovery läuft bis Schritt 3 bei Raumfehler > 0,1 K mit).
-
-## 3. Vorlauf-Rückkopplung (Neustart B)
-
-**Ist-Stand:**
-- `CC/hub.py:347–376`: `_lead`; `lead_hold_flow` = Max über **Heizgrenzen**-Leiträume, Wert **nach** Überschuss-Gate (Heizanforderung, Reserve); `lead_min_flow` = Max über Vorlauf-Leiträume von max(Halten, Recovery) (`controller.py:495`).
-- Vorlaufregler nutzt nur `lead_min_flow` + `margin_k` (1 K) (`CC/flow_device.py:174`, `CC/control/flow.py:199`). `FlowController.decide` mit Quellen, Rundung, Hysterese, Schreibbudget.
-- Recovery springt bei jedem Raumdefizit > 0,1 K an (`controller.py:608`).
-
-**Neu:**
-- **Lead-Wert** `lead_feedforward_flow` = Max über Vorlauf-Leiträume des ungegateten Haltevorlaufs (`_calculate_hold_flow_temperature_c`). Heizgrenze/`lead_hold_flow` bleibt unverändert für Heizanforderung.
-- **Recovery** nur noch nach Moduswechsel nach oben (Sprung Modus-Soll ≥ `JUMP_MIN_TARGET_STEP_C`), bis Raum Soll − 0,2 K erreicht oder Horizont abgelaufen. Nicht nach Fenster-zu (Lüften nur beobachtet), nicht bei Korrekturschritten. Wert `lead_boost_flow` = Max über Räume mit laufendem Boost.
-- **Rückkopplung** `feedback_k` (Hub-Integrator, in `HubStore._export`):
-  - `lead_demand_pct` = Max der Raum-Demands (2f) über Vorlauf-Leiträume, ohne Räume mit Fenster offen, Frostschutz, Heizkörper-Urteil, Boost, unbekanntem Demand.
-  - Hoch: Demand > 90 % und dieser Raum ≥ 0,1 K unter Modus-Soll + Korrektur-Ziel, oder Demand ≥ 98 % → +1 Schritt, frühestens 30 min nach letztem Schritt.
-  - Runter: Demand < 80 % seit ≥ 2 h am Stück → −1 Schritt, danach wieder 2 h.
-  - Kein Doppelschritt bei Sättigung.
-  - Klemmen `feedback_k` auf ±5 K (Konstante).
-  - Einfrieren (kein Schritt, Zeitgeber laufen nicht) bei: Schalter „Vorlauf schreiben" aus, letzter Stellwert nicht geschrieben (Budget, Haltezeit), Heizbetrieb aus/WP nicht erreichbar, WW-Ladung, Abtauung (Vorlauf unter Schwelle), laufender Boost.
-- **Vorlauf-Ziel** = clamp(`lead_feedforward_flow` + `feedback_k`, Vorlaufschwelle, min(`lead_feedforward_flow` + 6 K, Kurve + max. Offset, Auslegungsvorlauf)); bei Boost max(dieses, `lead_boost_flow`). `margin_k` entfällt (Konstante, Zahl-Entity, Übersetzungen).
-- Überschuss-Gate unverändert, Eingang gemessener Demand.
-- Attribute am Vorlauf-Gerät: `lead_demand_pct`, Leitraum, `feedback_k`, `feedforward_flow`, eingefroren ja/nein mit Grund, letzte Änderung.
-
-Tests (`tests/control/test_flow.py`, `tests/test_hub.py`): 95 % + Raum unter Soll → hoch; 95 % + Raum auf Soll → nichts; 99 % → hoch; 60 % über 2 h → runter, 60 % über 1 h → nichts; Mindestabstand; Klemmen ±5 K; Obergrenze Vorsteuerung + 6 K; Einfrieren je Grund; Raum mit Fenster offen zählt nicht; Boost hebt Ziel und friert ein.
-
-Doku: `mpc-guide.md` „Flow control", Karte (Leit-Demand, `feedback_k`), Skill-Dateien (Offset-Empfehlungsregeln in `tagesauswertung.md` an Rückkopplung anpassen).
+In Tagesauswertung: Raumfehler je Raum, Ventiltakten je TRV (Faktor 1), Schreibzahl, Fenster-Ablauf, UA-Lernstatus `valve_position_missing` in ruhigen Nächten (TRV 75 min still).
 
 ## 4. Gewinne und Sonne
 
@@ -127,7 +102,7 @@ Doku: `mpc-guide.md` „Gains and sun", „Flow control"; Offset-Empfehlung neu 
 ## 5. Beobachten (laufend, Tagesauswertung)
 
 Sofort durch Nutzer:
-- Raumsensor Rebekka (`sensor.sensor_rebekka_temperature`) meldet nur ~stündlich — Reporting-Intervall am Gerät prüfen (Korrektur braucht ≥ 2 Werte je Stunde).
+- Raumsensor Rebekka (`sensor.sensor_rebekka_temperature`) meldet nur ~stündlich — Reporting-Intervall am Gerät prüfen (TRV braucht Raumwert ≥ alle 3 h, verdeckt alle 30 min).
 - Arbeitszimmer unter Soll bei 100 % Ventil: vermutlich Voreinstellung — prüfen.
 - `algorithm_scale_factor` aller TRVs auf 1 vor Neustart A.
 
@@ -136,8 +111,7 @@ Mit Termin:
 
 Laufend:
 - Ventiltakten je TRV seit Neustart A; bei Takten Faktor-Empfehlung an Nutzer.
-- Typ 1: Demand-Verlauf nach jedem Korrekturschritt nach unten (Sprung auf ~10 % erwartet). Erholung > 30 min → Nutzer melden (dann Schritte nach unten seltener/erst bei größerem Fehler).
-- Korrektur je Raum: am Deckel ±3 K → Ursache melden (Sensorlage, TRV-Lage, Unterversorgung).
+- Ab Neustart B: Raumfehler je Raum (Raumsensor gegen Modus-Soll) mit externem Raumwert; bleibender Fehler > 0,3 K → melden. Schreibzahl `trv_external_writes` (Akku), Lastmittel `load_room_mean` in 2-TRV-Räumen: TRV-Öffnungen sollen sich angleichen.
 - Vorlauf: `feedback_k` am Anschlag ±5 K oder Pendeln (Hoch/Runter im Wechsel < 4 h) → melden.
 - Lüften-Kapazität: Werte je Raum sammeln, nach einigen Wochen Nutzer fragen, ob sie Boost bekommt.
 - Ladungs-Dips zählen (6a).
@@ -166,7 +140,7 @@ Tests `tests/control/test_charge_plan.py`: Zapf-Stunde ignoriert; Nachtende 39 �
 
 ### 6c. Vorheizen je Raum
 
-Kurzzeitige Anhebung des geschriebenen Sollwerts um `lift` (0,5-K-Schritte, Deckel 1 K) vor sicheren Ladungen ≤ 90 min voraus. `lift` aus Simulation (Masse-Kapazität, Gewinne): Raum bei Ladungsende ≥ Soll − 0,2 K. Anhebung läuft wie Korrektur am Modus-Soll vorbei (Lerner sieht keinen Sprung); UA-Strecke endet bei Vorheizbeginn, nächste ab Ende + 1 h. Attribute `charge_preheat_lift`, `charge_preheat_from`, `charge_at_risk`.
+Kurzzeitige Anhebung des geschriebenen Sollwerts um `lift` (0,5-K-Schritte, Deckel 1 K) vor sicheren Ladungen ≤ 90 min voraus. `lift` aus Simulation (Masse-Kapazität, Gewinne): Raum bei Ladungsende ≥ Soll − 0,2 K. Anhebung läuft am Modus-Soll vorbei (Lerner sieht keinen Sprung); UA-Strecke endet bei Vorheizbeginn, nächste ab Ende + 1 h. Attribute `charge_preheat_lift`, `charge_preheat_from`, `charge_at_risk`.
 
 ### 6d. Hub, Deploy, Doku
 

@@ -390,6 +390,8 @@ class HotWaterDevice:
     # --- Hot water and legionella (every minute) ---------------------------
 
     async def async_evaluate(self) -> None:
+        if not self.hub.started:
+            return
         now = dt_util.now()
         now_ts = now.timestamp()
         if self.controller.boost_expired(self.boost_on, now_ts):
@@ -515,6 +517,8 @@ class HotWaterDevice:
         return self.continuous_request or external or self.legionella.wants_circulation
 
     async def async_evaluate_circulation(self, draw: bool = False) -> None:
+        if not self.hub.started:
+            return
         d = self.data
         pump = self.hass.states.get(d["pump_entity"])
         if pump is None or pump.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):

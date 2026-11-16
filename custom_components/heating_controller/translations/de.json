@@ -411,9 +411,6 @@
       "flow_curve_bump_width": {
         "name": "Heizkurve Erhöhung Steigung"
       },
-      "flow_margin": {
-        "name": "Vorlauf Marge"
-      },
       "flow_hysteresis": {
         "name": "Vorlauf Hysterese"
       },
@@ -595,6 +592,9 @@
       "flow_effective_curve": {
         "name": "Heizkurve Vorlauftemperatur effektiv"
       },
+      "flow_feedback": {
+        "name": "Vorlauf Rückkopplung"
+      },
       "flow_target": {
         "name": "Vorlauf Soll"
       },
@@ -675,7 +675,7 @@
     },
     "recalibrate": {
       "name": "Neu kalibrieren",
-      "description": "Setzt die gelernten UA- und Kapazitätsfaktoren oder die Sollwertkorrektur eines oder mehrerer Räume oder setzt deren gelernte Gewinne zurück. Ein weggelassener Wert bleibt unverändert; 1.0 setzt einen Faktor zurück. Nur für Admins.",
+      "description": "Setzt die gelernten UA- und Kapazitätsfaktoren eines oder mehrerer Räume oder setzt deren gelernte Gewinne zurück. Ein weggelassener Wert bleibt unverändert; 1.0 setzt einen Faktor zurück. Nur für Admins.",
       "fields": {
         "ua_factor": {
           "name": "UA-Faktor",
@@ -688,10 +688,6 @@
         "reset_gains": {
           "name": "Gewinne zurücksetzen",
           "description": "Vergisst den gelernten festen Gewinn, das Gewinnprofil und die Sonnenterme des Raums und lernt sie neu."
-        },
-        "setpoint_correction": {
-          "name": "Sollwertkorrektur",
-          "description": "Korrektur auf den Sollwert des Modus, der an die TRVs geht, in K. Die automatische Korrektur macht nach zwei Stunden von dort aus weiter."
         }
       }
     }

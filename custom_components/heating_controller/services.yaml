@@ -10,8 +10,8 @@ unblock:
 recalibrate:
   name: Recalibrate
   description: >-
-    Set the learned UA and capacity factors or the setpoint correction of one
-    or more rooms, or reset their learned gains. A value left out stays
+    Set the learned UA and capacity factors of one or more rooms, or reset
+    their learned gains. A value left out stays
     unchanged; pass 1.0 to reset a factor. Admin only.
   target:
     entity:
@@ -47,16 +47,3 @@ recalibrate:
       example: true
       selector:
         boolean:
-    setpoint_correction:
-      name: Setpoint correction
-      description: >-
-        Correction added to the mode's setpoint handed to the TRVs, in K. The
-        automatic correction carries on from it after two hours.
-      example: 1.0
-      selector:
-        number:
-          min: -3.0
-          max: 3.0
-          step: 0.5
-          unit_of_measurement: K
-          mode: box

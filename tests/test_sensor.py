@@ -69,7 +69,7 @@ async def test_hold_flow_sensor_matches_min_flow_while_the_gate_is_open(
     assert float(hold.state) == float(gated.state)
 
 
-async def test_min_flow_sensor_reports_the_recovery_flow_for_a_cold_room(
+async def test_min_flow_sensor_leaves_recovery_out_without_a_mode_jump(
     hass: HomeAssistant,
 ) -> None:
     _seed_entities(hass)
@@ -87,9 +87,10 @@ async def test_min_flow_sensor_reports_the_recovery_flow_for_a_cold_room(
     gated = hass.states.get("sensor.wohnzimmer_minimum_flow_temperature")
     assert gated is not None
 
+    # A cold room alone is no flow boost: recovery is shown, not asked for.
     recovery_c = gated.attributes["recovery_flow_temperature_c"]
     assert recovery_c > gated.attributes["hold_flow_temperature_c"]
-    assert float(gated.state) == recovery_c
+    assert float(gated.state) == gated.attributes["hold_flow_temperature_c"]
 
     gated_hold = hass.states.get("sensor.wohnzimmer_gated_hold_flow_temperature")
     assert gated_hold is not None

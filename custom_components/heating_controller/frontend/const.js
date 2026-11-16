@@ -60,8 +60,6 @@ export const ROOM_SENSOR_KEY = "room_sensor";
 // The heat the radiators do not supply (steady gain, day profile, sun); a
 // singleton like the room sensor.
 export const ADDITIONAL_HEAT_KEY = "additional_heat";
-// The setpoint correction for the room-sensor error; a singleton too.
-export const CORRECTION_KEY = "setpoint_correction";
 
 // Identifies the room-temperature entity as a managed header row -- present
 // by default (leading, unlabeled), but sortable/hideable/nameable through the

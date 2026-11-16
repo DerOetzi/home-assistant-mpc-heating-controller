@@ -34,3 +34,21 @@ entities:
   mounted_mode:
     domain: binary_sensor
     unique_id_suffix: _mounted_mode_active_zigbee2mqtt
+  # The room sensor's reading in 0.01 °C; -8000 hands the TRV back its own.
+  external_temperature:
+    domain: number
+    unique_id_suffix: _external_measured_room_sensor_zigbee2mqtt
+    scale: 100
+    off_value: -8000
+  radiator_covered:
+    domain: switch
+    unique_id_suffix: _switch_radiator_covered_zigbee2mqtt
+  load_balancing:
+    domain: switch
+    unique_id_suffix: _switch_load_balancing_enable_zigbee2mqtt
+  load_estimate:
+    domain: sensor
+    unique_id_suffix: _load_estimate_zigbee2mqtt
+  load_room_mean:
+    domain: number
+    unique_id_suffix: _load_room_mean_zigbee2mqtt
