@@ -417,9 +417,9 @@ def test_managed_header_rows_follow_the_language(ctx) -> None:
 @pytest.mark.parametrize(
     ("status", "attributes", "value", "verdict"),
     [
-        ("undersupplied", "{demand_pct: 100}", "Undersupplied · 100 % ⚠", "low"),
-        ("supplied", "{demand_pct: 85}", "Supplied · 85 %", "ok"),
-        ("oversupplied", "{demand_pct: 30}", "Oversupplied · 30 %", "idle"),
+        ("undersupplied", "{demand_pct: 100}", "Short · 100 % ⚠", "low"),
+        ("supplied", "{demand_pct: 85}", "At limit · 85 %", "ok"),
+        ("oversupplied", "{demand_pct: 30}", "Headroom · 30 %", "idle"),
         (
             "not_rated",
             '{reason: "window_open", demand_pct: null}',

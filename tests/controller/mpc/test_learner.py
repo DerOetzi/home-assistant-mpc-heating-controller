@@ -19,6 +19,7 @@ from heating_controller.controller.mpc.learner import (
     UA_BALANCE_MIN_WINDOW_S,
     UA_BALANCE_WEIGHT,
     RoomMpcModelLearner,
+    ua_balance_weight,
 )
 from heating_controller.controller.mpc.models.capacity import (
     MIN_LEARNED_CAPACITY_FACTOR,
@@ -93,8 +94,8 @@ def test_enable_while_paused_reports_paused():
 NIGHT_COUNT = int(NIGHT_HOURS * 3600 / STEP_S) + 1
 
 
-def _expected_factor(target_factor, current=1.0):
-    return current + UA_BALANCE_WEIGHT * (target_factor - current)
+def _expected_factor(target_factor, current=1.0, hours=NIGHT_HOURS):
+    return current + ua_balance_weight(hours * 3600) * (target_factor - current)
 
 
 def test_heat_balance_moves_ua_towards_the_power_that_held_the_room():
@@ -140,7 +141,7 @@ def test_pausing_learning_balances_the_stretch():
     learner.run_learning_cycle()
 
     assert learner.get_learning_state().status == LearningStatus.LEARNED
-    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
+    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5, hours=5))
     assert learner.get_ua_balance_info().last_window_s == pytest.approx(5 * 3600)
 
 
@@ -295,7 +296,7 @@ def test_pause_balances_the_stretch_before_it():
     learner.set_learning_paused(True, end_ts + 60)
     learner.run_learning_cycle()
 
-    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
+    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5, hours=5))
 
 
 def test_missing_outdoor_temperature_balances_the_stretch_before_it():
@@ -306,7 +307,7 @@ def test_missing_outdoor_temperature_balances_the_stretch_before_it():
     learner.set_outdoor_temperature_missing(True, end_ts + 60)
     learner.run_learning_cycle()
 
-    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
+    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5, hours=5))
 
 
 def test_heat_balance_starts_after_the_outdoor_temperature_is_back():
@@ -335,7 +336,9 @@ def test_stretch_ends_at_sunrise():
     info = learner.get_ua_balance_info()
     assert info.outcome == UaBalanceOutcome.LEARNED
     assert info.last_learned_ts == sunrise_ts - STEP_S
-    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
+    assert loss_model.learned_ua_factor == pytest.approx(
+        _expected_factor(0.5, hours=6 - STEP_S / 3600)
+    )
 
 
 def test_stretch_starts_once_the_sun_condition_holds():
@@ -402,7 +405,7 @@ def test_ua_suppression_balances_the_stretch_before_it():
     learner.suppress_for_interval(1800, 0)
     learner.run_learning_cycle()
 
-    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
+    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5, hours=5))
 
 
 def test_ua_suppression_starts_the_next_stretch_after_it():
@@ -469,7 +472,7 @@ def test_stretch_before_heating_stayed_off_is_balanced_while_disabled():
     learner.run_learning_cycle()
 
     assert learner.get_learning_state().status == LearningStatus.DISABLED
-    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
+    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5, hours=5))
     assert learner.consume_persisted_learning_factors() is not None
 
 
@@ -674,6 +677,45 @@ def test_heat_balance_discards_a_stretch_dominated_by_stored_heat():
     assert info.last_learned_ts is None
 
 
+def test_stored_heat_uses_the_base_capacity_not_the_learned_factor():
+    rising = [20.0 + 0.2 * index / (NIGHT_COUNT - 1) for index in range(NIGHT_COUNT)]
+    targets = []
+    for capacity_factor in (1.0, MIN_LEARNED_CAPACITY_FACTOR):
+        learner, _, _ = make_learner()
+        learner.recalibrate(
+            LearningFactors(ua_factor=1.0, capacity_factor=capacity_factor)
+        )
+        learner.enable()
+        feed_night(learner, room_temps=rising)
+        learner.run_learning_cycle()
+        info = learner.get_ua_balance_info()
+        assert info.outcome == UaBalanceOutcome.LEARNED
+        targets.append(info.last_target_factor)
+
+    assert targets[1] == pytest.approx(targets[0])
+
+
+def test_heat_balance_averages_the_room_over_each_interval():
+    learner, _, _ = make_learner()
+    learner.enable()
+
+    rising = [20.0 + 0.2 * index / (NIGHT_COUNT - 1) for index in range(NIGHT_COUNT)]
+    feed_night(learner, room_temps=rising)
+    learner.run_learning_cycle()
+
+    assert learner.get_ua_balance_info().last_mean_room_c == pytest.approx(
+        20.1, abs=1e-9
+    )
+
+
+def test_two_short_stretches_move_the_factor_like_one_long_one():
+    half_s = UA_BALANCE_MAX_WINDOW_S / 2
+    assert ua_balance_weight(UA_BALANCE_MAX_WINDOW_S) == pytest.approx(
+        UA_BALANCE_WEIGHT
+    )
+    assert 1 - (1 - ua_balance_weight(half_s)) ** 2 == pytest.approx(UA_BALANCE_WEIGHT)
+
+
 def test_discarded_stretch_is_not_balanced_again():
     learner, loss_model, _ = make_learner()
     learner.enable()
@@ -727,7 +769,7 @@ def test_room_sensor_fallback_balances_the_stretch_before_it():
     info = learner.get_ua_balance_info()
     assert info.outcome == UaBalanceOutcome.LEARNED
     assert info.last_window_s == pytest.approx(5 * 3600)
-    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
+    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5, hours=5))
 
 
 def test_room_sensor_fallback_blocks_the_heat_balance():
@@ -767,7 +809,7 @@ def test_opening_a_window_balances_the_stretch_before_it():
     learner.run_learning_cycle()
 
     assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.LEARNED
-    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
+    assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5, hours=5))
 
 
 def test_open_window_blocks_the_heat_balance():

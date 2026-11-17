@@ -1,14 +1,19 @@
 """Flow feedback: the measured valve demand of the flow lead rooms.
 
 The feedforward (hold flow from the learned room model) says what the rooms
-should need; the valves say what they do need. Valves near fully open with
-the room below its target mean too little flow: one step up. Valves well
-below open, or open only in rooms already above their target, for an hour
-mean the flow can drop: one step down. A room that holds at its target
-counts that hour back, only a room short of its target starts it over.
-The sum of the
-steps, feedback_k, is added to the feedforward. It only moves while what
+should need; the valves say what they do need. One count adds up what they
+say: a room near fully open and clearly below its target counts it down,
+valves well below open, or open only in rooms above their target, count it
+up, a room that holds the flow brings it back towards zero. Half an hour
+down means too little flow: one step up; an hour up means the flow can drop:
+one step down. The sum of the steps, feedback_k, is added to the
+feedforward. It only moves while what
 was decided also reaches the heat source and the heat source heats.
+
+For comparison only, without effect on the flow, the same count also runs
+per room on that room alone: a room at -UP_AFTER_S alone would have stepped
+up, all rooms at DOWN_AFTER_S together would have stepped down. Those would-be
+steps are counted.
 """
 
 from __future__ import annotations
@@ -17,20 +22,22 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-FEEDBACK_LIMIT_K = 5.0
-# Up: valves this far open and the room short of its target, or saturated.
+FEEDBACK_LIMIT_K = 3.0
+# Up: valves this far open and the room short of its target, or saturated
+# and a little short; the count goes down while one is, a step at
+# -UP_AFTER_S. 0.1 K short is still the TRV's own control band.
 DEMAND_UP_PCT = 90.0
 DEMAND_SATURATED_PCT = 98.0
-UP_DEFICIT_C = 0.1
-UP_SPACING_S = 30 * 60
-# Down: no lead room holding the flow for this long, net of the time one
-# held it at its target; a holding room this far short starts over.
+UP_DEFICIT_C = 0.2
+SATURATED_DEFICIT_C = 0.1
+UP_AFTER_S = 30 * 60
+# Down: no lead room holds the flow; the count goes up, a step at
+# DOWN_AFTER_S. A room this far open holds it: the count goes back to zero.
 DEMAND_DOWN_PCT = 80.0
 DOWN_AFTER_S = 3600
-SHORT_DEFICIT_C = UP_DEFICIT_C
 # A room this far above its target holds the flow neither up nor down: its
 # open valve comes from the TRV's own reading, more flow would not help it.
-OVER_TARGET_C = 0.2
+OVER_TARGET_C = 0.1
 # A longer gap between two updates (restart, stalled loop) counts as this.
 MAX_TICK_S = 300.0
 
@@ -65,12 +72,17 @@ class FlowFeedback:
         # that holds the flow, else the highest opening.
         self.lead: DemandSample | None = None
         self._last_ts: float | None = None
-        # Unfrozen time since the last step, and the down count (see
-        # DOWN_AFTER_S).
-        # A start counts as a step: the valves first get the spacing to
-        # answer the flow that runs now.
-        self._since_step_s = 0.0
-        self._below_s = 0.0
+        # The count: below zero towards a step up, above towards a step down.
+        # A start and a step set it to zero, a freeze drops what it has
+        # towards up: the valves first answer the flow that runs now.
+        self._count_s = 0.0
+        # Comparison only: the count per room, its would-be steps up, and
+        # the steps a count per room would have taken. Not stored: like the
+        # count it starts over at a start; the step tallies are stored.
+        self._room_count_s: dict[str, float] = {}
+        self.room_steps_up: dict[str, int] = {}
+        self.variant_up = 0
+        self.variant_down = 0
 
     def update(
         self,
@@ -97,30 +109,61 @@ class FlowFeedback:
         holding = [s for s in samples if holds(s)]
         self.lead = _highest(wanting) or _highest(holding) or _highest(samples)
         if frozen is not None:
+            self._count_s = max(0.0, self._count_s)
+            self._room_count_s = {
+                room: max(0.0, count) for room, count in self._room_count_s.items()
+            }
             return
-        self._since_step_s += dt
         # Without a usable room the valves say nothing: the count waits.
         if not samples:
             return
-        if wanting or any(_short(s) for s in holding):
-            self._below_s = 0.0
-        elif holding:
-            self._below_s = max(0.0, self._below_s - dt)
-        else:
-            self._below_s += dt
+        self._update_rooms(samples, dt)
+        self._count_s = _advance(self._count_s, bool(wanting), bool(holding), dt)
 
-        if wanting:
-            if self._since_step_s >= UP_SPACING_S and not at_upper_limit:
+        if self._count_s <= -UP_AFTER_S:
+            self._count_s = 0.0
+            self._room_count_s.clear()
+            if not at_upper_limit:
                 self._step(step_k, now_ts)
-        elif self._below_s >= DOWN_AFTER_S:
-            self._below_s = 0.0
+        elif self._count_s >= DOWN_AFTER_S:
+            self._count_s = 0.0
+            self._room_count_s.clear()
             if not at_lower_limit:
                 self._step(-step_k, now_ts)
 
+    def _update_rooms(self, samples: list[DemandSample], dt: float) -> None:
+        """The comparison count per room; rooms without a sample wait."""
+        stepped_up = False
+        for sample in samples:
+            count = _advance(
+                self._room_count_s.get(sample.room, 0.0),
+                wants_more(sample),
+                holds(sample),
+                dt,
+            )
+            if count <= -UP_AFTER_S:
+                count = 0.0
+                self.room_steps_up[sample.room] = (
+                    self.room_steps_up.get(sample.room, 0) + 1
+                )
+                stepped_up = True
+            self._room_count_s[sample.room] = min(float(DOWN_AFTER_S), count)
+        if stepped_up:
+            self.variant_up += 1
+        elif all(
+            self._room_count_s[sample.room] >= DOWN_AFTER_S for sample in samples
+        ):
+            self.variant_down += 1
+            self._room_count_s.clear()
+
+    def room_count_s(self, room: str) -> float | None:
+        """A room's comparison count; None before its first sample."""
+        return self._room_count_s.get(room)
+
     @property
-    def down_count_s(self) -> float:
-        """How far the count towards the next step down has come."""
-        return self._below_s
+    def count_s(self) -> float:
+        """The count: below zero towards a step up, above towards one down."""
+        return self._count_s
 
     def _step(self, delta_k: float, now_ts: float) -> None:
         value = max(
@@ -131,18 +174,23 @@ class FlowFeedback:
             return
         self.feedback_k = value
         self.last_change_ts = now_ts
-        self._since_step_s = 0.0
 
     def reset(self, now_ts: float) -> None:
-        """Back to no feedback; the valves first get the spacing to answer."""
+        """Back to no feedback; the count starts over."""
         self.feedback_k = 0.0
         self.last_change_ts = now_ts
         self._last_ts = now_ts
-        self._since_step_s = 0.0
-        self._below_s = 0.0
+        self._count_s = 0.0
+        self._room_count_s.clear()
 
     def export(self) -> dict[str, Any]:
-        return {"feedback_k": self.feedback_k, "last_change_ts": self.last_change_ts}
+        return {
+            "feedback_k": self.feedback_k,
+            "last_change_ts": self.last_change_ts,
+            "room_steps_up": dict(self.room_steps_up),
+            "variant_up": self.variant_up,
+            "variant_down": self.variant_down,
+        }
 
     def restore(self, data: dict[str, Any]) -> None:
         try:
@@ -152,6 +200,31 @@ class FlowFeedback:
         self.feedback_k = max(-FEEDBACK_LIMIT_K, min(FEEDBACK_LIMIT_K, value))
         last = data.get("last_change_ts")
         self.last_change_ts = float(last) if isinstance(last, int | float) else None
+        steps = data.get("room_steps_up")
+        self.room_steps_up = (
+            {
+                str(room): int(count)
+                for room, count in steps.items()
+                if isinstance(count, int)
+            }
+            if isinstance(steps, dict)
+            else {}
+        )
+        self.variant_up = _tally(data.get("variant_up"))
+        self.variant_down = _tally(data.get("variant_down"))
+
+
+def _tally(value: Any) -> int:
+    return value if isinstance(value, int) and value >= 0 else 0
+
+
+def _advance(count: float, wanting: bool, holding: bool, dt: float) -> float:
+    """One tick of the count: down while wanting, to zero while holding."""
+    if wanting:
+        return count - dt
+    if holding:
+        return max(0.0, count - dt) if count > 0.0 else min(0.0, count + dt)
+    return count + dt
 
 
 def _highest(samples: list[DemandSample]) -> DemandSample | None:
@@ -159,16 +232,15 @@ def _highest(samples: list[DemandSample]) -> DemandSample | None:
 
 
 def wants_more(sample: DemandSample) -> bool:
-    """Open and short of the target; saturated unless above it."""
+    """Open and short of the target; saturated and a little short."""
     if sample.deficit_c is None:
         return sample.demand_pct >= DEMAND_SATURATED_PCT
-    if sample.demand_pct >= DEMAND_SATURATED_PCT and sample.deficit_c >= 0.0:
+    if (
+        sample.demand_pct >= DEMAND_SATURATED_PCT
+        and sample.deficit_c >= SATURATED_DEFICIT_C
+    ):
         return True
     return sample.demand_pct > DEMAND_UP_PCT and sample.deficit_c >= UP_DEFICIT_C
-
-
-def _short(sample: DemandSample) -> bool:
-    return sample.deficit_c is not None and sample.deficit_c >= SHORT_DEFICIT_C
 
 
 def holds(sample: DemandSample) -> bool:

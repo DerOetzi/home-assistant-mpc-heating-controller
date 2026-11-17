@@ -50,8 +50,9 @@ purpose-built Lovelace card operates it.
   setpoint went up, 0 otherwise. Hold and recovery flow use the same design spread as the
   valve power the factors are learned from. See [docs/mpc-guide.md](docs/mpc-guide.md).
 - **Supply per room** — `sensor.<room>_supply` judges the flow on the room's valves, the
-  same way the flow feedback does: undersupplied (valves fully open, room below target),
-  supplied, oversupplied (valves well closed or room above target), or not rated with a
+  same way the flow feedback does: short (valves fully open, room below target), at limit
+  (the room needs the current flow), headroom (valves well closed or room above target:
+  the room would get by on less), or not rated with a
   reason (window open, frost protection, no heat, radiator not heating, boost, valve
   opening unknown).
 - **TRV setpoints** — each TRV regulates the room with its own PI. The room hands it the

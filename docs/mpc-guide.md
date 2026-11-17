@@ -39,7 +39,7 @@ stands:
 
 | State | Meaning |
 |---|---|
-| `learned` | The last balance moved the factor 30 % towards its target. |
+| `learned` | The last balance moved the factor towards its target: 30 % for an eight-hour stretch, less for a shorter one. |
 | `learned_at_limit` | The target lay below 0.15: the radiators supplied almost nothing and the room lives off its neighbours. The factor moved towards 0.15 only. |
 | `collecting` | A stretch is running. |
 | `coasting` | The room is more than 0.1 K above its mode setpoint or more than 0.4 K below it; the stretch starts once it is back or has held its temperature for an hour. |
@@ -126,8 +126,10 @@ losses are.
 - **Heat-loss factor (`ua_factor`): heat balance over a usable stretch.** Over the
   stretch the heat the radiators gave off (the output at the reported valve opening, lagged as described in
   [Radiator lag and the room observer](#radiator-lag-and-the-room-observer)) has to equal
-  what the room lost plus what it stored. The factor that balances this is the target, and each balance moves the learned
-  factor 30 % of the way there. A stretch starts once the room is near its mode setpoint — no more than 0.1 K above it
+  what the room lost plus what it stored. The factor that balances this is the target. A balance over eight hours moves
+  the learned factor 30 % of the way there, a shorter one less (1 − 0.7^(hours/8)), so every hour counts the same however
+  a night is split into stretches: a long winter night balanced as eight plus five hours moves the factor as much as one
+  thirteen-hour stretch would. A stretch starts once the room is near its mode setpoint — no more than 0.1 K above it
   or 0.4 K below (a TRV holds the room within a few tenths, plus a sensor step); a room still coasting down on the evening's heat with the valve
   shut would end far below where it started, one recovering from below far above (status
   `coasting` until then) — or once it has held its temperature for an
@@ -145,7 +147,11 @@ losses are.
   between room and outside. The drift is taken from a straight line fitted through the
   whole stretch (samples weighted by the time they stand for), not from its edges, so
   heating pulses, a sensor reporting once an hour or a hot-water dip at the start do not
-  count as stored heat. Samples taken during a hot-water charge (see
+  count as stored heat. The stored heat is the drift times the base capacity from area and
+  construction (see [Heat capacity](#heat-capacity-room-area-and-construction)), not the
+  learned capacity factor: over hours the room's whole mass takes up or gives off heat, while
+  a setpoint jump only shows its air and surfaces. Room and outdoor temperature are averaged
+  over each interval between two samples, like the radiator heat. Samples taken during a hot-water charge (see
   [Hot-water charges](#hot-water-charges)) count as no heating. Each
   stretch is used once. Steady gains during the window (people, appliances,
   neighbouring rooms) end up in the factor — that is what the room needs in operation.
@@ -309,7 +315,7 @@ heat this room's actual radiators can put out at your real system's flow/return
 temperatures — this sets the ceiling on what the model can ever ask the room's own radiators
 for, independent of how well-calibrated the thermal model itself is.
 
-If a room's supply (shown on its card) frequently reads as "undersupplied ⚠" while the
+If a room's supply (shown on its card) frequently reads as "Short ⚠" while the
 flow control sits at its upper limit, its radiators are likely genuinely
 undersized for the room relative to what was entered — worth revisiting the design heat
 load / radiator dimensions for that room, or expecting that room to be the one that sets
@@ -593,14 +599,22 @@ rooms in their surplus buffer).
 ### Supply per room
 
 `sensor.<room>_supply` judges the flow on the room's valves with the same rules as the
-flow feedback: **undersupplied** when the feedback would step up for this room (highest
-valve ≥ 98 % and the room not above target, or > 90 % and at least 0.1 K short),
-**supplied** when it holds the flow (≥ 80 % and not more than 0.2 K above target),
-**oversupplied** otherwise. It is **not rated** while the valves say nothing about the
+flow feedback: **short** (`undersupplied`) when the feedback would step up for this room
+(highest valve ≥ 98 % and the room at least 0.1 K short, or > 90 % and at least 0.2 K
+short), **at limit** (`supplied`) when it holds the flow (≥ 80 % and less than 0.1 K
+above target), **headroom** (`oversupplied`) otherwise: this room would get by on less
+flow. The flow follows the neediest lead room, so headroom is the usual state of most
+rooms, not a fault. It is **not rated** while the valves say nothing about the
 flow; the `reason` attribute names why: window open, frost protection, no heat (heat
 source off, flow below the threshold, hot-water charge), radiator not heating, boost, or
 a valve opening that is unknown. Attributes `demand_pct` and `deficit_c` show what was
 judged. Unlike the feedback it covers every room, lead room or not.
+
+`sensor.<room>_supply_count` (flow lead rooms only, minutes) runs the feedback's count on
+this room alone, for comparison; it has no effect on the flow. Same rules, capped at +60;
+at −30 the room alone would have stepped up (attribute `would_step_up` counts those, kept
+across restarts) and its count starts over. A real step or a reset starts every room count
+over, a freeze drops what they have towards up, a room without a usable sample waits.
 
 ### Heating season
 
@@ -629,23 +643,27 @@ works out:
   The lead demand is the highest valve opening among the flow lead rooms, leaving out
   rooms with an open window, in frost protection, with a radiator that does not heat,
   in a flow boost or with an unknown opening.
-  - **Up** one actuator step: a room above 90 % open and at least 0.1 K below its target
-    (mode setpoint against the room sensor), or a room at 98 % or more that is not above
-    its target (or whose room value is unknown). At most every 30 minutes, the first
-    30 minutes after a start too.
-  - **Down** one step: a count reaches 1 hour; then the count starts over. It runs while
-    no room holds the flow (80 % or more open); a room holding at its target (less than
-    0.1 K short) counts it back, never below 0; a room holding at least 0.1 K short, or
-    one that wants more, sets it to 0. A room 0.2 K or more above its target does not
-    hold: its valve is open on the TRV's own, colder reading, more flow would not help
-    it. Without any usable room the count waits. It starts at 0 after a restart.
-  - Limited to ±5 K. No step that the target limits would cut off anyway.
-  - **Frozen** (no step, the timers stand still) while *Write flow* is off, the heat source
-    does not heat or is unreachable, a hot-water charge runs, the measured flow is below
-    the threshold (defrost), the lead flow is missing (fallback), a flow boost runs, or the
-    last wanted value has not gone out (budget, hold time). The value survives restarts.
-  - Button *Reset flow feedback* (flow device, config) sets it to 0; the next step up
-    comes 30 minutes later at the earliest, as after a start.
+  - **Count**, one per minute of what the valves say:
+    - a room **wants more**: down. It wants more when it is above 90 % open and at least
+      0.2 K below its target (mode setpoint against the room sensor), or at 98 % or more
+      and at least 0.1 K below it (or its room value is unknown); 0.1 K short is still
+      the TRV's own control band.
+    - else a room **holds** the flow (80 % or more open, less than 0.1 K above its
+      target): back towards 0. A room 0.1 K or more above its target does not hold: its
+      valve is open on the TRV's own, colder reading, more flow would not help it.
+    - else: up.
+    - At −30 minutes one actuator step **up**, at +60 minutes one step **down**; then the
+      count starts at 0. A short want after a long surplus only takes minutes off, a
+      long surplus first has to be worked off before a step up. Without any usable room
+      the count waits. It starts at 0 after a restart.
+  - Limited to ±3 K. No step that the target limits would cut off anyway.
+  - **Frozen** (no step, no counting, what the count has towards up is dropped: after a
+    hot-water charge or defrost the valves first catch up on the pause) while *Write
+    flow* is off, the heat source does not heat or is unreachable, a hot-water charge
+    runs, the measured flow is below the threshold (defrost), the lead flow is missing
+    (fallback), a flow boost runs, or the last wanted value has not gone out (budget,
+    hold time). The value survives restarts.
+  - Button *Reset flow feedback* (flow device, config) sets it and the count to 0.
 - **Target flow** = feedforward + feedback, at most feedforward + 6 K, the curve plus the
   highest offset (setpoint mode: the highest setpoint) and the radiators' design flow.
   A **flow boost** (a lead room recovering after its mode setpoint went up) raises it to
@@ -655,7 +673,9 @@ works out:
   `fallback`; further attributes `feedforward_flow_c`, `room`, `feedback_k`,
   `boost_flow_c`, `boost_room`.
 - *Flow feedback* attributes: `lead_demand_pct`, `lead_room`, `lead_deficit_c`,
-  `feedforward_flow_c`, `frozen`, `frozen_reason`, `down_timer_min` (the down count),
+  `feedforward_flow_c`, `frozen`, `frozen_reason`, `flow_timer_min` (the count, minutes; up at −30, down at +60),
+  `room_variant_up` / `room_variant_down` (steps a count per room would have taken: up when
+  one room's count reaches −30, down when every rated lead room's count is at +60; kept across restarts),
   `last_change`. The lead is the room
   that decides: one that wants more, else the most open one that holds the flow, else
   the most open one.

@@ -95,6 +95,10 @@ VENT_START_SHARE = 0.3
 # balanced right away so a stretch that never ends still learns.
 UA_BALANCE_MIN_WINDOW_S = 4 * 3600
 UA_BALANCE_MAX_WINDOW_S = 8 * 3600
+# Share of the way to the target a stretch of the maximum length moves the
+# factor. Shorter stretches move it less, so every hour weighs the same however
+# a night is split into stretches.
+UA_BALANCE_WEIGHT = 0.3
 # Heating briefly unavailable (a missed heat-source poll, the flow dipping
 # under the threshold) does not end the stretch: up to three controller cycles
 # are bridged as no heating, which is what the radiators got. The extra minute
@@ -133,7 +137,6 @@ UA_BALANCE_MAX_STORAGE_SHARE = 0.5
 UA_BALANCE_MIN_TARGET_FACTOR = 0.15
 # Above this the stretch is a measurement artefact and is discarded.
 UA_BALANCE_MAX_TARGET_FACTOR = 2.0
-UA_BALANCE_WEIGHT = 0.3
 # The heat assumed for a fully open valve is the least certain one: a radiator
 # that is flow-limited gives off less (study, 28/29 October: target 0.54 with
 # the valve open all night, 0.40-0.41 on nights it held its setpoint). A
@@ -150,6 +153,11 @@ GAIN_HOUR_MIN_SAMPLES = 6
 GAIN_HOUR_EDGE_S = 10 * 60
 
 
+def ua_balance_weight(window_s: float) -> float:
+    """Share of the way to the target a balanced stretch of window_s moves."""
+    return 1 - (1 - UA_BALANCE_WEIGHT) ** (window_s / UA_BALANCE_MAX_WINDOW_S)
+
+
 def _default_profile_index(timestamp: float) -> int:
     # UTC and Monday to Friday; the coordinator supplies local time and the
     # workday entity.
@@ -160,6 +168,16 @@ def _default_profile_index(timestamp: float) -> int:
 def _default_local_day(timestamp: float) -> int:
     # UTC; the coordinator supplies HA's time zone.
     return datetime.fromtimestamp(timestamp, UTC).toordinal()
+
+
+def _mean_room_c(previous: LearnerHistoryEntry, current: LearnerHistoryEntry) -> float:
+    return (previous.room_temperature_c + current.room_temperature_c) / 2
+
+
+def _mean_outdoor_c(
+    previous: LearnerHistoryEntry, current: LearnerHistoryEntry
+) -> float:
+    return (previous.outdoor_temperature_c + current.outdoor_temperature_c) / 2
 
 
 def _mode_target_c(mpc_input: RoomMpcInput) -> float:
@@ -454,8 +472,8 @@ class RoomMpcModelLearner:
             if duration_s > UA_BALANCE_MAX_GAP_S:
                 return HourOutcome.GAP
             heat_j += self._balance_heating_power_w(previous, current) * duration_s
-            room_ks += previous.room_temperature_c * duration_s
-            outdoor_ks += previous.outdoor_temperature_c * duration_s
+            room_ks += _mean_room_c(previous, current) * duration_s
+            outdoor_ks += _mean_outdoor_c(previous, current) * duration_s
         duration_s = window[-1].timestamp - window[0].timestamp
         mid_ts = (start_ts + end_ts) / 2
 
@@ -1135,8 +1153,8 @@ class RoomMpcModelLearner:
             if previous.valve_saturated:
                 saturated_s += duration_s
             heat_j += self._balance_heating_power_w(previous, current) * duration_s
-            outdoor_ks += previous.outdoor_temperature_c * duration_s
-            room_ks += previous.room_temperature_c * duration_s
+            outdoor_ks += _mean_outdoor_c(previous, current) * duration_s
+            room_ks += _mean_room_c(previous, current) * duration_s
             if previous.flow_temperature_c is not None:
                 flow_ks += previous.flow_temperature_c * duration_s
                 flow_s += duration_s
@@ -1174,7 +1192,10 @@ class RoomMpcModelLearner:
             info.last_drift_c = drift_c
             return UaBalanceOutcome.DRIFT
 
-        stored_heat_j = self._capacity_model.effective_capacity_j_per_k * drift_c
+        # Over hours the room's whole mass takes up or gives off heat, not
+        # only the air and surfaces a setpoint jump shows: the base capacity
+        # from area and construction, without the learned factor.
+        stored_heat_j = self._capacity_model.base_capacity_j_per_k * drift_c
         target_ua_w_per_k = (heat_j - stored_heat_j) / temperature_difference_ks
         target_factor = target_ua_w_per_k / self._loss_model.base_ua_w_per_k
 
@@ -1205,9 +1226,9 @@ class RoomMpcModelLearner:
 
         learned_target_factor = max(target_factor, UA_BALANCE_MIN_TARGET_FACTOR)
         current_factor = self._loss_model.learned_ua_factor
-        self._loss_model.learned_ua_factor = current_factor + UA_BALANCE_WEIGHT * (
-            learned_target_factor - current_factor
-        )
+        self._loss_model.learned_ua_factor = current_factor + ua_balance_weight(
+            window_duration_s
+        ) * (learned_target_factor - current_factor)
         self._ua_balance_from_ts = max(self._ua_balance_from_ts, end_ts)
         info.last_learned_ts = end_ts
         info.last_target_factor = target_factor

@@ -446,12 +446,18 @@
       }
     },
     "sensor": {
+      "supply_count": {
+        "name": "Supply count",
+        "state_attributes": {
+          "would_step_up": { "name": "Would have stepped up" }
+        }
+      },
       "supply": {
         "name": "Supply",
         "state": {
-          "undersupplied": "Undersupplied",
-          "supplied": "Supplied",
-          "oversupplied": "Oversupplied",
+          "undersupplied": "Short",
+          "supplied": "At limit",
+          "oversupplied": "Headroom",
           "not_rated": "Not rated"
         },
         "state_attributes": {

@@ -28,9 +28,9 @@ export const TRANSLATIONS = {
     row_additional_heat_learning: "{value} (learning: {ungated})",
 
     // Card — supply, judged on the valves
-    supply_undersupplied: "Undersupplied",
-    supply_supplied: "Supplied",
-    supply_oversupplied: "Oversupplied",
+    supply_undersupplied: "Short",
+    supply_supplied: "At limit",
+    supply_oversupplied: "Headroom",
     supply_not_rated: "Not rated",
     supply_reason_window_open: "window open",
     supply_reason_frost_protection: "frost protection",
@@ -40,9 +40,9 @@ export const TRANSLATIONS = {
     supply_reason_demand_unknown: "valve opening unknown",
     supply_hint_undersupplied:
       "Valves fully open and the room below target – the flow is too low",
-    supply_hint_supplied: "Valves open enough – the flow fits this room",
+    supply_hint_supplied: "Valves open enough – this room needs the current flow",
     supply_hint_oversupplied:
-      "Valves well closed or the room above target – the flow could be lower",
+      "Valves well closed or the room above target – this room would get by on less flow",
     supply_hint_not_rated: "The valves say nothing about the flow right now",
 
     // Card — modes
@@ -134,9 +134,9 @@ export const TRANSLATIONS = {
     row_additional_heat: "Zusatzwärme",
     row_additional_heat_learning: "{value} (lernt: {ungated})",
 
-    supply_undersupplied: "Unterversorgt",
-    supply_supplied: "Versorgt",
-    supply_oversupplied: "Überversorgt",
+    supply_undersupplied: "Zu knapp",
+    supply_supplied: "Am Limit",
+    supply_oversupplied: "Reserve",
     supply_not_rated: "Nicht bewertet",
     supply_reason_window_open: "Fenster offen",
     supply_reason_frost_protection: "Frostschutz",
@@ -146,9 +146,9 @@ export const TRANSLATIONS = {
     supply_reason_demand_unknown: "Ventilöffnung unbekannt",
     supply_hint_undersupplied:
       "Ventile voll offen und Raum unter Soll – Vorlauf zu niedrig",
-    supply_hint_supplied: "Ventile offen genug – Vorlauf passt für diesen Raum",
+    supply_hint_supplied: "Ventile offen genug – Raum braucht den jetzigen Vorlauf",
     supply_hint_oversupplied:
-      "Ventile weit zu oder Raum über Soll – Vorlauf könnte tiefer",
+      "Ventile weit zu oder Raum über Soll – Raum käme mit weniger Vorlauf aus",
     supply_hint_not_rated: "Ventile sagen gerade nichts über den Vorlauf",
 
     mode_boost: "Boost",

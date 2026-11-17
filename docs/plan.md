@@ -111,7 +111,8 @@ Mit Termin:
 Laufend:
 - Ventiltakten je TRV seit Neustart A; bei Takten Faktor-Empfehlung an Nutzer.
 - Ab Neustart B: Raumfehler je Raum (Raumsensor gegen Modus-Soll) mit externem Raumwert; bleibender Fehler > 0,3 K → melden. Schreibzahl `trv_external_writes` (Akku), Lastmittel `load_room_mean` in 2-TRV-Räumen: TRV-Öffnungen sollen sich angleichen.
-- Vorlauf: `feedback_k` am Anschlag ±5 K oder Pendeln (Hoch/Runter im Wechsel < 4 h) → melden.
+- Vorlauf: `feedback_k` am Anschlag ±3 K oder Pendeln (Hoch/Runter im Wechsel < 4 h) → melden.
+- Vergleich Ein-Zähler gegen Zähler je Raum (Messung ab 17.11.): nach einigen Tagen echte Schritte (`last_change`) gegen `room_variant_up`/`_down` und `would_step_up` je Raum legen. Fragen: Schritte hoch aus wechselnden Räumen statt einem? Hätte Raum-Variante weniger/später geschaltet, weniger gependelt? Ergebnis an Nutzer: Ein-Zähler lassen, Mindestdauer je Raum, oder Zähler je Raum. Danach Schattenzähler wieder ausbauen.
 - Lüften-Kapazität: Werte je Raum sammeln, nach einigen Wochen Nutzer fragen, ob sie Boost bekommt.
 - Ladungs-Dips zählen (6a).
 - UA-Einschwingen nach Neustart A; Werte vor/nach nicht mischen.

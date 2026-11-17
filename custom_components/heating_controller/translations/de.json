@@ -446,12 +446,18 @@
       }
     },
     "sensor": {
+      "supply_count": {
+        "name": "Versorgung Zähler",
+        "state_attributes": {
+          "would_step_up": { "name": "Hätte hochgeschaltet" }
+        }
+      },
       "supply": {
         "name": "Versorgung",
         "state": {
-          "undersupplied": "unterversorgt",
-          "supplied": "versorgt",
-          "oversupplied": "überversorgt",
+          "undersupplied": "zu knapp",
+          "supplied": "am Limit",
+          "oversupplied": "Reserve",
           "not_rated": "nicht bewertet"
         },
         "state_attributes": {
