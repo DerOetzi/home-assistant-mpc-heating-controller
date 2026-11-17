@@ -768,7 +768,7 @@ class RoomMpcModelLearner:
             mean_room_c = (previous.room_temperature_c + current.room_temperature_c) / 2
             net_j += (
                 self._balance_heating_power_w(previous, current)
-                - ua_w_per_k * (mean_room_c - previous.outdoor_temperature_c)
+                - ua_w_per_k * (mean_room_c - _mean_outdoor_c(previous, current))
             ) * duration_s
             if previous.valve_saturated:
                 saturated_s += duration_s

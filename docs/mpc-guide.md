@@ -194,7 +194,9 @@ losses are.
   the irradiance on each of the room's window surfaces stayed at or below 50 W/m² during the
   stretch and the two hours before it, so it can be learned at midday on an overcast day.
   Without irradiance data the sun condition decides at start and end; a room without window
-  surfaces skips the check.
+  surfaces skips the check, since sun on its walls reaches the room only hours later and
+  damped. Configure the window surfaces of every room with windows, or its jump stretches
+  are not checked for sun at all.
 - **Pause.** Both factors pause, and a window that started before the pause ended is
   discarded since part of its samples were taken while paused:
   - while the room's optional **block learning entity** is on — a reason only this room
