@@ -485,7 +485,9 @@ class RoomMpcModelLearner:
             sun_values = [0.0] * len(gains.sun_terms)
 
         slope_c_per_s = self._trend_drift_c(window) / duration_s
-        stored_w = self._capacity_model.effective_capacity_j_per_k * slope_c_per_s
+        # Base capacity, as in the night balance: over an hour the whole mass
+        # stores heat, not only what a setpoint jump reaches.
+        stored_w = self._capacity_model.base_capacity_j_per_k * slope_c_per_s
         loss_w = self._loss_model.effective_ua_w_per_k * (
             (room_ks - outdoor_ks) / duration_s
         )

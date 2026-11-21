@@ -147,6 +147,36 @@ def test_bedroom_empty_by_day_learns_a_negative_day_profile():
     assert profile[0] == pytest.approx(0, abs=30)
 
 
+def test_learned_capacity_factor_does_not_move_the_profile():
+    """Stored heat uses the base capacity: a jump factor leaves the hours alone."""
+
+    def run(capacity_factor):
+        learner, loss_model, gains = _setup(window_surfaces=())
+        learner._capacity_model.learned_capacity_factor = capacity_factor
+        learner.set_gain_context(
+            lambda ts: profile_index(int((ts % DAY_S) // 3600), True),
+            lambda ts: int(ts // DAY_S),
+            lambda: None,
+        )
+        base_c = learner._capacity_model.base_capacity_j_per_k
+        ua = loss_model.effective_ua_w_per_k
+        for index in range(int(7 * DAY_S / STEP_S)):
+            ts = START_TS + index * STEP_S
+            phase = 2 * math.pi * ((ts % DAY_S) / DAY_S)
+            room_c = ROOM_C + 0.5 * math.sin(phase)
+            slope = 0.5 * math.cos(phase) * 2 * math.pi / DAY_S
+            power_w = ua * (room_c - OUTDOOR_C) + base_c * slope
+            learner.append_history(
+                make_input(ts, room_temp_c=room_c, outdoor_temp_c=OUTDOOR_C),
+                applied_heating_power_w=power_w,
+                radiator_power_w=power_w,
+            )
+        return gains.profile_w()
+
+    for value in run(0.3):
+        assert value == pytest.approx(0, abs=10)
+
+
 def test_window_open_hour_is_not_learned():
     learner, loss_model, gains = _setup(window_surfaces=())
     learner.set_window_open(True, START_TS)

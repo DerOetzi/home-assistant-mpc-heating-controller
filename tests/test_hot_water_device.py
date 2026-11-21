@@ -125,7 +125,7 @@ async def test_boost_raises_target(
     # Tank 43 < 60 - 5: the write announces a charge, rooms see it.
     assert hass.states.get("binary_sensor.warmwasser_hot_water_charging").state == "on"
     hub = hass.config_entries.async_entries(DOMAIN)[0].runtime_data
-    assert all(room.hot_water_charge_provider() for room in hub.rooms.values())
+    assert all(room.hot_water_charge_provider()[0] for room in hub.rooms.values())
 
 
 async def test_circulation_starts_pump_when_loop_cold(

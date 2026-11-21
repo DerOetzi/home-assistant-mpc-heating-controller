@@ -62,6 +62,12 @@ class HotWaterConfig:
     window_start: time = time(13, 0)
     window_end: time = time(16, 0)
     window_c: float = 53.0
+    # In the heating season the heat pump also heats the rooms: one main
+    # charge in the window, otherwise only a safety reheat at the night
+    # target, which then lasts until night_end_heating.
+    heating_window_c: float = 50.0
+    heating_night_c: float = 44.0
+    heating_night_end: time = time(13, 0)
     forced_charge: bool = True
     reheat_hysteresis_k: float = 5.0
     max_setpoint_c: float = 60.0
@@ -90,6 +96,7 @@ class HotWaterInputs:
     current_target_c: float | None
     boost_on: bool
     legionella_active: bool
+    heating_season: bool = False
 
 
 @dataclass(frozen=True)
@@ -219,6 +226,10 @@ class HotWaterController:
                 self.mode, self.mode_changed_ts = new_mode, now_ts
 
         clock = inputs.now.time()
+        season = inputs.heating_season
+        window_c = cfg.heating_window_c if season else cfg.window_c
+        night_c = cfg.heating_night_c if season else cfg.night_c
+        night_end = cfg.heating_night_end if season else cfg.night_end
         if inputs.legionella_active:
             phase, base = HotWaterPhase.LEGIONELLA, cfg.legionella_c
         elif inputs.boost_on:
@@ -226,9 +237,9 @@ class HotWaterController:
         elif self.mode is HotWaterMode.SURPLUS:
             phase, base = HotWaterPhase.SURPLUS, cfg.surplus_c
         elif cfg.window_enabled and in_window(clock, cfg.window_start, cfg.window_end):
-            phase, base = HotWaterPhase.CHARGE_WINDOW, cfg.window_c
-        elif cfg.night_enabled and in_window(clock, cfg.night_start, cfg.night_end):
-            phase, base = HotWaterPhase.NIGHT, cfg.night_c
+            phase, base = HotWaterPhase.CHARGE_WINDOW, window_c
+        elif cfg.night_enabled and in_window(clock, cfg.night_start, night_end):
+            phase, base = HotWaterPhase.NIGHT, night_c
         else:
             phase, base = HotWaterPhase.NORMAL, cfg.normal_c
 
@@ -312,3 +323,66 @@ class ChargeDetector:
         if charging and not self.charging:
             self.started_ts = now_ts
         self.charging = charging
+
+
+# A charge drives the measured flow far above what the heat source aims at
+# for the radiators (curve plus offset): 47-64 °C against about 36 °C. Once
+# it falls back close to that aim the charge is over.
+FLOW_CHARGE_START_K = 6.0
+FLOW_CHARGE_END_K = 3.0
+# The tank reading comes late from the cloud: its rise may only show after the
+# flow has already ended the charge. A tank start this soon after is the same one.
+FLOW_CHARGE_TANK_QUIET_S = 30 * 60
+
+
+class FlowChargeDetector:
+    """One hot-water charge signal for the whole house, from the flow.
+
+    A charge starts when the flow rises FLOW_CHARGE_START_K above the heat
+    source's aim, or when the tank detector starts one. It ends once the
+    flow, after having been that high, is back below FLOW_CHARGE_END_K above
+    the aim. A charge only the tank saw, without the flow rising, ends with
+    the tank detector. A tank start within FLOW_CHARGE_TANK_QUIET_S after the
+    flow ended a charge belongs to that charge and starts none. Without flow
+    or aim the detector cannot decide.
+    """
+
+    def __init__(self) -> None:
+        self.charging = False
+        self.decisive = False
+        self._flow_high = False
+        self._tank_was_charging = False
+        self._flow_end_ts: float | None = None
+
+    def update(
+        self,
+        flow_c: float | None,
+        aim_c: float | None,
+        tank_charging: bool,
+        now_ts: float,
+    ) -> None:
+        tank_started = tank_charging and not self._tank_was_charging
+        self._tank_was_charging = tank_charging
+        if (
+            self._flow_end_ts is not None
+            and now_ts - self._flow_end_ts < FLOW_CHARGE_TANK_QUIET_S
+        ):
+            tank_started = False
+        if flow_c is None or aim_c is None:
+            self.decisive = False
+            return
+        self.decisive = True
+        high = flow_c > aim_c + FLOW_CHARGE_START_K
+        if not self.charging:
+            if high or tank_started:
+                self.charging = True
+                self._flow_high = high
+            return
+        if high:
+            self._flow_high = True
+        elif self._flow_high:
+            if flow_c < aim_c + FLOW_CHARGE_END_K:
+                self.charging = False
+                self._flow_end_ts = now_ts
+        elif not tank_charging:
+            self.charging = False

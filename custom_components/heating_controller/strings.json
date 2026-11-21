@@ -196,6 +196,7 @@
             "night_enabled": "Night setback",
             "night_start": "Night from",
             "night_end": "Night until",
+            "heating_night_end": "Night until, heating season",
             "window_enabled": "Charge window",
             "window_start": "Charge window from",
             "window_end": "Charge window until",
@@ -441,6 +442,12 @@
       "hot_water_window": {
         "name": "Hot water charge window"
       },
+      "hot_water_heating_night": {
+        "name": "Hot water night, heating season"
+      },
+      "hot_water_heating_window": {
+        "name": "Hot water charge window, heating season"
+      },
       "hot_water_legionella": {
         "name": "Hot water legionella"
       }
@@ -469,7 +476,8 @@
               "no_heat": "No heat",
               "radiator_not_heating": "Radiator not heating",
               "boost": "Boost",
-              "demand_unknown": "Valve opening unknown"
+              "demand_unknown": "Valve opening unknown",
+              "catch_up": "Catching up after a pause"
             }
           }
         }

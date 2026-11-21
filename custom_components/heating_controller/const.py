@@ -203,6 +203,7 @@ class SupplyReason(StrEnum):
     RADIATOR_NOT_HEATING = "radiator_not_heating"
     BOOST = "boost"
     DEMAND_UNKNOWN = "demand_unknown"
+    CATCH_UP = "catch_up"
 
 
 class HeatEmitterType(StrEnum):

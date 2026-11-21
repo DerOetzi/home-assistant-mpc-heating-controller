@@ -74,6 +74,8 @@ HOT_WATER_NUMBER_DEFAULTS: dict[str, float] = {
     "boost": 60.0,
     "night": 38.0,
     "window": 53.0,
+    "heating_night": 44.0,
+    "heating_window": 50.0,
     "legionella": 60.0,
 }
 
@@ -98,6 +100,7 @@ HOT_WATER_DEFAULTS: dict[str, Any] = {
     "window_enabled": True,
     "window_start": "13:00:00",
     "window_end": "16:00:00",
+    "heating_night_end": "13:00:00",
     "forced_charge": True,
     "reheat_hysteresis_k": 5.0,
     "max_setpoint_c": 60.0,
@@ -190,6 +193,9 @@ class HotWaterDevice:
             legionella_c=n["legionella"],
             night_c=n["night"],
             window_c=n["window"],
+            heating_window_c=n["heating_window"],
+            heating_night_c=n["heating_night"],
+            heating_night_end=_time(d["heating_night_end"]),
             boost_max_s=float(d["boost_max_h"]) * 3600,
             night_enabled=bool(d["night_enabled"]),
             night_start=_time(d["night_start"]),
@@ -436,6 +442,7 @@ class HotWaterDevice:
                 current_target_c=self.current_target_c,
                 boost_on=self.boost_on,
                 legionella_active=self.legionella.active,
+                heating_season=self.hub.heating_on is True,
             )
         )
         self.decision = decision
@@ -445,6 +452,8 @@ class HotWaterDevice:
         ):
             await self._async_write(decision.write, decision.priority, tank, now_ts)
         self.detector.update(tank, now_ts)
+        # A charge the tank starts reaches rooms and feedback at once.
+        self.hub.update_charge()
         self._store.async_delay_save(self._export, 300)
         self._notify()
 

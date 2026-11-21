@@ -262,7 +262,7 @@ the control uses still comes from the single-night step).
 
 **Hourly: day profile and sun.** Every full clock hour gives the heat the model with the
 heat-loss factor and the determined `G` does not explain: what the room stored (from a
-straight line through the hour), minus the radiator heat, plus the loss, minus `G`. A second
+straight line through the hour, with the base capacity as in the night balance), minus the radiator heat, plus the loss, minus `G`. A second
 regression splits it into
 
 - a **day profile**: 8 blocks of 3 hours (00–03, 03–06, …), workdays and other days apart —
@@ -500,8 +500,13 @@ hours stays fresh. An entity that turns `unavailable` or `unknown` counts as mis
 The room sensor is stricter, because its reading goes to the TRVs: its age counts from its
 last report (`last_reported`), and after 150 minutes without one it is stale. A battery
 sensor that hangs stays available with its last value; the room then falls back to the TRVs'
-own temperatures (`room_sensor_fallback`) and sends them no room temperature any more. A
+own temperatures (`room_sensor_fallback`) and sends them no room temperature any more.
+The flow feedback and the supply then take the room's deficit as unknown: the TRVs sit at
+the radiator and read warm while it heats. A
 sensor with a constant reading reports about once an hour, so one lost report is covered.
+A sensor that reports only on a change (some Zigbee sensors with 0.1 K steps) can stay
+silent longer in a steady room; a template sensor that blends it with a second, regularly
+reporting sensor keeps the room value fresh.
 With max sensor age 0 no reading ever goes stale.
 Implausible single-sample jumps are also filtered rather than acted on immediately, so one
 noisy reading doesn't swing a room's demand; a jump that repeats over a few polls is
@@ -539,8 +544,14 @@ comes back after being unavailable gets its value again at once.
 ### Hot-water charges
 
 A heat pump charging its hot-water tank sends hot water to the tank, not the radiators,
-while a shared leaving-water sensor reads its flow spiking. A flow more than 5 K above the
-lowest one of the last hour counts as such a charge. Meanwhile the radiators' output is
+while a shared leaving-water sensor reads its flow spiking. With the hub's measured flow and
+the heat source's aim (curve plus offset, or the setpoint) the hub decides for all rooms and
+the flow feedback alike: a charge starts when the flow is more than 6 K above the aim or
+the hot-water device's tank detector starts one, and ends once the flow, after having been
+that high, is back below aim + 3 K (a charge only the tank saw ends with the tank
+detector). The tank reading comes late from the cloud: a tank start within 30 min after
+the flow ended a charge belongs to that charge and starts none. Without flow or aim each room falls back to its own flow: more than 5 K above
+the lowest one of the last hour, or the hot-water device's charge. Meanwhile the radiators' output is
 computed with the heating flow from before the charge, not the hot reading; the observer lets the radiators cool down, the heat balance counts
 no heating and the radiator check starts its hour over. A flow raised for more than an hour
 is the new heating flow. While heating is unavailable the reference starts over; a heat
@@ -602,13 +613,14 @@ rooms in their surplus buffer).
 
 `sensor.<room>_supply` judges the flow on the room's valves with the same rules as the
 flow feedback: **short** (`undersupplied`) when the feedback would step up for this room
-(highest valve ≥ 98 % and the room at least 0.1 K short, or > 90 % and at least 0.2 K
-short), **at limit** (`supplied`) when it holds the flow (≥ 80 % and less than 0.1 K
-above target), **headroom** (`oversupplied`) otherwise: this room would get by on less
+(highest valve ≥ 98 % and the room at least 0.2 K short, or > 90 % and at least 0.3 K
+short), **at limit** (`supplied`) when it holds the flow (≥ 80 % and at most 0.1 K
+above target; deficits rounded to 0.1 K as for the feedback), **headroom** (`oversupplied`) otherwise: this room would get by on less
 flow. The flow follows the neediest lead room, so headroom is the usual state of most
 rooms, not a fault. It is **not rated** while the valves say nothing about the
 flow; the `reason` attribute names why: window open, frost protection, no heat (heat
-source off, flow below the threshold, hot-water charge), radiator not heating, boost, or
+source off, flow below the threshold, hot-water charge), catching up after such a pause
+(see *catch-up* under flow control), radiator not heating, boost, or
 a valve opening that is unknown. Attributes `demand_pct` and `deficit_c` show what was
 judged. Unlike the feedback it covers every room, lead room or not.
 
@@ -646,16 +658,22 @@ works out:
   rooms with an open window, in frost protection, with a radiator that does not heat,
   in a flow boost or with an unknown opening.
   - **Count**, one per minute of what the valves say:
-    - a room **wants more**: down. It wants more when it is above 90 % open and at least
-      0.2 K below its target (mode setpoint against the room sensor), or at 98 % or more
-      and at least 0.1 K below it (or its room value is unknown); 0.1 K short is still
-      the TRV's own control band.
-    - else a room **holds** the flow (80 % or more open, less than 0.1 K above its
-      target): back towards 0. A room 0.1 K or more above its target does not hold: its
+    - a room **wants more**: down. It wants more when it is above 90 % open and more
+      than 0.2 K below its target (mode setpoint against the room sensor), or at 98 % or
+      more and more than 0.1 K below it (or its room value is unknown); 0.1 K short is
+      still the TRV's own control band. The deficit is compared rounded half up to
+      0.1 K, the room sensors' resolution: 0.14 K short counts as 0.1, 0.15 K as 0.2. The room value is the room sensor only; while it is
+      stale the TRVs' reading does not stand in, the deficit is unknown.
+    - else a room **holds** the flow (80 % or more open, rounded at most 0.1 K above its
+      target): back towards 0. A room rounded 0.2 K or more above its target does not hold: its
       valve is open on the TRV's own, colder reading, more flow would not help it.
-    - else: up.
+    - else a room below 80 % open and not above its target (as for holding): up.
+    - else (only rooms above their target: cooking, sun): the count stays.
+    - A room that wants more counts the faster the further it is short: its rounded
+      deficit over 0.2 K, at least 1× and at most 3× (0.4 K short: twice as fast).
     - At −30 minutes one actuator step **up**, at +60 minutes one step **down**; then the
-      count starts at 0. A short want after a long surplus only takes minutes off, a
+      count starts at 0. For 90 minutes after a step the count stays at 0 on that step's
+      side (radiators and rooms answer over hours); the other direction stays open. A short want after a long surplus only takes minutes off, a
       long surplus first has to be worked off before a step up. Without any usable room
       the count waits. It starts at 0 after a restart.
   - Limited to ±3 K. No step that the target limits would cut off anyway.
@@ -665,6 +683,12 @@ works out:
     runs, the measured flow is below the threshold (defrost), the lead flow is missing
     (fallback), a flow boost runs, or the last wanted value has not gone out (budget,
     hold time). The value survives restarts.
+  - **Catch-up**: when a pause of the room heating ends (hot-water charge or defrost,
+    one after the other counting as one pause), the rooms catch up on what cooled off.
+    For as long as the pause lasted, at most 60 minutes, a room that wants more does not
+    count down; a room that holds still brings the count back to 0, low demand still
+    counts up. The supply of every room is *not rated* (`catch_up`) meanwhile. Not
+    stored: a restart ends it. *Reset flow feedback* ends it too.
   - Button *Reset flow feedback* (flow device, config) sets it and the count to 0.
 - **Target flow** = feedforward + feedback, at most feedforward + 6 K, the curve plus the
   highest offset (setpoint mode: the highest setpoint) and the radiators' design flow.
@@ -676,6 +700,7 @@ works out:
   `boost_flow_c`, `boost_room`.
 - *Flow feedback* attributes: `lead_demand_pct`, `lead_room`, `lead_deficit_c`,
   `feedforward_flow_c`, `frozen`, `frozen_reason`, `flow_timer_min` (the count, minutes; up at −30, down at +60),
+  `catch_up_until` / `catch_up_reason` (end and cause of a running catch-up, else empty),
   `room_variant_up` / `room_variant_down` (steps a count per room would have taken: up when
   one room's count reaches −30, down when every rated lead room's count is at +60; kept across restarts),
   `last_change`. The lead is the room
@@ -725,8 +750,8 @@ With a hot water sub-entry the integration owns the water heater's target.
 | Legionella | cycle waiting or running | legionella number |
 | Boost | boost switch on (off after the boost limit and on restart) | boost number |
 | Surplus | surplus mode | surplus number |
-| Charge window | inside the window | window number |
-| Night | inside the night | night number |
+| Charge window | inside the window | window number (heating season: heating window number) |
+| Night | inside the night | night number (heating season: heating night number, night until its own end) |
 | Normal | otherwise | normal number |
 
 Surplus mode needs grid export above the lower threshold (or, once in surplus, above the
@@ -734,6 +759,10 @@ release threshold), battery and tank gates, and either outdoor above the summer 
 export above the upper threshold stable for its time with outdoor above the lower limit.
 Mode changes wait for the minimum hold time; a mode chosen by hand holds for the manual
 hold time, then automatic takes over.
+
+**Heating season**: while the heat source heats (its climate in `heat`), the charge window
+and night take their heating-season numbers and the night lasts until *Night until, heating
+season*: one main charge in the window, otherwise only a safety reheat.
 
 **Forced charge**: a heater that reheats only below target minus its hysteresis would not
 start for a target just above the tank. Legionella, boost, surplus and the charge window

@@ -158,6 +158,7 @@ Eckpunkte (Details bei Beginn gegen dann aktuellen Code neu festlegen):
 - Eingaben per MCP in `rooms.json`; Wetter Open-Meteo-Archiv 3 Winter, Offset zum Daikin-Fühler, Tagestypen nach Temperatur × Sonne; COP aus Datenblatt, Skalierung gegen Daikin-Strom (2-h-Summen, ohne WW/Abtauen/Ausfall).
 - Validierung zuerst: 10 vergangene Tage nachspielen, RMSE je Raum, getrennt lange Abkühlstrecken. **Halt** nach Validierung und nach COP-Fit (Restfehler an Nutzer; Ersparnis kleiner als Restfehler = nicht unterscheidbar).
 - Sensitivität Kapazität × 0,5/1/2. Takten/Mindestmodulation markieren, nicht modellieren.
+- Vorher `_simulate_room_temperature_c` (`controller.py`): Konvergenzabbruch bei < 0,001 K je 150-s-Schritt hängt an Kapazität (≈ Kapazität × 6,7·10⁻⁶ W, Esszimmer ×1 ≈ 33 W). Kleine Nettoleistung (Vorlauf +1 K, kleine Sprünge, Auskühlen) gilt fälschlich als eingeschwungen. Boost unberührt (geprüft). Schwelle auf Leistung umstellen oder streichen — auch Voraussetzung für modellbasierte Wirkzeit der Rückkopplung.
 - Ergebnis berührt „Keine Tag/Nacht-Absenkung" bzw. „WP-Heizbetrieb schaltet Nutzer" — Bewertung trifft Nutzer.
 
 ## Später / offen (eigenes Design, nicht ungefragt)

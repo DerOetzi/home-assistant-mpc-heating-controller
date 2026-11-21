@@ -426,6 +426,7 @@ class FlowFeedbackSensor(FlowEntity, SensorEntity):
         feedback = self._flow.hub.flow_feedback
         lead = feedback.lead
         last = feedback.last_change_ts
+        catching_up = feedback.catching_up(time.time())
         return {
             "lead_demand_pct": None if lead is None else lead.demand_pct,
             "lead_room": None if lead is None else lead.room,
@@ -434,6 +435,12 @@ class FlowFeedbackSensor(FlowEntity, SensorEntity):
             "frozen": feedback.frozen is not None,
             "frozen_reason": None if feedback.frozen is None else str(feedback.frozen),
             "flow_timer_min": round(feedback.count_s / 60),
+            "catch_up_until": dt_util.utc_from_timestamp(
+                feedback.catch_up_until_ts
+            ).isoformat()
+            if catching_up
+            else None,
+            "catch_up_reason": str(feedback.catch_up_reason) if catching_up else None,
             "room_variant_up": feedback.variant_up,
             "room_variant_down": feedback.variant_down,
             "last_change": None

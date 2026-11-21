@@ -1674,6 +1674,36 @@ async def test_feedback_sample_from_valve_and_room_sensor(
     coordinator.async_unload()
 
 
+async def test_feedback_sample_has_no_deficit_while_the_room_sensor_is_stale(
+    hass: HomeAssistant, freezer
+) -> None:
+    from heating_controller.controller.mpc.sensors import ROOM_SENSOR_MAX_AGE_S
+
+    _seed_entities(hass)
+    hass.states.async_set(VALVE_ENTITY, "98")
+    coordinator = await _setup_coordinator(hass, trvs=[_trv_with_valve()])
+    await _poll(hass, freezer, 5)
+    assert coordinator.feedback_sample.deficit_c is not None
+
+    # The room sensor goes quiet; the TRV keeps reporting, warm at the
+    # radiator. Its reading must not stand in for the room.
+    for _ in range(int(ROOM_SENSOR_MAX_AGE_S / 600) + 2):
+        hass.states.async_set(
+            "climate.heizung_wohnzimmer", "heat", {"current_temperature": 23.0}
+        )
+        hass.states.async_set(VALVE_ENTITY, "98")
+        await _poll(hass, freezer, 10)
+
+    assert coordinator.last_result.input.room_sensor_fallback
+    sample = coordinator.feedback_sample
+    assert sample.demand_pct == 98.0
+    assert sample.deficit_c is None
+    # Saturated: judged on the opening alone.
+    assert coordinator.supply[0] is RoomSupply.UNDERSUPPLIED
+
+    coordinator.async_unload()
+
+
 async def test_feedback_sample_needs_a_known_demand(hass: HomeAssistant) -> None:
     _seed_entities(hass)
     coordinator = await _setup_coordinator(hass)
@@ -1728,6 +1758,24 @@ async def test_supply_not_rated_without_heat_at_the_valves(
     assert (supply, reason) == (RoomSupply.NOT_RATED, SupplyReason.NO_HEAT)
     # The opening is still reported.
     assert sample.demand_pct == 100.0
+
+    coordinator.async_unload()
+
+
+async def test_supply_not_rated_while_catching_up_after_a_pause(
+    hass: HomeAssistant, freezer
+) -> None:
+    _seed_entities(hass)
+    hass.states.async_set(VALVE_ENTITY, "100")
+    coordinator = await _setup_coordinator(hass, trvs=[_trv_with_valve()])
+    await _poll(hass, freezer, 5)
+    catching_up = True
+    coordinator.catch_up_provider = lambda: catching_up
+
+    assert coordinator.supply[:2] == (RoomSupply.NOT_RATED, SupplyReason.CATCH_UP)
+
+    catching_up = False
+    assert coordinator.supply[:2] == (RoomSupply.UNDERSUPPLIED, None)
 
     coordinator.async_unload()
 

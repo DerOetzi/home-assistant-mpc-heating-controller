@@ -38,6 +38,7 @@ export const TRANSLATIONS = {
     supply_reason_radiator_not_heating: "radiator not heating",
     supply_reason_boost: "boost",
     supply_reason_demand_unknown: "valve opening unknown",
+    supply_reason_catch_up: "catching up after a pause",
     supply_hint_undersupplied:
       "Valves fully open and the room below target – the flow is too low",
     supply_hint_supplied: "Valves open enough – this room needs the current flow",
@@ -144,6 +145,7 @@ export const TRANSLATIONS = {
     supply_reason_radiator_not_heating: "Heizkörper heizt nicht",
     supply_reason_boost: "Boost",
     supply_reason_demand_unknown: "Ventilöffnung unbekannt",
+    supply_reason_catch_up: "Nachholen nach Pause",
     supply_hint_undersupplied:
       "Ventile voll offen und Raum unter Soll – Vorlauf zu niedrig",
     supply_hint_supplied: "Ventile offen genug – Raum braucht den jetzigen Vorlauf",

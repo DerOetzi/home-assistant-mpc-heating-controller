@@ -154,9 +154,11 @@ class RoomMpcController:
         )
         self._heat_available = True
         self._hot_water = HotWaterChargeDetector()
-        # A charge the hot water control saw (tank rising, own target write);
-        # adds to the detection on the flow.
+        # A charge seen outside the room: the house's one signal (decisive,
+        # replaces the room's own detection on its flow) or the hot water
+        # control's (adds to it).
         self._external_hot_water_charge = False
+        self._external_hot_water_decisive = False
         self._radiator_monitors = [RadiatorDeliveryMonitor() for _ in trvs]
         self._valve_position_configured = [
             trv.valve_position_configured for trv in trvs
@@ -210,6 +212,8 @@ class RoomMpcController:
     def hot_water_charging(self) -> bool:
         """A hot water charge takes the flow, seen on it or by the hot water
         control."""
+        if self._external_hot_water_decisive:
+            return self._external_hot_water_charge
         return self._hot_water.charging or self._external_hot_water_charge
 
     def set_heat_available(self, available: bool) -> None:
@@ -271,8 +275,11 @@ class RoomMpcController:
     def set_flow_temperature(self, value: float | None) -> None:
         self._sensors.set_flow_temperature(value)
 
-    def set_external_hot_water_charge(self, charging: bool) -> None:
+    def set_external_hot_water_charge(
+        self, charging: bool, decisive: bool = False
+    ) -> None:
         self._external_hot_water_charge = charging
+        self._external_hot_water_decisive = decisive
 
     def set_flow_threshold_c(self, flow_threshold_c: float) -> None:
         self._emitter_model.set_flow_threshold_c(flow_threshold_c)
@@ -307,9 +314,14 @@ class RoomMpcController:
         mpc_input.mode_target_temp_c = mode_target_temperature_c
         if apply_side_effects:
             self._hot_water.update(
-                mpc_input.now_ts, mpc_input.flow_temp_c, self._heat_available
+                mpc_input.now_ts,
+                mpc_input.flow_temp_c,
+                self._heat_available,
+                self._external_hot_water_charge
+                if self._external_hot_water_decisive
+                else None,
             )
-        if self._hot_water.charging or self._external_hot_water_charge:
+        if self.hot_water_charging:
             # The radiators get no water; the valves keep the demand of the
             # heating flow they get back once the charge is done.
             mpc_input.hot_water_charge = True

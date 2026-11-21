@@ -226,11 +226,17 @@ class HeatingRoomCoordinator:
         )
         # Set by the hub when a flow device owns the threshold.
         self.flow_threshold_provider: Callable[[], float] | None = None
-        # Set by the hub when a hot water device sees the charges.
-        self.hot_water_charge_provider: Callable[[], bool] | None = None
+        # Set by the hub: the house's hot water charge and whether it
+        # decides for the room.
+        self.hot_water_charge_provider: Callable[[], tuple[bool, bool]] | None = (
+            None
+        )
         # Set by the hub when a flow device knows the heating curve's outdoor
         # end points: (cold, warm).
         self.curve_outdoor_provider: Callable[[], tuple[float, float]] | None = None
+        # Set by the hub: whether the rooms catch up after a pause of the
+        # room heating (hot water charge, defrost).
+        self.catch_up_provider: Callable[[], bool] | None = None
         self._learning_block_entity: str | None = self.data.get(
             CONF_LEARNING_BLOCK_ENTITY
         )
@@ -957,7 +963,7 @@ class HeatingRoomCoordinator:
             return
         self.mpc.set_flow_threshold_c(self.flow_threshold_c)
         if self.hot_water_charge_provider is not None:
-            self.mpc.set_external_hot_water_charge(self.hot_water_charge_provider())
+            self.mpc.set_external_hot_water_charge(*self.hot_water_charge_provider())
         desired_mode = self.state.desired_automatic_heat_mode(self.blocked)
         self.state.set_active_heat_mode(desired_mode)
 
@@ -1088,11 +1094,18 @@ class HeatingRoomCoordinator:
         """How the flow supplies the room, judged like the feedback does.
 
         Without heat at the valves (heat pump off, below the threshold, hot
-        water) they stand open for nothing: not rated.
+        water) they stand open for nothing: not rated. Right after such a
+        pause the room catches up on what cooled off: not rated either.
         """
         sample, reason = self._demand_sample()
         if reason is None and (not self.trv_active or self.mpc.hot_water_charging):
             reason = SupplyReason.NO_HEAT
+        if (
+            reason is None
+            and self.catch_up_provider is not None
+            and self.catch_up_provider()
+        ):
+            reason = SupplyReason.CATCH_UP
         if sample is None or reason is not None:
             return RoomSupply.NOT_RATED, reason, sample
         if wants_more(sample):
@@ -1117,10 +1130,11 @@ class HeatingRoomCoordinator:
         ]
         if not demands or any(demand is None for demand in demands):
             return None, SupplyReason.DEMAND_UNKNOWN
+        # Only the room sensor says how far the room is short: the TRVs sit at
+        # the radiator and read warm while it heats. Without a fresh reading
+        # the deficit is unknown and the opening alone decides.
         target_c = self._settled_target_c
         room_c = self._room_sensor_temperature_c()
-        if room_c is None and self.normal_result is not None:
-            room_c = self.normal_result.input.room_temp_c
         deficit_c = (
             None if target_c is None or room_c is None else round(target_c - room_c, 2)
         )

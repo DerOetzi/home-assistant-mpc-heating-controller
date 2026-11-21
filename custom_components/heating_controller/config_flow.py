@@ -888,6 +888,7 @@ def _hw_modes_schema(d: dict[str, Any]) -> vol.Schema:
         _hw_bool("night_enabled", d),
         _hw_time("night_start", d),
         _hw_time("night_end", d),
+        _hw_time("heating_night_end", d),
         _hw_bool("window_enabled", d),
         _hw_time("window_start", d),
         _hw_time("window_end", d),

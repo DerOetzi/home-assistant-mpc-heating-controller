@@ -3,12 +3,20 @@
 The feedforward (hold flow from the learned room model) says what the rooms
 should need; the valves say what they do need. One count adds up what they
 say: a room near fully open and clearly below its target counts it down,
-valves well below open, or open only in rooms above their target, count it
-up, a room that holds the flow brings it back towards zero. Half an hour
-down means too little flow: one step up; an hour up means the flow can drop:
-one step down. The sum of the steps, feedback_k, is added to the
-feedforward. It only moves while what
-was decided also reaches the heat source and the heat source heats.
+the faster the further it is short; a room well below open and not above its
+target counts it up; a room that holds the flow brings it back towards
+zero. A room above its target (cooking, sun) counts neither way. Half an
+hour down means too little flow: one step up; an hour up means the flow can
+drop: one step down. The radiators and rooms answer a step only over hours:
+for STEP_LOCK_S after a step the count does not move towards another one in
+the same direction, the other direction stays open. The sum of the steps,
+feedback_k, is added to the feedforward. It only moves while what was
+decided also reaches the heat source and the heat source heats.
+
+After a pause of the room heating (hot water charge, defrost) the rooms
+catch up on what cooled off: for as long as the pause lasted, at most
+CATCH_UP_MAX_S, a room short of its target does not count towards a step
+up. A room that holds the flow still brings the count back to zero.
 
 For comparison only, without effect on the flow, the same count also runs
 per room on that room alone: a room at -UP_AFTER_S alone would have stepped
@@ -19,24 +27,35 @@ steps are counted.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from typing import Any
 
 FEEDBACK_LIMIT_K = 3.0
-# Up: valves this far open and the room short of its target, or saturated
-# and a little short; the count goes down while one is, a step at
-# -UP_AFTER_S. 0.1 K short is still the TRV's own control band.
+# Deficits are compared rounded half up to DEFICIT_STEP_C, the resolution of
+# the room sensors: a few hundredths do not decide.
+DEFICIT_STEP_C = Decimal("0.1")
+# Up: valves this far open and the room more than this short of its target,
+# or saturated and more than a little short; the count goes down while one
+# is, a step at -UP_AFTER_S. 0.1 K short is still the TRV's own control band.
 DEMAND_UP_PCT = 90.0
 DEMAND_SATURATED_PCT = 98.0
 UP_DEFICIT_C = 0.2
 SATURATED_DEFICIT_C = 0.1
 UP_AFTER_S = 30 * 60
-# Down: no lead room holds the flow; the count goes up, a step at
-# DOWN_AFTER_S. A room this far open holds it: the count goes back to zero.
+# Further short counts faster: the deficit over UP_RATE_DEFICIT_C, at least
+# once and at most UP_RATE_MAX times as fast.
+UP_RATE_DEFICIT_C = 0.2
+UP_RATE_MAX = 3.0
+# Down: no lead room holds the flow and one is below this and not above its
+# target; the count goes up, a step at DOWN_AFTER_S. A room this far open
+# holds it: the count goes back to zero.
 DEMAND_DOWN_PCT = 80.0
 DOWN_AFTER_S = 3600
-# A room this far above its target holds the flow neither up nor down: its
-# open valve comes from the TRV's own reading, more flow would not help it.
+# After a step the count stays at zero on that step's side this long.
+STEP_LOCK_S = 90 * 60
+# A room more than this above its target holds the flow neither up nor down:
+# its open valve comes from the TRV's own reading, more flow would not help it.
 OVER_TARGET_C = 0.1
 # A longer gap between two updates (restart, stalled loop) counts as this.
 MAX_TICK_S = 300.0
@@ -53,6 +72,11 @@ class FeedbackFreeze(StrEnum):
     NOT_WRITTEN = "not_written"
 
 
+# Freezes in which the radiators get no heat: afterwards the rooms catch up.
+PAUSE_FREEZES = frozenset({FeedbackFreeze.HOT_WATER, FeedbackFreeze.DEFROST})
+CATCH_UP_MAX_S = 3600.0
+
+
 @dataclass(frozen=True)
 class DemandSample:
     """One flow lead room: its highest valve opening and how far it is short."""
@@ -67,6 +91,9 @@ class FlowFeedback:
     def __init__(self) -> None:
         self.feedback_k = 0.0
         self.last_change_ts: float | None = None
+        # The last step's direction (+1 up, -1 down) and time, for the lock.
+        self.last_step_sign = 0
+        self.last_step_ts: float | None = None
         self.frozen: FeedbackFreeze | None = None
         # The room that decides: one that wants more, else the highest one
         # that holds the flow, else the highest opening.
@@ -74,7 +101,8 @@ class FlowFeedback:
         self._last_ts: float | None = None
         # The count: below zero towards a step up, above towards a step down.
         # A start and a step set it to zero, a freeze drops what it has
-        # towards up: the valves first answer the flow that runs now.
+        # towards up: the valves first answer the flow that runs now. While
+        # a step's lock runs it stays at zero on that step's side.
         self._count_s = 0.0
         # Comparison only: the count per room, its would-be steps up, and
         # the steps a count per room would have taken. Not stored: like the
@@ -83,6 +111,31 @@ class FlowFeedback:
         self.room_steps_up: dict[str, int] = {}
         self.variant_up = 0
         self.variant_down = 0
+        # The running pause and, once it ended, the catch-up after it. Not
+        # stored: a start does not know how long the pause before it was.
+        self._pause_since_ts: float | None = None
+        self._pause_reason: FeedbackFreeze | None = None
+        self.catch_up_until_ts: float | None = None
+        self.catch_up_reason: FeedbackFreeze | None = None
+
+    def catching_up(self, now_ts: float) -> bool:
+        """Whether the rooms still catch up after a pause."""
+        return self.catch_up_until_ts is not None and now_ts < self.catch_up_until_ts
+
+    def _track_pause(self, frozen: FeedbackFreeze | None, now_ts: float) -> None:
+        if frozen in PAUSE_FREEZES:
+            if self._pause_since_ts is None:
+                self._pause_since_ts = now_ts
+                self._pause_reason = frozen
+            return
+        if self._pause_since_ts is None:
+            return
+        until = now_ts + min(CATCH_UP_MAX_S, now_ts - self._pause_since_ts)
+        if self.catch_up_until_ts is None or until > self.catch_up_until_ts:
+            self.catch_up_until_ts = until
+            self.catch_up_reason = self._pause_reason
+        self._pause_since_ts = None
+        self._pause_reason = None
 
     def update(
         self,
@@ -105,8 +158,10 @@ class FlowFeedback:
         )
         self._last_ts = now_ts
         self.frozen = frozen
+        self._track_pause(frozen, now_ts)
         wanting = [s for s in samples if wants_more(s)]
         holding = [s for s in samples if holds(s)]
+        lowering = [s for s in samples if lowers(s)]
         self.lead = _highest(wanting) or _highest(holding) or _highest(samples)
         if frozen is not None:
             self._count_s = max(0.0, self._count_s)
@@ -117,8 +172,13 @@ class FlowFeedback:
         # Without a usable room the valves say nothing: the count waits.
         if not samples:
             return
-        self._update_rooms(samples, dt)
-        self._count_s = _advance(self._count_s, bool(wanting), bool(holding), dt)
+        catching_up = self.catching_up(now_ts)
+        self._update_rooms(samples, dt, catching_up)
+        up_rate = 0.0 if catching_up else max(map(up_rate_of, wanting), default=0.0)
+        self._count_s = self._locked(
+            _advance(self._count_s, up_rate, bool(holding), bool(lowering), dt),
+            now_ts,
+        )
 
         if self._count_s <= -UP_AFTER_S:
             self._count_s = 0.0
@@ -131,14 +191,36 @@ class FlowFeedback:
             if not at_lower_limit:
                 self._step(-step_k, now_ts)
 
-    def _update_rooms(self, samples: list[DemandSample], dt: float) -> None:
+    def locked_sign(self, now_ts: float) -> int:
+        """The direction a step's lock still holds back: +1, -1 or 0."""
+        if (
+            self.last_step_ts is None
+            or now_ts - self.last_step_ts >= STEP_LOCK_S
+        ):
+            return 0
+        return self.last_step_sign
+
+    def _locked(self, count: float, now_ts: float) -> float:
+        sign = self.locked_sign(now_ts)
+        if sign > 0:
+            return max(0.0, count)
+        if sign < 0:
+            return min(0.0, count)
+        return count
+
+    def _update_rooms(
+        self, samples: list[DemandSample], dt: float, catching_up: bool
+    ) -> None:
         """The comparison count per room; rooms without a sample wait."""
         stepped_up = False
         for sample in samples:
             count = _advance(
                 self._room_count_s.get(sample.room, 0.0),
-                wants_more(sample),
+                0.0
+                if catching_up or not wants_more(sample)
+                else up_rate_of(sample),
                 holds(sample),
+                lowers(sample),
                 dt,
             )
             if count <= -UP_AFTER_S:
@@ -174,19 +256,29 @@ class FlowFeedback:
             return
         self.feedback_k = value
         self.last_change_ts = now_ts
+        self.last_step_sign = 1 if delta_k > 0 else -1
+        self.last_step_ts = now_ts
 
     def reset(self, now_ts: float) -> None:
         """Back to no feedback; the count starts over."""
         self.feedback_k = 0.0
         self.last_change_ts = now_ts
+        self.last_step_sign = 0
+        self.last_step_ts = None
         self._last_ts = now_ts
         self._count_s = 0.0
         self._room_count_s.clear()
+        self._pause_since_ts = None
+        self._pause_reason = None
+        self.catch_up_until_ts = None
+        self.catch_up_reason = None
 
     def export(self) -> dict[str, Any]:
         return {
             "feedback_k": self.feedback_k,
             "last_change_ts": self.last_change_ts,
+            "last_step_sign": self.last_step_sign,
+            "last_step_ts": self.last_step_ts,
             "room_steps_up": dict(self.room_steps_up),
             "variant_up": self.variant_up,
             "variant_down": self.variant_down,
@@ -200,6 +292,12 @@ class FlowFeedback:
         self.feedback_k = max(-FEEDBACK_LIMIT_K, min(FEEDBACK_LIMIT_K, value))
         last = data.get("last_change_ts")
         self.last_change_ts = float(last) if isinstance(last, int | float) else None
+        sign = data.get("last_step_sign")
+        self.last_step_sign = sign if sign in (-1, 0, 1) else 0
+        step_ts = data.get("last_step_ts")
+        self.last_step_ts = (
+            float(step_ts) if isinstance(step_ts, int | float) else None
+        )
         steps = data.get("room_steps_up")
         self.room_steps_up = (
             {
@@ -218,33 +316,69 @@ def _tally(value: Any) -> int:
     return value if isinstance(value, int) and value >= 0 else 0
 
 
-def _advance(count: float, wanting: bool, holding: bool, dt: float) -> float:
-    """One tick of the count: down while wanting, to zero while holding."""
-    if wanting:
-        return count - dt
+def _advance(
+    count: float, up_rate: float, holding: bool, lowering: bool, dt: float
+) -> float:
+    """One tick of the count.
+
+    Down at up_rate while a room wants more, to zero while one holds, up
+    while one is low and not above its target, else it stays.
+    """
+    if up_rate > 0.0:
+        return count - dt * up_rate
     if holding:
         return max(0.0, count - dt) if count > 0.0 else min(0.0, count + dt)
-    return count + dt
+    if lowering:
+        return count + dt
+    return count
 
 
 def _highest(samples: list[DemandSample]) -> DemandSample | None:
     return max(samples, key=lambda s: s.demand_pct, default=None)
 
 
+def rounded_deficit_c(deficit_c: float) -> float:
+    """The deficit rounded half up to DEFICIT_STEP_C."""
+    return float(
+        Decimal(str(deficit_c)).quantize(DEFICIT_STEP_C, rounding=ROUND_HALF_UP)
+    )
+
+
 def wants_more(sample: DemandSample) -> bool:
     """Open and short of the target; saturated and a little short."""
     if sample.deficit_c is None:
         return sample.demand_pct >= DEMAND_SATURATED_PCT
+    deficit_c = rounded_deficit_c(sample.deficit_c)
     if (
         sample.demand_pct >= DEMAND_SATURATED_PCT
-        and sample.deficit_c >= SATURATED_DEFICIT_C
+        and deficit_c > SATURATED_DEFICIT_C
     ):
         return True
-    return sample.demand_pct > DEMAND_UP_PCT and sample.deficit_c >= UP_DEFICIT_C
+    return sample.demand_pct > DEMAND_UP_PCT and deficit_c > UP_DEFICIT_C
+
+
+def up_rate_of(sample: DemandSample) -> float:
+    """How fast a room that wants more counts towards a step up."""
+    if sample.deficit_c is None:
+        return 1.0
+    deficit_c = rounded_deficit_c(sample.deficit_c)
+    return min(UP_RATE_MAX, max(1.0, deficit_c / UP_RATE_DEFICIT_C))
+
+
+def _not_above_target(sample: DemandSample) -> bool:
+    return (
+        sample.deficit_c is None
+        or rounded_deficit_c(sample.deficit_c) >= -OVER_TARGET_C
+    )
+
+
+def lowers(sample: DemandSample) -> bool:
+    """Well below open and not above its target: the flow can drop."""
+    return sample.demand_pct < DEMAND_DOWN_PCT and _not_above_target(sample)
 
 
 def holds(sample: DemandSample) -> bool:
     """Open enough to keep the flow from going down."""
     if sample.demand_pct < DEMAND_DOWN_PCT:
         return False
-    return sample.deficit_c is None or sample.deficit_c > -OVER_TARGET_C
+    return _not_above_target(sample)

@@ -54,6 +54,7 @@ from .const import (
 )
 from .control.flow_feedback import DemandSample, FlowFeedback
 from .control.heating_season import HeatingSeason
+from .control.hot_water import FlowChargeDetector
 from .control.write_budget import WriteBudget, WritePriority
 from .coordinator import HeatingRoomCoordinator
 from .flow_device import FlowDevice
@@ -118,6 +119,7 @@ class HeatingHub:
         self.flow_seen_ts = time.time()
         self.season = HeatingSeason()
         self.flow_feedback = FlowFeedback()
+        self.charge_detector = FlowChargeDetector()
         # Nothing computes or writes before the inputs are there.
         self.startup_gate = StartupGate(hass, self._async_start)
         self.season_on_threshold_h = DEFAULT_SEASON_ON_THRESHOLD_H
@@ -136,6 +138,10 @@ class HeatingHub:
 
     def add_room(self, coordinator: HeatingRoomCoordinator) -> None:
         self.rooms[coordinator.room_id] = coordinator
+        coordinator.catch_up_provider = lambda: self.flow_feedback.catching_up(
+            time.time()
+        )
+        coordinator.hot_water_charge_provider = self.room_hot_water_charge
         self._unsub.append(coordinator.async_add_listener(self._notify_listeners))
 
     def used_surfaces(self) -> list[SurfaceGeometry]:
@@ -244,6 +250,7 @@ class HeatingHub:
             and self._float_state(self._flow_temperature_entity) is not None
         ):
             self.flow_seen_ts = now_ts
+        self.update_charge()
         self.season.update(self.heating_demand, now_ts, self.season_hold_threshold_h)
         self._store.async_delay_save(self._export, HUB_SAVE_DELAY_S)
         if self.hot_water is not None:
@@ -269,10 +276,27 @@ class HeatingHub:
         self._store.async_delay_save(self._export, HUB_SAVE_DELAY_S)
 
     def set_hot_water(self, hot_water: HotWaterDevice) -> None:
-        """Rooms take the charges the hot water device sees."""
         self.hot_water = hot_water
-        for room in self.rooms.values():
-            room.hot_water_charge_provider = lambda: hot_water.charging
+
+    def update_charge(self) -> None:
+        """Take the flow, the heat source's aim and the tank detector."""
+        self.charge_detector.update(
+            self.measured_flow_c,
+            self.effective_curve_c,
+            self.hot_water is not None and self.hot_water.charging,
+            time.time(),
+        )
+
+    def room_hot_water_charge(self) -> tuple[bool, bool]:
+        """The charge as rooms take it, and whether it is the house's own.
+
+        With the measured flow and the heat source's aim the house decides
+        for all rooms and the feedback alike. Without, each room adds what
+        the hot water device sees to its own detection on its flow.
+        """
+        if self.charge_detector.decisive:
+            return self.charge_detector.charging, True
+        return self.hot_water is not None and self.hot_water.charging, False
 
     @property
     def outdoor_temperature_c(self) -> float | None:
@@ -433,7 +457,13 @@ class HeatingHub:
 
     @property
     def hot_water_charging(self) -> bool:
-        """A hot-water charge takes the flow, as any room or the device sees it."""
+        """A hot-water charge takes the flow.
+
+        One signal from the flow against the heat source's aim; without it,
+        as any room or the device sees it.
+        """
+        if self.charge_detector.decisive:
+            return self.charge_detector.charging
         if self.hot_water is not None and self.hot_water.charging:
             return True
         return any(room.mpc.hot_water_charging for room in self.rooms.values())

@@ -1,5 +1,8 @@
+import pytest
 from heating_controller.control.flow_feedback import (
+    CATCH_UP_MAX_S,
     DOWN_AFTER_S,
+    STEP_LOCK_S,
     FEEDBACK_LIMIT_K,
     UP_AFTER_S,
     DemandSample,
@@ -40,11 +43,11 @@ def _ready() -> FlowFeedback:
 
 def test_wanting_for_the_up_time_steps_up() -> None:
     feedback = FlowFeedback()
-    end = _run(feedback, [_sample(95)], T0, UP_AFTER_S - 60)
+    end = _run(feedback, [_sample(99)], T0, UP_AFTER_S - 60)
     assert feedback.feedback_k == 0.0
     assert feedback.count_s == -(UP_AFTER_S - 60)
 
-    feedback.update([_sample(95)], STEP, None, end + 60)
+    feedback.update([_sample(99)], STEP, None, end + 60)
     assert feedback.feedback_k == 1.0
     assert feedback.last_change_ts == end + 60
     assert feedback.count_s == 0.0
@@ -58,18 +61,34 @@ def test_open_valve_at_target_does_nothing() -> None:
 
 
 def test_open_valve_in_the_trv_band_does_nothing() -> None:
-    feedback = _ready()
-    _run(feedback, [_sample(95, deficit=0.1)], T0, 3 * 3600)
+    for deficit in (0.1, 0.2, 0.24):
+        feedback = _ready()
+        _run(feedback, [_sample(95, deficit=deficit)], T0, 3 * 3600)
 
-    assert feedback.feedback_k == 0.0
+        assert feedback.feedback_k == 0.0
+
+
+def test_open_valve_rounded_beyond_the_band_steps_up() -> None:
+    feedback = FlowFeedback()
+    _run(feedback, [_sample(92, deficit=0.25)], T0, UP_AFTER_S)
+
+    assert feedback.feedback_k == 1.0
 
 
 def test_saturated_valve_a_little_short_steps_up() -> None:
-    for deficit in (0.1, None):
+    for deficit in (0.15, 0.2, None):
         feedback = FlowFeedback()
         _run(feedback, [_sample(99, deficit=deficit)], T0, UP_AFTER_S)
 
         assert feedback.feedback_k == 1.0
+
+
+def test_saturated_valve_within_a_tenth_does_not_step_up() -> None:
+    for deficit in (0.097, 0.1, 0.14):
+        feedback = _ready()
+        _run(feedback, [_sample(99, deficit=deficit)], T0, 3 * 3600)
+
+        assert feedback.feedback_k == 0.0
 
 
 def test_saturated_valve_at_or_above_target_does_not_step_up() -> None:
@@ -80,11 +99,14 @@ def test_saturated_valve_at_or_above_target_does_not_step_up() -> None:
         assert feedback.feedback_k <= 0.0
 
 
-def test_each_step_up_needs_its_own_up_time() -> None:
+def test_each_step_up_needs_its_own_up_time_after_the_lock() -> None:
     feedback = FlowFeedback()
     end = _run(feedback, [_sample(99)], T0, UP_AFTER_S)
     assert feedback.feedback_k == 1.0
 
+    end = _run(feedback, [_sample(99)], end + 60, STEP_LOCK_S - 120)
+    assert feedback.feedback_k == 1.0
+    assert feedback.count_s == 0.0
     end = _run(feedback, [_sample(99)], end + 60, UP_AFTER_S - 120)
     assert feedback.feedback_k == 1.0
     feedback.update([_sample(99)], STEP, None, end + 60)
@@ -165,16 +187,17 @@ def test_open_valve_above_target_does_not_hold_the_flow() -> None:
     assert feedback.feedback_k == -1.0
 
 
-def test_open_valve_just_above_target_holds_the_flow() -> None:
-    feedback = _ready()
-    _run(feedback, [_sample(91, deficit=-0.05)], T0, DOWN_AFTER_S + 60)
+def test_open_valve_up_to_a_tenth_above_target_holds_the_flow() -> None:
+    for deficit in (-0.05, -0.1, -0.14):
+        feedback = _ready()
+        _run(feedback, [_sample(91, deficit=deficit)], T0, DOWN_AFTER_S + 60)
 
-    assert feedback.feedback_k == 0.0
+        assert feedback.feedback_k == 0.0
 
 
-def test_open_valve_a_tenth_above_target_does_not_hold_the_flow() -> None:
+def test_open_valve_rounded_beyond_a_tenth_above_target_does_not_hold() -> None:
     feedback = FlowFeedback()
-    _run(feedback, [_sample(96, deficit=-0.1)], T0, DOWN_AFTER_S)
+    _run(feedback, [_sample(96, deficit=-0.15), _sample(60, room="B")], T0, DOWN_AFTER_S)
 
     assert feedback.feedback_k == -1.0
 
@@ -262,15 +285,15 @@ def test_no_samples_pauses_the_count() -> None:
 
 def test_reset_starts_the_count_over() -> None:
     feedback = FlowFeedback()
-    _run(feedback, [_sample(99)], T0, 3 * UP_AFTER_S - 600)
+    _run(feedback, [_sample(99)], T0, UP_AFTER_S)
     assert feedback.feedback_k > 0.0
-    assert feedback.count_s < 0.0
 
     start = T0 + 3 * UP_AFTER_S
     feedback.reset(start)
     assert feedback.feedback_k == 0.0
     assert feedback.last_change_ts == start
     assert feedback.count_s == 0.0
+    assert feedback.locked_sign(start) == 0
 
     end = _run(feedback, [_sample(99)], start, UP_AFTER_S - 60)
     assert feedback.feedback_k == 0.0
@@ -286,13 +309,14 @@ def test_export_and_restore() -> None:
     restored.restore(feedback.export())
     assert restored.feedback_k == 1.0
     assert restored.last_change_ts == end
+    assert restored.locked_sign(end + 60) == 1
 
     restored.restore({"feedback_k": 99})
     assert restored.feedback_k == FEEDBACK_LIMIT_K
 
 
 def _want(room: str) -> DemandSample:
-    return _sample(95, 0.2, room)
+    return _sample(99, 0.2, room)
 
 
 def _hold(room: str) -> DemandSample:
@@ -388,3 +412,138 @@ def test_export_and_restore_tallies() -> None:
     restored.restore({"variant_up": "x", "room_steps_up": {"A": None}})
     assert restored.variant_up == 0
     assert restored.room_steps_up == {}
+
+
+def _pause(feedback: FlowFeedback, reason: FeedbackFreeze, seconds: float) -> float:
+    """A pause of the room heating from T0; returns the first time after it."""
+    end = _run(feedback, [_sample(99)], T0, seconds - 60, frozen=reason)
+    return end + 60
+
+
+@pytest.mark.parametrize(
+    ("reason", "pause_s", "catch_up_s"),
+    [
+        (FeedbackFreeze.HOT_WATER, 45 * 60, 45 * 60),
+        (FeedbackFreeze.DEFROST, 8 * 60, 8 * 60),
+        (FeedbackFreeze.HOT_WATER, 70 * 60, CATCH_UP_MAX_S),
+    ],
+)
+def test_after_a_pause_the_rooms_catch_up_as_long_as_it_lasted(
+    reason: FeedbackFreeze, pause_s: float, catch_up_s: float
+) -> None:
+    feedback = _ready()
+    after = _pause(feedback, reason, pause_s)
+    feedback.update([_sample(99)], STEP, None, after)
+
+    assert feedback.catch_up_until_ts == after + catch_up_s
+    assert feedback.catch_up_reason is reason
+    assert feedback.catching_up(after + catch_up_s - 1)
+    assert not feedback.catching_up(after + catch_up_s)
+
+
+def test_short_rooms_do_not_count_up_while_catching_up() -> None:
+    feedback = _ready()
+    after = _pause(feedback, FeedbackFreeze.HOT_WATER, 45 * 60)
+    end = _run(feedback, [_sample(99)], after, 45 * 60 - 60)
+    assert feedback.count_s == 0.0
+    assert feedback.room_count_s("A") == 0.0
+    assert feedback.feedback_k == 0.0
+
+    # Afterwards a short room counts as before.
+    _run(feedback, [_sample(99)], end + 60, UP_AFTER_S)
+    assert feedback.feedback_k == 1.0
+    assert feedback.room_steps_up == {"A": 1}
+
+
+def test_catching_up_still_brings_a_surplus_back_to_zero() -> None:
+    feedback = FlowFeedback()
+    end = _run(feedback, [_sample(60)], T0, 600)
+    assert feedback.count_s == 600
+    after = (
+        _run(feedback, [_sample(60)], end + 60, 1200, frozen=FeedbackFreeze.HOT_WATER)
+        + 60
+    )
+    end = _run(feedback, [_sample(99)], after, 900)
+
+    assert feedback.catching_up(end)
+    assert feedback.count_s == 0.0
+
+
+def test_a_charge_running_into_a_defrost_is_one_pause() -> None:
+    feedback = _ready()
+    end = _run(
+        feedback, [_sample(99)], T0, 30 * 60 - 60, frozen=FeedbackFreeze.HOT_WATER
+    )
+    end = _run(
+        feedback, [_sample(99)], end + 60, 10 * 60 - 60, frozen=FeedbackFreeze.DEFROST
+    )
+    after = end + 60
+    feedback.update([_sample(99)], STEP, None, after)
+
+    assert feedback.catch_up_until_ts == after + 40 * 60
+    assert feedback.catch_up_reason is FeedbackFreeze.HOT_WATER
+
+
+def test_other_freezes_are_no_pause() -> None:
+    feedback = _ready()
+    after = _pause(feedback, FeedbackFreeze.WRITE_OFF, 45 * 60)
+    feedback.update([_sample(99)], STEP, None, after)
+
+    assert feedback.catch_up_until_ts is None
+    assert not feedback.catching_up(after)
+
+
+def test_reset_ends_the_catch_up() -> None:
+    feedback = _ready()
+    after = _pause(feedback, FeedbackFreeze.HOT_WATER, 45 * 60)
+    feedback.update([_sample(99)], STEP, None, after)
+    feedback.reset(after + 60)
+
+    assert not feedback.catching_up(after + 120)
+
+
+def test_a_room_above_its_target_counts_neither_way() -> None:
+    feedback = FlowFeedback()
+    _run(feedback, [_sample(30, deficit=-0.5)], T0, 3 * DOWN_AFTER_S)
+
+    assert feedback.feedback_k == 0.0
+    assert feedback.count_s == 0.0
+
+
+def test_neutral_keeps_the_count() -> None:
+    feedback = FlowFeedback()
+    end = _run(feedback, [_sample(60)], T0, 600)
+    _run(feedback, [_sample(30, deficit=-0.5)], end + 60, 3600)
+
+    assert feedback.count_s == 600
+
+
+@pytest.mark.parametrize(
+    ("deficit", "seconds"), [(0.2, UP_AFTER_S), (0.4, UP_AFTER_S / 2), (0.9, UP_AFTER_S / 3)]
+)
+def test_further_short_steps_up_faster(deficit: float, seconds: float) -> None:
+    feedback = FlowFeedback()
+    end = _run(feedback, [_sample(99, deficit=deficit)], T0, seconds - 120)
+    assert feedback.feedback_k == 0.0
+    _run(feedback, [_sample(99, deficit=deficit)], end + 60, 60)
+    assert feedback.feedback_k == 1.0
+
+
+def test_the_lock_leaves_the_other_direction_open() -> None:
+    feedback = FlowFeedback()
+    end = _run(feedback, [_sample(99)], T0, UP_AFTER_S)
+    assert feedback.feedback_k == 1.0
+
+    _run(feedback, [_sample(60)], end + 60, DOWN_AFTER_S)
+    assert feedback.feedback_k == 0.0
+
+
+def test_the_lock_after_a_step_down_holds_down() -> None:
+    feedback = FlowFeedback()
+    end = _run(feedback, [_sample(60)], T0, DOWN_AFTER_S)
+    assert feedback.feedback_k == -1.0
+
+    end = _run(feedback, [_sample(60)], end + 60, STEP_LOCK_S - 60)
+    assert feedback.feedback_k == -1.0
+    _run(feedback, [_sample(60)], end + 60, DOWN_AFTER_S)
+    assert feedback.feedback_k == -2.0

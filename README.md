@@ -53,8 +53,8 @@ purpose-built Lovelace card operates it.
   same way the flow feedback does: short (valves fully open, room below target), at limit
   (the room needs the current flow), headroom (valves well closed or room above target:
   the room would get by on less), or not rated with a
-  reason (window open, frost protection, no heat, radiator not heating, boost, valve
-  opening unknown).
+  reason (window open, frost protection, no heat, catching up after a hot-water charge or
+  defrost, radiator not heating, boost, valve opening unknown).
 - **TRV setpoints** — each TRV regulates the room with its own PI. The room hands it the
   active mode's target through `climate.set_temperature` and the room sensor's reading as
   external temperature (more often for a radiator marked covered), switches its
@@ -170,7 +170,8 @@ water heater's target, runs the legionella cycle and the circulation pump.
    protection and the circulation pump are handled too.
 2. **Modes and times** — PV surplus thresholds (lower, stable upper, release), battery
    and tank gates, outdoor limits, minimum time between mode changes, manual hold, boost
-   limit, night setback, charge window, forced charge and the heater's reheat hysteresis.
+   limit, night setback (with its own end in the heating season), charge window, forced
+   charge and the heater's reheat hysteresis.
 3. **Legionella protection** (if chosen) — weekdays, start, optional fallback start,
    retry window, PV forecast condition, outlet and circulation-return thresholds, hold
    time, verification timeout.
@@ -179,7 +180,8 @@ water heater's target, runs the legionella cycle and the circulation pump.
    and pause times, release of a continuous run.
 
 The device *Warmwasser* holds the targets of each phase as numbers (normal, surplus,
-boost, night, charge window, legionella), a mode select (automatic, or normal/surplus by
+boost, night, charge window, legionella, and night and charge window for the heating
+season), a mode select (automatic, or normal/surplus by
 hand for the manual hold time), a boost switch, *Hot water target* and *Hot water phase*,
 *Hot water charging* (rooms treat it as a pause), and — when chosen — legionella status,
 a *failed* problem sensor, a start button, the circulation's main switch (off keeps the

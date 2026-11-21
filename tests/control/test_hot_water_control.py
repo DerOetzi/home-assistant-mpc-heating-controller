@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 from heating_controller.control.hot_water import (
     ChargeDetector,
+    FlowChargeDetector,
     HotWaterConfig,
     HotWaterController,
     HotWaterInputs,
@@ -173,3 +174,85 @@ def test_charge_detector_announce_and_rise() -> None:
     assert detector.charging
     detector.update(54.0, 2400.0 + 15 * 60)
     assert not detector.charging
+
+
+def test_heating_season_targets() -> None:
+    controller = HotWaterController(HotWaterConfig())
+    # Night runs until 13:00 at 44 in the heating season.
+    morning = controller.decide(
+        _inputs(DAY.replace(hour=9), current_target_c=38.0, heating_season=True)
+    )
+    assert morning.phase is HotWaterPhase.NIGHT
+    assert morning.write == 44.0
+    window = controller.decide(
+        _inputs(
+            DAY.replace(hour=13), tank_c=40.0, current_target_c=44.0,
+            heating_season=True,
+        )
+    )
+    assert window.phase is HotWaterPhase.CHARGE_WINDOW
+    assert window.write == 50.0
+    evening = controller.decide(
+        _inputs(DAY.replace(hour=18), current_target_c=50.0, heating_season=True)
+    )
+    assert evening.phase is HotWaterPhase.NORMAL
+    assert evening.write == 46.0
+    # Outside the season the morning is normal again.
+    outside = controller.decide(_inputs(DAY.replace(hour=9), current_target_c=44.0))
+    assert outside.phase is HotWaterPhase.NORMAL
+
+
+def _flow_detector(*steps: tuple[float | None, float | None, bool]):
+    detector = FlowChargeDetector()
+    states = []
+    for minute, (flow_c, aim_c, tank) in enumerate(steps):
+        detector.update(flow_c, aim_c, tank, minute * 60.0)
+        states.append(detector.charging)
+    return detector, states
+
+
+def test_flow_charge_starts_above_the_aim_and_ends_near_it() -> None:
+    _, states = _flow_detector(
+        (40.0, 36.0, False),  # own offset step: no charge
+        (43.0, 36.0, False),
+        (55.0, 36.0, False),
+        (40.0, 36.0, True),  # tank still rising: flow decides the end
+        (38.0, 36.0, True),
+    )
+    assert states == [False, True, True, True, False]
+
+
+def test_a_tank_start_without_flow_rise_ends_with_the_tank() -> None:
+    detector, states = _flow_detector(
+        (36.0, 36.0, True),
+        (37.0, 36.0, True),
+        (37.0, 36.0, False),
+        (37.0, 36.0, False),
+    )
+    assert states == [True, True, False, False]
+    # The tank still rising after the flow ended a charge does not restart it.
+    _, states = _flow_detector(
+        (55.0, 36.0, True), (37.0, 36.0, True), (37.0, 36.0, True)
+    )
+    assert states == [True, False, False]
+
+
+def test_flow_charge_without_flow_or_aim_is_not_decisive() -> None:
+    detector, _ = _flow_detector((None, 36.0, False))
+    assert detector.decisive is False
+    detector.update(50.0, None, False, 60.0)
+    assert detector.decisive is False
+
+
+def test_a_late_tank_start_after_the_flow_end_starts_no_charge() -> None:
+    # The cloud reports the tank's rise only after the flow fell back.
+    detector = FlowChargeDetector()
+    detector.update(55.0, 36.0, False, 0.0)
+    detector.update(37.0, 36.0, False, 600.0)
+    assert detector.charging is False
+    detector.update(37.0, 36.0, True, 660.0)
+    assert detector.charging is False
+    # Long after, a tank start is a new charge again.
+    detector.update(37.0, 36.0, False, 3000.0)
+    detector.update(37.0, 36.0, True, 3060.0)
+    assert detector.charging is True

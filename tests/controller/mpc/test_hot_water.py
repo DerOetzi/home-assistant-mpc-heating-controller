@@ -66,3 +66,16 @@ def test_no_flow_reading_keeps_the_state():
     detector.update(end_ts + STEP_S, None, True)
 
     assert detector.charging is True
+
+
+def test_a_known_charge_replaces_the_own_judgement():
+    detector = HotWaterChargeDetector()
+    detector.update(START_TS, 35.0, True, known_charge=False)
+    detector.update(START_TS + STEP_S, 50.0, True, known_charge=True)
+
+    assert detector.charging is True
+    assert detector.heating_flow_c == 35.0
+
+    detector.update(START_TS + 2 * STEP_S, 56.0, True, known_charge=False)
+    assert detector.charging is False
+    assert detector.heating_flow_c == 56.0

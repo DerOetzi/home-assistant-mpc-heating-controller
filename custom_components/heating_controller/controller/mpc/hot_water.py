@@ -26,8 +26,13 @@ class HotWaterChargeDetector:
         self.heating_flow_c: float | None = None
 
     def update(
-        self, now_ts: float, flow_temperature_c: float | None, heat_available: bool
+        self,
+        now_ts: float,
+        flow_temperature_c: float | None,
+        heat_available: bool,
+        known_charge: bool | None = None,
     ) -> None:
+        """Take a flow; known_charge, if given, replaces the own judgement."""
         if not heat_available:
             self._flows = []
             self.charging = False
@@ -39,8 +44,12 @@ class HotWaterChargeDetector:
             for ts, flow_c in self._flows
             if now_ts - ts <= HOT_WATER_REFERENCE_WINDOW_S
         ]
-        self.charging = bool(self._flows) and flow_temperature_c > (
-            min(flow_c for _, flow_c in self._flows) + HOT_WATER_FLOW_DELTA_C
+        self.charging = (
+            known_charge
+            if known_charge is not None
+            else bool(self._flows)
+            and flow_temperature_c
+            > (min(flow_c for _, flow_c in self._flows) + HOT_WATER_FLOW_DELTA_C)
         )
         self._flows.append((now_ts, flow_temperature_c))
         if not self.charging:

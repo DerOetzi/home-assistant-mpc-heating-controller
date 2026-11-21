@@ -196,6 +196,7 @@
             "night_enabled": "Nachtabsenkung",
             "night_start": "Nacht ab",
             "night_end": "Nacht bis",
+            "heating_night_end": "Nacht bis, Heizperiode",
             "window_enabled": "Ladefenster",
             "window_start": "Ladefenster ab",
             "window_end": "Ladefenster bis",
@@ -441,6 +442,12 @@
       "hot_water_window": {
         "name": "Warmwasser Ladefenster"
       },
+      "hot_water_heating_night": {
+        "name": "Warmwasser Nacht Heizperiode"
+      },
+      "hot_water_heating_window": {
+        "name": "Warmwasser Ladefenster Heizperiode"
+      },
       "hot_water_legionella": {
         "name": "Warmwasser Legionellenschutz"
       }
@@ -469,7 +476,8 @@
               "no_heat": "Keine Wärme",
               "radiator_not_heating": "Heizkörper heizt nicht",
               "boost": "Boost",
-              "demand_unknown": "Ventilöffnung unbekannt"
+              "demand_unknown": "Ventilöffnung unbekannt",
+              "catch_up": "Nachholen nach Pause"
             }
           }
         }
