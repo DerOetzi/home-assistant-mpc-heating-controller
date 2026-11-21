@@ -2,7 +2,8 @@
 
 import pytest
 from heating_controller.const import RoomSupply, SupplyReason
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.const import STATE_UNAVAILABLE
+from homeassistant.core import CoreState, HomeAssistant, ServiceCall
 from test_coordinator import _hub_entry, _room_data, _seed_entities
 
 
@@ -186,3 +187,28 @@ async def test_removed_sensors_are_not_set_up(hass: HomeAssistant) -> None:
     assert hass.states.get("sensor.wohnzimmer_valve_opening") is not None
     for removed in ("valve_curve", "requested_heating_power", "disturbance_power"):
         assert hass.states.get(f"sensor.wohnzimmer_{removed}") is None
+
+
+async def test_base_temperature_is_unavailable_until_the_gate_opens(
+    hass: HomeAssistant,
+) -> None:
+    """At HA start the comfort switches are not settled before the gate opens."""
+    hass.set_state(CoreState.not_running)
+    _seed_entities(hass)
+    _register_stub_services(hass)
+    entry = _hub_entry(_room_data(hass))
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    base = hass.states.get("sensor.wohnzimmer_base_temperature")
+    assert base is not None
+    assert base.state == STATE_UNAVAILABLE
+
+    room = hass.data["heating_controller"][next(iter(entry.subentries))]
+    await room.async_start()
+    await hass.async_block_till_done()
+
+    base = hass.states.get("sensor.wohnzimmer_base_temperature")
+    assert base is not None
+    assert float(base.state) == room.base_temperature_c

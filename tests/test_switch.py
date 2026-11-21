@@ -1,11 +1,11 @@
 """The comfort switches: one on the hub, one per room that asks for it."""
 
 from heating_controller.const import DOMAIN, HeatMode
-from homeassistant.core import HomeAssistant, State
+from homeassistant.core import HomeAssistant, ServiceCall, State
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import mock_restore_cache
 from test_binary_sensor import _setup
-from test_coordinator import _room_data
+from test_coordinator import _hub_entry, _room_data, _seed_entities
 
 ROOM_ID = "hub-entry"
 
@@ -89,3 +89,31 @@ async def test_deselected_room_switch_leaves_the_registry(hass: HomeAssistant) -
     await _setup(hass, _room_data(hass))
 
     assert _switch_id(hass, f"{ROOM_ID}_comfort") is None
+
+
+async def test_a_reload_starts_with_the_restored_switches(hass: HomeAssistant) -> None:
+    """The gate opens once the switches restored: no setpoint from the defaults."""
+    mock_restore_cache(hass, [State("switch.heizung_comfort", "off")])
+    _seed_entities(hass)
+    written: list[float] = []
+
+    async def set_temperature(call: ServiceCall) -> None:
+        written.append(call.data["temperature"])
+
+    async def handler(call: ServiceCall) -> None:
+        pass
+
+    hass.services.async_register("climate", "set_temperature", set_temperature)
+    hass.services.async_register("switch", "turn_on", handler)
+    hass.services.async_register("switch", "turn_off", handler)
+    entry = _hub_entry(_room_data(hass))
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    room = _room(hass)
+    assert room.current_heat_mode == HeatMode.ECO
+    eco_c = room.base_temperature_c
+    assert written and set(written) == {eco_c}
+    targets = {entry.target_temperature_c for entry in room.mpc._learner._history}
+    assert targets == {eco_c}

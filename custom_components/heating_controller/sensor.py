@@ -692,10 +692,10 @@ class SupplySensor(_DiagnosticSensor):
 
     _attr_translation_key = "supply"
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = [supply.value for supply in RoomSupply]
 
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
         super().__init__(coordinator, "supply")
+        self._attr_options = [supply.value for supply in RoomSupply]
 
     @property
     def native_value(self) -> str:
@@ -1098,6 +1098,11 @@ class BaseTemperatureSensor(_DiagnosticSensor):
         super().__init__(coordinator, "base_temperature")
 
     @property
+    def available(self) -> bool:
+        """Until the startup gate opens, the mode and offsets are not settled."""
+        return self._coordinator.running
+
+    @property
     def native_value(self) -> float:
         return self._coordinator.base_temperature_c
 
@@ -1107,10 +1112,10 @@ class UaLearningStatusSensor(_DiagnosticSensor):
 
     _attr_translation_key = "ua_learning_status"
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = [outcome.value for outcome in UaBalanceOutcome]  # noqa: RUF012
 
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
         super().__init__(coordinator, "ua_learning_status")
+        self._attr_options = [outcome.value for outcome in UaBalanceOutcome]
 
     @property
     def native_value(self) -> str | None:
@@ -1153,10 +1158,10 @@ class CapacityLearningStatusSensor(_DiagnosticSensor):
 
     _attr_translation_key = "capacity_learning_status"
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = [outcome.value for outcome in CapacityOutcome]  # noqa: RUF012
 
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
         super().__init__(coordinator, "capacity_learning_status")
+        self._attr_options = [outcome.value for outcome in CapacityOutcome]
 
     @property
     def native_value(self) -> str:

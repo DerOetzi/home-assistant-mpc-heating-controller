@@ -202,7 +202,11 @@ class HeatingHub:
         gate.require([self.flow_curve_entity, self._heat_source_entity])
         if self.flow is not None:
             gate.require([self.flow.actuator_entity])
-        gate.async_start()
+
+    def async_start_gate(self) -> None:
+        """Called once the platforms are set up: on a reload the gate opens at
+        once, so the entities that restore setpoints and switches must be in."""
+        self.startup_gate.async_start()
 
     @property
     def started(self) -> bool:

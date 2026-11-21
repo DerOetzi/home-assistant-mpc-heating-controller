@@ -536,7 +536,9 @@ of them have a known state and none came in for 30 seconds, or 3 minutes after t
 at the latest, every room runs once in full (setpoints, heat-available switches, room
 temperature and load to the TRVs), then the flow and hot water. On the timeout the log
 warns `Starting after 180 s without …` with the entities still missing. A reload of the
-integration starts at once.
+integration starts at once, after its own entities have restored comfort temperature, eco
+offset and the comfort switches, so no setpoint from the defaults reaches the TRVs or the
+learner. Until a room runs, its base temperature sensor is unavailable.
 
 A TRV entity the hub writes to (external temperature, load balancing, mean load) that
 comes back after being unavailable gets its value again at once.

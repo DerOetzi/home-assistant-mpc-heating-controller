@@ -1,4 +1,4 @@
-# Offener Umsetzungsplan (Stand 2026-11-16)
+# Offener Umsetzungsplan (Stand 2026-11-21)
 
 Nur was noch zu tun ist, mit den Angaben für die Umsetzung. Erledigtes steht im Code, in `mpc-guide.md` und in der Git-Historie. Getroffene Entscheidungen stehen im Skill `heating-controller` (`references/entscheidungen.md`).
 
@@ -7,7 +7,7 @@ Nur was noch zu tun ist, mit den Angaben für die Umsetzung. Erledigtes steht im
 Pfade unten sind relativ zum Repo. Abkürzung `CC/` = `custom_components/heating_controller/`, `MPC/` = `CC/controller/mpc/`.
 
 1. Skill `heating-controller` laden, `references/entscheidungen.md` lesen.
-2. Nur einen Unterabschnitt (z. B. 2a) je Durchgang. Vorher die dort genannten Dateien ganz lesen.
+2. Nur einen Unterabschnitt (z. B. 4b) je Durchgang. Vorher die dort genannten Dateien ganz lesen.
 3. **Stopp und Nutzer fragen**, wenn:
    - eine hier genannte Funktion, Konstante oder Datei nicht existiert oder anders aussieht als beschrieben;
    - ein bestehender Test rot wird, der laut Abschnitt nicht angepasst werden soll;
@@ -28,20 +28,21 @@ Raum regelt der TRV selbst (eigener PI, Sollwert über `climate.set_temperature`
 
 ## Reihenfolge
 
-| Schritt | Was | Bedingung für Start |
+Umgesetzt: Neustart A (15.11., Kapazität 1a–1c, Umbau TRV-Ansteuerung 2a–2g), Neustart B (16.11., Vorlauf-Rückkopplung, Raumsensor an TRV, Lastausgleich). Abschnittsnummern unten = Spalte „Abschnitt".
+
+| Abschnitt | Was | Bedingung für Start |
 |---|---|---|
-| 1 | 1d Kapazität beobachten | läuft, Daten ab Neustart A (15.11.) |
-| 2 | 2a–2g Umbau TRV-Ansteuerung | umgesetzt, Neustart A am 15.11. erfolgt; Beobachtung läuft |
-| 3 | Vorlauf-Rückkopplung, Raumsensor an TRV + Lastausgleich (Sollwertkorrektur entfernt), Neustart B | umgesetzt, Neustart B am 16.11. erfolgt; offen: `radiator_covered` Wohnzimmer groß an (Nutzer), anzeigen was `current_temperature` mit externem Sensor zeigt; danach `feedback_k`, Einfrieren und Leit-Demand in Tagesauswertung beobachten |
-| 4 | 4a Gewinne auswerten | parallel, kein Code |
-| 5 | Boiler-Modus TRV (5, ~01.12.) | Z2M 2.15.0 da, kein anderer Neustart in den 3 Tagen davor |
-| 6 | 4b Gewinne im Lerner, 4c Vorsteuerung mit Gewinnen + Boost, Neustart C | Nutzer hat 4a freigegeben, 3 läuft stabil |
-| 7 | 6 Ladeplan | nur wenn Nutzer nach 6a Bedarf bestätigt |
-| 8 | 7 Simulationen | nach 4c und Nutzer-Okay |
+| 1d | Kapazität beobachten | läuft, Daten ab Neustart A |
+| 3 | Restpunkte Neustart B | sofort |
+| 4a | Gewinne auswerten | parallel, kein Code |
+| 5 | Boiler-Modus TRV (~01.12.) | Z2M 2.15.0 da, kein anderer Neustart in den 3 Tagen davor |
+| 4b, 4c | Gewinne im Lerner, Vorsteuerung mit Gewinnen + Boost, Neustart C | Nutzer hat 4a freigegeben, 3 läuft stabil |
+| 6 | Ladeplan | nur wenn Nutzer nach 6a Bedarf bestätigt |
+| 7 | Simulationen | nach 4c und Nutzer-Okay |
+
+Laufende Beobachtung: Abschnitt „Beobachten".
 
 ## 1. Kapazität
-
-1a–1c (Sprungstrecken, Untergrenze 0,15, Sonnensperre über Einstrahlung) seit Neustart 15.11. aktiv.
 
 ### 1d. Auswirkungen prüfen (kein Code)
 
@@ -51,11 +52,10 @@ Wenige Tage, Moduswechsel selten (nur Dani, Urlaub) — Ergebnis eher Plausibili
 - Abkühl-Schätzung (`estimated`) gegen Aufheiz-Schätzung je Raum. Liegt Abkühlen dauerhaft > Faktor 2 über Aufheizen: an Nutzer melden.
 - Daten ab Neustart A nicht mit davor mischen.
 
-## 2. Umbau TRV-Ansteuerung (Neustart A)
+## 3. Restpunkte Neustart B
 
-2a–2g umgesetzt, Neustart A am 15.11. erfolgt.
-
-In Tagesauswertung: Raumfehler je Raum, Ventiltakten je TRV (Faktor 1), Schreibzahl, Fenster-Ablauf, UA-Lernstatus `valve_position_missing` in ruhigen Nächten (TRV 75 min still).
+- `radiator_covered` für Wohnzimmer groß einschalten (Nutzer).
+- Nutzer zeigen, was `current_temperature` am TRV mit externem Raumsensor anzeigt.
 
 ## 4. Gewinne und Sonne
 
@@ -99,19 +99,21 @@ Tests: Haltevorlauf sinkt bei G = 200 W; Boost mit Gewinnen niedriger; Sonnenque
 
 Doku: `mpc-guide.md` „Gains and sun", „Flow control"; Offset-Empfehlung neu bewerten.
 
-## 5. Beobachten (laufend, Tagesauswertung)
+## 5. Boiler-Modus TRV (~01.12.)
 
-Sofort durch Nutzer:
+Nach Z2M 2.15.0 (Schreib-Fix `heating_system_mode` UINT8) alle 13 `select.heizung_*_heating_system_mode` auf `default_heating`. Nur nach Nutzer-Okay. Danach Takten und Raumfehler je TRV gegen Tage davor.
+
+## Beobachten (laufend, Tagesauswertung)
+
+Durch Nutzer (Stand prüfen):
 - Raumsensor Rebekka (`sensor.sensor_rebekka_temperature`) meldet nur ~stündlich — Reporting-Intervall am Gerät prüfen (TRV braucht Raumwert ≥ alle 3 h, verdeckt alle 30 min). Raumsensor gilt nach 150 min ohne Meldung als veraltet (`room_sensor_fallback`).
 - Arbeitszimmer unter Soll bei 100 % Ventil: vermutlich Voreinstellung — prüfen.
 
-Mit Termin:
-- Boiler-Modus TRV: nach Z2M 2.15.0 (~01.12., Schreib-Fix `heating_system_mode` UINT8) alle 13 `select.heizung_*_heating_system_mode` auf `default_heating`. Nur nach Nutzer-Okay. Danach Takten und Raumfehler je TRV gegen Tage davor.
-
 Laufend:
-- Ventiltakten je TRV seit Neustart A; bei Takten Faktor-Empfehlung an Nutzer.
+- Ventiltakten je TRV (Faktor 1) seit Neustart A; bei Takten Faktor-Empfehlung an Nutzer.
+- Fenster-Ablauf; UA-Lernstatus `valve_position_missing` in ruhigen Nächten (TRV 75 min still).
 - Ab Neustart B: Raumfehler je Raum (Raumsensor gegen Modus-Soll) mit externem Raumwert; bleibender Fehler > 0,3 K → melden. Schreibzahl `trv_external_writes` (Akku), Lastmittel `load_room_mean` in 2-TRV-Räumen: TRV-Öffnungen sollen sich angleichen.
-- Vorlauf: `feedback_k` am Anschlag ±3 K oder Pendeln (Hoch/Runter im Wechsel < 4 h) → melden.
+- Vorlauf: `feedback_k` am Anschlag ±3 K oder Pendeln (Hoch/Runter im Wechsel < 4 h) → melden. Einfrieren und Leit-Demand prüfen.
 - Vergleich Ein-Zähler gegen Zähler je Raum (Messung ab 17.11.): nach einigen Tagen echte Schritte (`last_change`) gegen `room_variant_up`/`_down` und `would_step_up` je Raum legen. Fragen: Schritte hoch aus wechselnden Räumen statt einem? Hätte Raum-Variante weniger/später geschaltet, weniger gependelt? Ergebnis an Nutzer: Ein-Zähler lassen, Mindestdauer je Raum, oder Zähler je Raum. Danach Schattenzähler wieder ausbauen.
 - Lüften-Kapazität: Werte je Raum sammeln, nach einigen Wochen Nutzer fragen, ob sie Boost bekommt.
 - Ladungs-Dips zählen (6a).
@@ -122,7 +124,7 @@ Laufend:
 
 Ziel: Ladungen vorhersagen, Vorlauf vorher und in der Erholung anheben, gefährdete Räume dosiert vorheizen.
 
-Voraussetzung: 2 und 3 eingeschwungen.
+Voraussetzung: Neustart A und B eingeschwungen.
 
 ### 6a. Bedarf zählen (kein Code, Tagesauswertung)
 
@@ -144,7 +146,7 @@ Kurzzeitige Anhebung des geschriebenen Sollwerts um `lift` (0,5-K-Schritte, Deck
 
 ### 6d. Hub, Deploy, Doku
 
-`charge_flow_c` = min(max Ladevorlauf aller Räume, Vorlauf-Ziel + `charge_raise_max_k`), `None` außerhalb Fenster. Rückkopplung friert in Ladung ohnehin ein (3). Tests `test_hub.py`. Doku „Hot-water charges", „Flow control". Nach Neustart eine Zwangsladung beobachten.
+`charge_flow_c` = min(max Ladevorlauf aller Räume, Vorlauf-Ziel + `charge_raise_max_k`), `None` außerhalb Fenster. Rückkopplung friert in Ladung ohnehin ein. Tests `test_hub.py`. Doku „Hot-water charges", „Flow control". Nach Neustart eine Zwangsladung beobachten.
 
 ## 7. Simulationen (`tools/`, offline, nicht in Integration)
 
