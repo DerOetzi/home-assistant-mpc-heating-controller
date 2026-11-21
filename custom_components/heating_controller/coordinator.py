@@ -228,9 +228,7 @@ class HeatingRoomCoordinator:
         self.flow_threshold_provider: Callable[[], float] | None = None
         # Set by the hub: the house's hot water charge and whether it
         # decides for the room.
-        self.hot_water_charge_provider: Callable[[], tuple[bool, bool]] | None = (
-            None
-        )
+        self.hot_water_charge_provider: Callable[[], tuple[bool, bool]] | None = None
         # Set by the hub when a flow device knows the heating curve's outdoor
         # end points: (cold, warm).
         self.curve_outdoor_provider: Callable[[], tuple[float, float]] | None = None

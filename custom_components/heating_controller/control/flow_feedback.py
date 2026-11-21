@@ -193,10 +193,7 @@ class FlowFeedback:
 
     def locked_sign(self, now_ts: float) -> int:
         """The direction a step's lock still holds back: +1, -1 or 0."""
-        if (
-            self.last_step_ts is None
-            or now_ts - self.last_step_ts >= STEP_LOCK_S
-        ):
+        if self.last_step_ts is None or now_ts - self.last_step_ts >= STEP_LOCK_S:
             return 0
         return self.last_step_sign
 
@@ -216,9 +213,7 @@ class FlowFeedback:
         for sample in samples:
             count = _advance(
                 self._room_count_s.get(sample.room, 0.0),
-                0.0
-                if catching_up or not wants_more(sample)
-                else up_rate_of(sample),
+                0.0 if catching_up or not wants_more(sample) else up_rate_of(sample),
                 holds(sample),
                 lowers(sample),
                 dt,
@@ -232,9 +227,7 @@ class FlowFeedback:
             self._room_count_s[sample.room] = min(float(DOWN_AFTER_S), count)
         if stepped_up:
             self.variant_up += 1
-        elif all(
-            self._room_count_s[sample.room] >= DOWN_AFTER_S for sample in samples
-        ):
+        elif all(self._room_count_s[sample.room] >= DOWN_AFTER_S for sample in samples):
             self.variant_down += 1
             self._room_count_s.clear()
 
@@ -295,9 +288,7 @@ class FlowFeedback:
         sign = data.get("last_step_sign")
         self.last_step_sign = sign if sign in (-1, 0, 1) else 0
         step_ts = data.get("last_step_ts")
-        self.last_step_ts = (
-            float(step_ts) if isinstance(step_ts, int | float) else None
-        )
+        self.last_step_ts = float(step_ts) if isinstance(step_ts, int | float) else None
         steps = data.get("room_steps_up")
         self.room_steps_up = (
             {
@@ -349,10 +340,7 @@ def wants_more(sample: DemandSample) -> bool:
     if sample.deficit_c is None:
         return sample.demand_pct >= DEMAND_SATURATED_PCT
     deficit_c = rounded_deficit_c(sample.deficit_c)
-    if (
-        sample.demand_pct >= DEMAND_SATURATED_PCT
-        and deficit_c > SATURATED_DEFICIT_C
-    ):
+    if sample.demand_pct >= DEMAND_SATURATED_PCT and deficit_c > SATURATED_DEFICIT_C:
         return True
     return sample.demand_pct > DEMAND_UP_PCT and deficit_c > UP_DEFICIT_C
 

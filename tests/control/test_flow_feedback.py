@@ -2,8 +2,8 @@ import pytest
 from heating_controller.control.flow_feedback import (
     CATCH_UP_MAX_S,
     DOWN_AFTER_S,
-    STEP_LOCK_S,
     FEEDBACK_LIMIT_K,
+    STEP_LOCK_S,
     UP_AFTER_S,
     DemandSample,
     FeedbackFreeze,
@@ -197,7 +197,9 @@ def test_open_valve_up_to_a_tenth_above_target_holds_the_flow() -> None:
 
 def test_open_valve_rounded_beyond_a_tenth_above_target_does_not_hold() -> None:
     feedback = FlowFeedback()
-    _run(feedback, [_sample(96, deficit=-0.15), _sample(60, room="B")], T0, DOWN_AFTER_S)
+    _run(
+        feedback, [_sample(96, deficit=-0.15), _sample(60, room="B")], T0, DOWN_AFTER_S
+    )
 
     assert feedback.feedback_k == -1.0
 
@@ -234,9 +236,7 @@ def test_no_step_against_a_target_limit() -> None:
 def test_a_freeze_drops_the_count_towards_up() -> None:
     feedback = FlowFeedback()
     end = _run(feedback, [_sample(99)], T0, UP_AFTER_S - 120)
-    end = _run(
-        feedback, [_sample(99)], end + 60, 600, frozen=FeedbackFreeze.HOT_WATER
-    )
+    end = _run(feedback, [_sample(99)], end + 60, 600, frozen=FeedbackFreeze.HOT_WATER)
     assert feedback.count_s == 0.0
 
     _run(feedback, [_sample(99)], end + 60, UP_AFTER_S - 120)
@@ -519,7 +519,8 @@ def test_neutral_keeps_the_count() -> None:
 
 
 @pytest.mark.parametrize(
-    ("deficit", "seconds"), [(0.2, UP_AFTER_S), (0.4, UP_AFTER_S / 2), (0.9, UP_AFTER_S / 3)]
+    ("deficit", "seconds"),
+    [(0.2, UP_AFTER_S), (0.4, UP_AFTER_S / 2), (0.9, UP_AFTER_S / 3)],
 )
 def test_further_short_steps_up_faster(deficit: float, seconds: float) -> None:
     feedback = FlowFeedback()

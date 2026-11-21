@@ -186,7 +186,9 @@ def test_heating_season_targets() -> None:
     assert morning.write == 44.0
     window = controller.decide(
         _inputs(
-            DAY.replace(hour=13), tank_c=40.0, current_target_c=44.0,
+            DAY.replace(hour=13),
+            tank_c=40.0,
+            current_target_c=44.0,
             heating_season=True,
         )
     )
@@ -223,7 +225,7 @@ def test_flow_charge_starts_above_the_aim_and_ends_near_it() -> None:
 
 
 def test_a_tank_start_without_flow_rise_ends_with_the_tank() -> None:
-    detector, states = _flow_detector(
+    _detector, states = _flow_detector(
         (36.0, 36.0, True),
         (37.0, 36.0, True),
         (37.0, 36.0, False),
