@@ -278,6 +278,11 @@ With a flow device, `custom:heating-controller-curve-card` (`entity:` its *Hold 
 curves* sensor) plots the heat source's curve against each room's hold flow and lets you
 try a different curve before setting it on the heat source.
 
+`custom:heating-controller-rooms-card` needs no configuration: it lists every room by floor
+with supply, radiator and learning views.
+`custom:heating-controller-flow-card` (no configuration either) shows how the flow target
+comes about, the valve feedback, the switches, the heating season and the flow settings.
+
 ## Notes
 
 - Each room is a sub-entry of the hub — deleting a room removes only that room's entities and

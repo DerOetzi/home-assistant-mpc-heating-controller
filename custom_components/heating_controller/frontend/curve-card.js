@@ -47,6 +47,16 @@ const EXPERIMENT_FIELDS = [
   { key: "bumpWidth", label: "curve_bump_width", step: 1 },
 ];
 
+// Every number of the curve, as the "Heating curve" section edits them.
+const CURVE_SETTING_FIELDS = [
+  { key: "outdoorCold", label: "curve_outdoor_cold" },
+  { key: "outdoorWarm", label: "curve_outdoor_warm" },
+  { key: "flowCold", label: "curve_flow_cold" },
+  { key: "flowWarm", label: "curve_flow_warm" },
+  { key: "bump", label: "curve_bump" },
+  { key: "bumpWidth", label: "curve_bump_width" },
+];
+
 const W = 600;
 const H = 320;
 const PAD = { left: 38, right: 10, top: 10, bottom: 30 };
@@ -90,6 +100,8 @@ const STYLES = `
     display: grid; gap: 8px;
   }
   .experiment-head { font-weight: 500; }
+  .curve-settings { margin-top: 12px; }
+  .curve-settings summary { cursor: pointer; font-weight: 500; margin-bottom: 8px; }
   .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
   .fields label { display: grid; gap: 2px; font-size: 0.85em; color: var(--secondary-text-color); }
   .fields input {
@@ -123,6 +135,7 @@ export class HeatingControllerCurveCard extends HTMLElement {
     this._visible = null;
     this._experiment = null;
     this._selected = null;
+    this._settingsOpen = false;
     this._signature = null;
   }
 
@@ -158,11 +171,15 @@ export class HeatingControllerCurveCard extends HTMLElement {
     if (!sensor || !Array.isArray(rooms) || !Array.isArray(outdoorValues)) return null;
     const deviceId = hass.entities?.[sensor.entity_id]?.device_id;
     const curve = {};
+    const numbers = {};
     for (const entry of Object.values(hass.entities ?? {})) {
       if (entry.device_id !== deviceId || entry.platform !== DOMAIN) continue;
       const field = CURVE_NUMBER_KEYS[entry.translation_key];
       const value = Number.parseFloat(hass.states[entry.entity_id]?.state);
-      if (field && Number.isFinite(value)) curve[field] = value;
+      if (field && Number.isFinite(value)) {
+        curve[field] = value;
+        numbers[field] = hass.states[entry.entity_id];
+      }
     }
     if (Object.keys(curve).length !== Object.keys(CURVE_NUMBER_KEYS).length) return null;
     return {
@@ -170,6 +187,7 @@ export class HeatingControllerCurveCard extends HTMLElement {
       rooms,
       outdoorValues,
       curve,
+      numbers,
       feedback: Number(sensor.attributes.feedback_k ?? 0),
       outdoorNow: sensor.attributes.outdoor_temperature_c,
       leadDemand: sensor.attributes.lead_demand_pct,
@@ -245,6 +263,7 @@ export class HeatingControllerCurveCard extends HTMLElement {
           <div class="fields"></div>
           <div class="actions">
             <button type="button" data-action="source">${t(this._hass, "curve_copy_source")}</button>
+            <button type="button" data-action="apply">${t(this._hass, "curve_apply")}</button>
           </div>
           <div class="actions">
             <span class="actions-label">${t(this._hass, "curve_copy_recommendation")}</span>
@@ -254,9 +273,14 @@ export class HeatingControllerCurveCard extends HTMLElement {
           </div>
           <div class="summary"></div>
         </div>
+        <details class="curve-settings"${this._settingsOpen ? " open" : ""}>
+          <summary>${t(this._hass, "curve_settings")}</summary>
+          <div class="fields"></div>
+        </details>
       </ha-card>`;
     this._renderChips(data);
     this._renderFields();
+    this._renderSettings(data);
     root.querySelectorAll(".actions button").forEach((button) =>
       button.addEventListener("click", () => this._copy(button.dataset.action))
     );
@@ -291,7 +315,7 @@ export class HeatingControllerCurveCard extends HTMLElement {
   }
 
   _renderFields() {
-    const box = this.shadowRoot.querySelector(".fields");
+    const box = this.shadowRoot.querySelector(".experiment-box .fields");
     box.innerHTML = "";
     for (const field of EXPERIMENT_FIELDS) {
       const label = document.createElement("label");
@@ -315,13 +339,68 @@ export class HeatingControllerCurveCard extends HTMLElement {
   }
 
   _syncFields() {
-    this.shadowRoot.querySelectorAll(".fields input").forEach((input) => {
+    this.shadowRoot.querySelectorAll(".experiment-box .fields input").forEach((input) => {
       input.value = String(this._experiment[input.dataset.key]);
     });
   }
 
+  // The heat source's curve itself: each number written on change.
+  _renderSettings(data) {
+    const details = this.shadowRoot.querySelector(".curve-settings");
+    details.addEventListener("toggle", () => {
+      this._settingsOpen = details.open;
+    });
+    const box = details.querySelector(".fields");
+    for (const field of CURVE_SETTING_FIELDS) {
+      const stateObj = data.numbers[field.key];
+      const attrs = stateObj.attributes ?? {};
+      const label = document.createElement("label");
+      label.textContent = t(this._hass, field.label);
+      const input = document.createElement("input");
+      input.type = "number";
+      input.inputMode = "decimal";
+      for (const limit of ["min", "max", "step"]) {
+        if (attrs[limit] != null) input[limit] = String(attrs[limit]);
+      }
+      input.value = String(data.curve[field.key]);
+      input.addEventListener("change", () => {
+        const value = Number.parseFloat(input.value);
+        if (!Number.isFinite(value) || value === data.curve[field.key]) return;
+        this._hass.callService("number", "set_value", { entity_id: stateObj.entity_id, value });
+      });
+      label.appendChild(input);
+      box.appendChild(label);
+    }
+  }
+
+  // Writes the trial curve's fields that differ into the curve numbers.
+  _apply() {
+    const data = this._dataCache;
+    const changed = EXPERIMENT_FIELDS.filter(
+      (field) => this._experiment[field.key] !== data.curve[field.key]
+    );
+    if (!changed.length) return;
+    const list = changed
+      .map(
+        (field) =>
+          `${t(this._hass, field.label)}: ${data.curve[field.key]} → ${this._experiment[field.key]}`
+      )
+      .join("\n");
+    if (!window.confirm(`${t(this._hass, "curve_apply_confirm")}\n${list}`)) return;
+    for (const field of changed) {
+      this._hass.callService("number", "set_value", {
+        entity_id: data.numbers[field.key].entity_id,
+        value: this._experiment[field.key],
+      });
+    }
+  }
+
   _copy(action) {
     const data = this._dataCache;
+    if (action === "apply") {
+      this._apply();
+      return;
+    }
     if (action === "source") {
       this._experiment = { ...data.curve };
     } else {

@@ -707,6 +707,7 @@ works out:
   `boost_room`.
 - *Flow feedback* attributes: `lead_demand_pct`, `lead_room`, `lead_deficit_c`,
   `feedforward_flow_c`, `frozen`, `frozen_reason`, `flow_timer_min` (the count, minutes; up at −30, down at +60, at night +90),
+  `step_up_at_min` / `step_down_at_min` (where the count steps, the night's value at night),
   `night`, `locked_direction` (+1 / −1 while a step's lock holds that direction back, else 0),
   `catch_up_until` / `catch_up_reason` (end and cause of a running catch-up, else empty),
   `room_variant_up` / `room_variant_down` (steps a count per room would have taken: up when

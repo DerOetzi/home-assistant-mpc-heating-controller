@@ -33,6 +33,7 @@ from .const import (
 )
 from .control.circulation import CirculationReason
 from .control.flow import ActuatorMode
+from .control.flow_feedback import UP_AFTER_S
 from .control.hot_water import HotWaterPhase
 from .control.legionella import LegionellaState
 from .controller.mpc.learner import UA_BALANCE_MIN_WINDOW_S
@@ -439,6 +440,8 @@ class FlowFeedbackSensor(FlowEntity, SensorEntity):
             "frozen": feedback.frozen is not None,
             "frozen_reason": None if feedback.frozen is None else str(feedback.frozen),
             "flow_timer_min": round(feedback.count_s / 60),
+            "step_up_at_min": -round(UP_AFTER_S / 60),
+            "step_down_at_min": round(feedback.down_after_s / 60),
             "night": feedback.night,
             "locked_direction": feedback.locked_sign(time.time()),
             "catch_up_until": dt_util.utc_from_timestamp(

@@ -148,13 +148,83 @@ plots flow temperature over outdoor temperature:
   with the lead demand and its room.
 
 Tap or hover the chart to read every value at one outdoor temperature; a dotted line
-marks the current one. The trial curve and the visible rooms are kept in the browser
-only; the card writes nothing.
+marks the current one. The trial curve and the visible rooms are kept in the browser.
+"Apply trial curve" writes its fields that differ into the curve numbers (after listing
+them for confirmation). Folded below, "Heating curve settings" edits all six curve
+numbers directly; each is written when it changes. The curve numbers say what the heat
+source is set to: set the same on the heat source.
 
 ```yaml
 type: custom:heating-controller-curve-card
 entity: sensor.vorlauf_hold_flow_curves   # the flow device's "Hold flow curves" sensor
 title: Heizkurve                          # optional
+```
+
+## Rooms card
+
+`custom:heating-controller-rooms-card` shows every room of the integration in one table,
+grouped by Home Assistant floor (lowest level first, rooms without a floor last). It needs
+no entities: rooms are the integration's devices with a heating mode. Inside a floor the
+rooms follow `rooms:` (device ids or names), then the integration's own order. Tabs switch
+between three views; the last one picked is kept in the browser.
+
+- **Supply:** mode icon (a dot marks a flow lead room), actual and target temperature,
+  supply judgement with lead demand (tooltip: hint or reason), hold flow with gate (dimmed
+  while the gate is closed, highlighted for the room that sets the flow), hold flow and
+  boost flow ("–" while no boost is needed). Behind the room name (in every view) a
+  thermometer marks the lead room that sets the flow right now ("Lead room") and an arrow
+  the room the valve feedback follows ("Feedback"), captioned where the card has room. The supply
+  chips share one width.
+- **Radiators:** actual temperature, TRV target, valve opening per TRV (labelled by what
+  differs in their names), window state, a warning while a radiator doesn't heat.
+- **Learning:** UA and capacity status (✓ learned, ⚠ worth a look) with their factors,
+  additional heat, learned gain G with σ, what is determined (G / profile hours / sun
+  terms), residual RMS.
+
+Tap a value to open its entity. The card writes nothing.
+
+On a narrow card (phone, one-column section) each room becomes a tile: the columns stack
+as caption and value, as many side by side as fit. A room with several TRVs shows one tile per valve,
+captioned by its label (e.g. "Gross", "Klein"); a single one is captioned "Valve". All views switch below 780 px card
+width, the width the learning view needs. With more than
+one floor the tiles show one floor at a time, picked by a second row of tabs (remembered
+in the browser like the view).
+
+```yaml
+type: custom:heating-controller-rooms-card
+title: Räume                         # optional
+view: supply                         # optional start view
+views: [supply, radiators, learning] # optional; one view hides the tabs
+rooms: [Wohnzimmer, Esszimmer]       # optional order inside a floor
+```
+
+## Flow card
+
+`custom:heating-controller-flow-card` shows what the flow device and the hub decide about
+the shared flow. It needs no configuration (optional `title:`); its entities are found by
+translation key.
+
+- **Warnings** in the header: heat source unreachable, outdoor temperature missing,
+  radiators not heating (how many).
+- **Flow target** with its source (lead rooms and the room that sets it, boost, threshold,
+  hot water charge, fallback) and why it holds.
+- **Derivation:** feedforward + feedback = lead target, beside boost and threshold; curve +
+  measured correction → offset (target and actual) → effective curve, and the hold flow
+  reserve. Below: why the correction pauses, write errors, an offset changed elsewhere.
+- **Valve feedback:** a bar from the step up to the step down (the night's times at night)
+  with the count, the lead room's valve and deficit, a lock, night, freeze and catch-up,
+  the last change, the would-be steps per room, and a reset button (asks first).
+- **Switches:** write flow, comfort, PV surplus; the write budget.
+- **Heating season:** lead rooms demanding heat, switch on/off due, last demand, demand
+  hours in 24 h.
+- **Settings** (folded): hysteresis, hold time, hot water raise, flow threshold, heating
+  season thresholds — changed right on the card.
+
+Tap a value to open its entity.
+
+```yaml
+type: custom:heating-controller-flow-card
+title: Vorlauf   # optional
 ```
 
 ## Localization

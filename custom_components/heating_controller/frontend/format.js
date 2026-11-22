@@ -16,6 +16,9 @@ export const num = (value, digits = 1, locale) => {
   }
 };
 
+// A formatted number with its unit; "–" stays bare.
+export const withUnit = (text, unit) => (unit && text !== "–" ? `${text}\u00a0${unit}` : text);
+
 export const localeOf = (hass) => hass?.locale?.language;
 
 // The value of a hand-added row. A number is rounded and gets its unit; any

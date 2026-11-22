@@ -28,7 +28,7 @@ export const managedHeaderRows = (hass, roles) => {
 
 // Shared by card and editor so both resolve the controller's entities the
 // same way — by translation_key, never by entity_id pattern.
-export const resolveRoles = (hass, deviceId) => {
+export const resolveRoles = (hass, deviceId, roleMap = ROLES) => {
   const roles = {};
   if (!hass || !deviceId) return roles;
   const byTranslationKey = {};
@@ -36,7 +36,7 @@ export const resolveRoles = (hass, deviceId) => {
     if (entry.device_id !== deviceId || entry.platform !== DOMAIN) continue;
     if (entry.translation_key) byTranslationKey[entry.translation_key] = entry.entity_id;
   }
-  for (const [key, role] of Object.entries(ROLES)) {
+  for (const [key, role] of Object.entries(roleMap)) {
     const entityId = byTranslationKey[key];
     if (entityId && hass.states[entityId]) roles[role] = hass.states[entityId];
   }

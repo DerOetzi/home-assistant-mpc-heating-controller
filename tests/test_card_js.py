@@ -34,6 +34,10 @@ _MODULES = [
     "editor.js",
     "curve.js",
     "curve-card.js",
+    "rooms.js",
+    "rooms-card.js",
+    "flow.js",
+    "flow-card.js",
 ]
 
 _IMPORT_RE = re.compile(
@@ -768,3 +772,229 @@ def test_curve_card_escapes_room_names(ctx) -> None:
     assert ctx.eval("escapeHtml('<b>\"A&B\"</b>')") == (
         "&lt;b&gt;&quot;A&amp;B&quot;&lt;/b&gt;"
     )
+
+
+_ROOMS_HASS = """({
+  floors: {
+    og: {name: 'Obergeschoss', level: 1},
+    eg: {name: 'Erdgeschoss', level: 0},
+  },
+  areas: {a1: {floor_id: 'eg'}, a2: {floor_id: 'eg'}, a3: {floor_id: 'og'}, a4: {}},
+  devices: {
+    d1: {name: 'Wohnzimmer', area_id: 'a1'},
+    d2: {name: 'Esszimmer', name_by_user: 'Essen', area_id: 'a2'},
+    d3: {name: 'Bad', area_id: 'a3'},
+    d4: {name: 'Werkstatt', area_id: 'a4'},
+    d5: {name: 'Fremd'},
+  },
+  entities: {
+    'select.a': {platform: 'heating_controller', translation_key: 'heating_mode', device_id: 'd1'},
+    'select.b': {platform: 'heating_controller', translation_key: 'heating_mode', device_id: 'd2'},
+    'select.c': {platform: 'heating_controller', translation_key: 'heating_mode', device_id: 'd3'},
+    'select.d': {platform: 'heating_controller', translation_key: 'heating_mode', device_id: 'd4'},
+    'select.e': {platform: 'other', translation_key: 'heating_mode', device_id: 'd5'},
+    'sensor.f': {platform: 'heating_controller', translation_key: 'supply', device_id: 'd1'},
+  },
+})"""
+
+
+def test_rooms_card_finds_rooms_by_their_mode_entity(ctx) -> None:
+    assert _json(ctx, f"roomDeviceIds({_ROOMS_HASS})") == ["d1", "d2", "d3", "d4"]
+
+
+def test_rooms_card_groups_by_floor_level_then_configured_order(ctx) -> None:
+    groups = _json(
+        ctx,
+        f"groupRooms({_ROOMS_HASS}, ['d3', 'd4', 'd1', 'd2'], null,"
+        " ['Wohnzimmer', 'Essen'])",
+    )
+    assert [(g["name"], [r["name"] for r in g["rooms"]]) for g in groups] == [
+        ("Erdgeschoss", ["Wohnzimmer", "Essen"]),
+        ("Obergeschoss", ["Bad"]),
+        ("", ["Werkstatt"]),
+    ]
+    # The configured order (by name or device id) wins over the integration's.
+    groups = _json(
+        ctx,
+        f"groupRooms({_ROOMS_HASS}, ['d1', 'd2'], ['d2'], ['Wohnzimmer', 'Essen'])",
+    )
+    assert [r["id"] for r in groups[0]["rooms"]] == ["d2", "d1"]
+
+
+def test_rooms_card_shortens_trv_names_to_what_differs(ctx) -> None:
+    assert _json(
+        ctx,
+        "trvLabels({a: 'Heizung_Wohnzimmergross', b: 'Heizung_Wohnzimmerklein'})",
+    ) == {"a": "Gross", "b": "Klein"}
+    assert _json(ctx, "trvLabels({a: 'Heizung_Bad'})") == {"a": ""}
+
+
+def test_rooms_card_judges_learning_states(ctx) -> None:
+    assert ctx.eval("learningJudgement('ua', 'learned')") == "ok"
+    assert ctx.eval("learningJudgement('ua', 'drift')") == "attention"
+    assert ctx.eval("learningJudgement('capacity', 'disturbed')") == "attention"
+    assert ctx.eval("learningJudgement('capacity', 'collecting')") == ""
+
+
+_ROOMS_RENDER_SETUP = """
+HTMLElement.prototype.attachShadow = function () {
+  this.shadowRoot = { innerHTML: '', querySelectorAll: function () { return []; } };
+  return this.shadowRoot;
+};
+var E = {}, S = {}, DEV = {flow: {name: 'Vorlauf'}};
+function add(device, key, id, state, attributes) {
+  E[id] = {entity_id: id, platform: 'heating_controller', translation_key: key, device_id: device};
+  S[id] = {entity_id: id, state: String(state), attributes: attributes || {}};
+}
+function room(d, name, area, o) {
+  DEV[d] = {name: name, area_id: area};
+  add(d, 'heating_mode', 'select.' + d, o.mode);
+  add(d, 'heating_automation', 'switch.' + d, 'on', {window_contact_entities: ['binary_sensor.' + d + '_win']});
+  S['binary_sensor.' + d + '_win'] = {entity_id: 'binary_sensor.' + d + '_win', state: o.win ? 'on' : 'off', attributes: {}};
+  add(d, 'room_temperature', 'sensor.' + d + '_t', o.t);
+  add(d, 'supply', 'sensor.' + d + '_supply', o.supply, {demand_pct: o.dem, reason: o.reason});
+  var valves = {}, targets = {};
+  o.valves.forEach(function (v, i) {
+    var id = 'climate.' + d + i;
+    valves[id] = v; targets[id] = o.soll;
+    S[id] = {entity_id: id, state: 'heat', attributes: {friendly_name: 'Heizung_' + name + ['gross', 'klein'][i]}};
+  });
+  add(d, 'heating_demand', 'sensor.' + d + '_dem', o.dem, {trv_valve_positions: valves, trv_target_temps: targets});
+  add(d, 'gated_hold_flow_temperature', 'sensor.' + d + '_gh', o.gh, {flow_gate_closed: !!o.gate, calculation_target_temperature_c: o.soll});
+  add(d, 'hold_flow_temperature', 'sensor.' + d + '_h', o.h);
+  add(d, 'boost_flow_temperature', 'sensor.' + d + '_b', o.b, {boost_active: false});
+  add(d, 'radiator_not_heating', 'binary_sensor.' + d + '_rnh', o.rnh ? 'on' : 'off');
+  add(d, 'ua_learning_status', 'sensor.' + d + '_uas', o.uas, {learned_gain_w: 120.4, gain_sigma_w: 31, gain_determined: true});
+  add(d, 'ua_factor', 'sensor.' + d + '_uaf', 0.523);
+  add(d, 'capacity_learning_status', 'sensor.' + d + '_cs', 'collecting');
+  add(d, 'capacity_factor', 'sensor.' + d + '_cf', 1.0412);
+  add(d, 'additional_heat', 'sensor.' + d + '_ah', 85,
+      {profile_determined: [true, false], sun_determined: {s: true}, residual_rms_w: 44});
+}
+room('wz', 'Wohnzimmer', 'a1', {mode: 'comfort', t: 21.2, soll: 21.5, supply: 'undersupplied', dem: 92, gh: 41.3, h: 41.3, b: 0, valves: [95, 88], uas: 'learned'});
+room('ka', 'Katharina', 'a2', {mode: 'eco', t: 20.8, soll: 21, supply: 'not_rated', reason: 'window_open', dem: 0, gh: 30, h: 33.4, b: 44.2, valves: [20], uas: 'drift', gate: true, win: true, rnh: true});
+add('flow', 'hold_flow_curves', 'sensor.curves', 'ok', {rooms: [{name: 'Wohnzimmer', lead: true}, {name: 'Katharina', lead: false}]});
+add('flow', 'flow_target', 'sensor.soll', 41.3, {source: 'lead', room: 'Wohnzimmer'});
+add('flow', 'flow_feedback', 'sensor.fb', 3, {lead_room: 'Katharina'});
+var ROOMS_HASS = {
+  entities: E, states: S, devices: DEV,
+  areas: {a1: {floor_id: 'eg'}, a2: {floor_id: 'og'}},
+  floors: {eg: {name: 'Erdgeschoss', level: 0}, og: {name: 'Obergeschoss', level: 1}},
+  locale: {language: 'de'},
+  formatEntityState: function (s) { return s.state; },
+};
+function renderRooms(view) {
+  var card = new HeatingControllerRoomsCard();
+  card.setConfig({views: [view]});
+  card.hass = ROOMS_HASS;
+  return card.shadowRoot.innerHTML;
+}
+"""
+
+
+@pytest.mark.parametrize("view", ["supply", "radiators", "learning"])
+def test_rooms_card_renders_every_view(ctx, view) -> None:
+    ctx.eval(_ROOMS_RENDER_SETUP)
+    html = ctx.eval(f"renderRooms('{view}')")
+    assert "Erdgeschoss" in html and "Obergeschoss" in html
+    assert html.index("Wohnzimmer") < html.index("Katharina")
+    for broken in ("undefined", "NaN", "null"):
+        assert broken not in html
+    # Narrow cards stack each room into a tile captioned by the column names.
+    assert f'<table class="view-{view} floor-tabbed">' in html
+    # Floor tabs for the stacked layout; the first floor is picked, the other hidden there.
+    assert 'data-floor="eg" aria-pressed="true">Erdgeschoss<' in html
+    assert 'data-floor="og" aria-pressed="false">Obergeschoss<' in html
+    assert html.count('class="other-floor"') == 1
+    assert f"table.view-{view} tr.other-floor" in html
+    assert f"table.view-{view} thead {{ display: none; }}" in html
+    assert f"table.view-{view} td:empty {{ display: none; }}" in html
+    assert 'data-label="Raum"' in html
+    # The feedback marker sits behind the room name, not in a value column.
+    feedback = html.index("mdi:arrow-up-down")
+    assert html.index("Katharina") < feedback < html.index("</td>", feedback)
+    assert ">Rückkopplung<" in html
+    # The lead room that sets the flow gets its own marker behind the name.
+    lead = html.index("mdi:thermometer-chevron-up")
+    assert html.index("Wohnzimmer") < lead < html.index("</td>", lead)
+    assert ">Leitraum<" in html
+    if view == "supply":
+        assert 'class="chip undersupplied">Zu knapp 92 %' in html
+        assert 'class="flow-room"' in html and 'class="muted"' in html
+        assert ">44.2\u00a0°C<" in html or ">44,2\u00a0°C<" in html
+    elif view == "radiators":
+        assert ">Gross<" in html and ">Klein<" in html
+        # Two TRVs: one tile each, captioned by their labels; one TRV: "Ventil".
+        assert 'class="multi-valve"' in html
+        assert 'data-label="Ventil"' in html
+        assert "mdi:window-open-variant" in html and "mdi:radiator-off" in html
+    else:
+        assert "✓ learned" in html and "⚠ drift" in html
+        assert "\u00a0W<" in html
+        assert "✓ / 1/2 / 1/1" in html
+
+
+_FLOW_RENDER_SETUP = """
+HTMLElement.prototype.attachShadow = function () {
+  this.shadowRoot = { innerHTML: '', activeElement: null,
+    querySelectorAll: function () { return []; }, querySelector: function () { return null; } };
+  return this.shadowRoot;
+};
+var FE = {}, FS = {};
+function fadd(id, key, state, attributes) {
+  FE[id] = {entity_id: id, platform: 'heating_controller', translation_key: key, device_id: 'flow'};
+  FS[id] = {entity_id: id, state: String(state), attributes: attributes || {}};
+}
+fadd('sensor.soll', 'flow_target', 41.5, {source: 'lead', room: 'Rebekka', feedforward_flow_c: 38.5,
+  feedback_k: 3.0, threshold_c: 31, measured_correction_k: 0, measured_correction_frozen_reason: 'settling',
+  boost_flow_c: null, reason: ''});
+fadd('sensor.fb', 'flow_feedback', 3.0, {flow_timer_min: -22, step_up_at_min: -30, step_down_at_min: 60,
+  lead_room: 'Rebekka', lead_demand_pct: 100, lead_deficit_c: 0.29, locked_direction: 1, night: false,
+  frozen: false, last_change: '2026-11-22T10:41:11+00:00', room_variant_up: 59, room_variant_down: 8});
+fadd('sensor.kurve', 'flow_curve', 39.1);
+fadd('sensor.eff', 'flow_effective_curve', 42.1);
+fadd('sensor.stell', 'flow_actuator_target', 3, {last_error: null});
+fadd('sensor.schwelle', 'flow_threshold', 31);
+fadd('number.schwelle', 'flow_threshold', 31, {min: 20, max: 40, step: 0.5, unit_of_measurement: '°C'});
+fadd('number.hyst', 'flow_hysteresis', 0.5, {min: 0, max: 3, step: 0.1});
+fadd('sensor.curves', 'hold_flow_curves', 'ok', {outdoor_temperature_c: null});
+fadd('switch.write', 'flow_write', 'on');
+fadd('switch.pv', 'pv_boost', 'off');
+fadd('button.reset', 'flow_feedback_reset', 'unknown');
+fadd('binary_sensor.reach', 'heat_source_reachable', 'off');
+fadd('binary_sensor.on', 'heating_season_switch_on', 'on');
+fadd('sensor.budget', 'write_budget', 119, {own_writes_today: 6, max_writes_per_day: 40});
+var FLOW_HASS = {entities: FE, states: FS, locale: {language: 'de'},
+  formatEntityState: function (s) { return s.state; }};
+function renderFlow() {
+  var card = new HeatingControllerFlowCard();
+  card.setConfig({});
+  card.hass = FLOW_HASS;
+  return card.shadowRoot.innerHTML;
+}
+"""
+
+
+def test_flow_card_renders(ctx) -> None:
+    ctx.eval(_FLOW_RENDER_SETUP)
+    html = ctx.eval("renderFlow()")
+    for broken in ("undefined", "NaN", "null", "flow_"):
+        assert broken not in html.replace("heating-controller-flow", "")
+    assert "Wärmeerzeuger nicht erreichbar" in html and "Außentemperatur fehlt" in html
+    assert "Leiträume · Rebekka" in html
+    assert "Korrektur pausiert: Wärmeerzeuger stellt ein" in html
+    assert "kein weiterer Schritt hoch" in html and "0.29 K unter Soll" in html
+    # -22 min on a bar from -30 to +60.
+    assert "left:" + str(8 / 90 * 100) + "%" in html
+    assert 'data-number="number.schwelle"' in html and 'min="20"' in html
+    assert 'data-number="sensor.schwelle"' not in html
+    assert 'class="toggle on" data-toggle="switch.write"' in html
+    assert "Einschalten fällig" in html
+
+
+def test_flow_card_counter_position(ctx) -> None:
+    assert ctx.eval("counterPosition(0, -30, 60)") == pytest.approx(100 / 3)
+    assert ctx.eval("counterPosition(-99, -30, 60)") == 0
+    assert ctx.eval("counterPosition(99, -30, 90)") == 100
+    assert ctx.eval("counterPosition(null, -30, 60)") is None
+    assert ctx.eval("counterPosition('x', -30, 60)") is None

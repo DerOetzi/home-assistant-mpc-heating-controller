@@ -291,6 +291,10 @@ async def test_feedback_frozen_while_not_writing(
     assert state.state == "0.0"
     assert state.attributes["frozen"] is True
     assert state.attributes["frozen_reason"] == "write_off"
+    assert state.attributes["step_up_at_min"] == -30
+    assert state.attributes["step_down_at_min"] == (
+        90 if state.attributes["night"] else 60
+    )
 
 
 async def test_feedback_frozen_below_the_threshold(
