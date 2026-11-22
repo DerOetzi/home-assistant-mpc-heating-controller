@@ -275,3 +275,24 @@ def test_boost_raises_the_target() -> None:
 
     lower = controller.decide(_inputs(boost_flow_c=30.0), CURVE, T0)
     assert lower.source is FlowSource.LEAD
+
+
+def test_measured_correction_lifts_the_offset_past_the_hysteresis() -> None:
+    controller = FlowController(_config(), T0 - 3600)
+    # 33 + 1 = 34 against curve 37.06 -> -3.06: actual -3 is within the band.
+    assert controller.decide(_inputs(actual=-3.0), CURVE, T0).write is None
+
+    # The heat source lands 1 K below curve plus offset: -2.06 -> -2.
+    decision = controller.decide(_inputs(actual=-3.0, correction_k=-1.0), CURVE, T0)
+    assert decision.target_flow_c == 34.0
+    assert decision.write == -2.0
+
+
+def test_measured_correction_moves_the_upper_bound() -> None:
+    controller = FlowController(_config(maximum=2.0), T0 - 3600)
+    plain = controller.bounds(_inputs(feedforward_flow_c=38.0), CURVE)
+    corrected = controller.bounds(
+        _inputs(feedforward_flow_c=38.0, correction_k=-1.0), CURVE
+    )
+    assert plain is not None and corrected is not None
+    assert corrected.upper_c == round(plain.upper_c - 1.0, 6)

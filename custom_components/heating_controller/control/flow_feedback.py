@@ -6,10 +6,13 @@ say: a room near fully open and clearly below its target counts it down,
 the faster the further it is short; a room well below open and not above its
 target counts it up; a room that holds the flow brings it back towards
 zero. A room above its target (cooking, sun) counts neither way. Half an
-hour down means too little flow: one step up; an hour up means the flow can
-drop: one step down. The radiators and rooms answer a step only over hours:
-for STEP_LOCK_S after a step the count does not move towards another one in
-the same direction, the other direction stays open. The sum of the steps,
+hour down means too little flow: one step up; an hour up (at night an hour
+and a half) means the flow can drop: one step down. The radiators and rooms
+answer a step only over hours: for a lock after a step the count does not
+move towards another one in the same direction, the other direction stays
+open. The lock is shorter up than down, and at night shorter still up and
+longer down: a room short at night cools further until the morning, a step
+down at night has little use. The sum of the steps,
 feedback_k, is added to the feedforward. It only moves while what was
 decided also reaches the heat source and the heat source heats.
 
@@ -48,12 +51,18 @@ UP_AFTER_S = 30 * 60
 UP_RATE_DEFICIT_C = 0.2
 UP_RATE_MAX = 3.0
 # Down: no lead room holds the flow and one is below this and not above its
-# target; the count goes up, a step at DOWN_AFTER_S. A room this far open
-# holds it: the count goes back to zero.
+# target; the count goes up, a step at DOWN_AFTER_S (at night
+# NIGHT_DOWN_AFTER_S). A room this far open holds it: the count goes back to
+# zero.
 DEMAND_DOWN_PCT = 80.0
 DOWN_AFTER_S = 3600
-# After a step the count stays at zero on that step's side this long.
-STEP_LOCK_S = 90 * 60
+NIGHT_DOWN_AFTER_S = 90 * 60
+# After a step the count stays at zero on that step's side this long, by
+# direction and day or night at the time of asking.
+STEP_LOCK_UP_S = 60 * 60
+STEP_LOCK_DOWN_S = 90 * 60
+NIGHT_STEP_LOCK_UP_S = 45 * 60
+NIGHT_STEP_LOCK_DOWN_S = 120 * 60
 # A room more than this above its target holds the flow neither up nor down:
 # its open valve comes from the TRV's own reading, more flow would not help it.
 OVER_TARGET_C = 0.1
@@ -95,6 +104,8 @@ class FlowFeedback:
         self.last_step_sign = 0
         self.last_step_ts: float | None = None
         self.frozen: FeedbackFreeze | None = None
+        # Whether the last update ran at night: the night's times apply.
+        self.night = False
         # The room that decides: one that wants more, else the highest one
         # that holds the flow, else the highest opening.
         self.lead: DemandSample | None = None
@@ -145,6 +156,7 @@ class FlowFeedback:
         now_ts: float,
         at_lower_limit: bool = False,
         at_upper_limit: bool = False,
+        night: bool = False,
     ) -> None:
         """Advance the timers and take at most one step.
 
@@ -158,6 +170,7 @@ class FlowFeedback:
         )
         self._last_ts = now_ts
         self.frozen = frozen
+        self.night = night
         self._track_pause(frozen, now_ts)
         wanting = [s for s in samples if wants_more(s)]
         holding = [s for s in samples if holds(s)]
@@ -185,15 +198,30 @@ class FlowFeedback:
             self._room_count_s.clear()
             if not at_upper_limit:
                 self._step(step_k, now_ts)
-        elif self._count_s >= DOWN_AFTER_S:
+        elif self._count_s >= self.down_after_s:
             self._count_s = 0.0
             self._room_count_s.clear()
             if not at_lower_limit:
                 self._step(-step_k, now_ts)
 
+    @property
+    def down_after_s(self) -> float:
+        """How long the count runs up towards a step down."""
+        return float(NIGHT_DOWN_AFTER_S if self.night else DOWN_AFTER_S)
+
+    def lock_s(self, sign: int) -> float:
+        """How long a step in this direction locks its own direction."""
+        if sign > 0:
+            return float(NIGHT_STEP_LOCK_UP_S if self.night else STEP_LOCK_UP_S)
+        return float(NIGHT_STEP_LOCK_DOWN_S if self.night else STEP_LOCK_DOWN_S)
+
     def locked_sign(self, now_ts: float) -> int:
         """The direction a step's lock still holds back: +1, -1 or 0."""
-        if self.last_step_ts is None or now_ts - self.last_step_ts >= STEP_LOCK_S:
+        if (
+            self.last_step_ts is None
+            or self.last_step_sign == 0
+            or now_ts - self.last_step_ts >= self.lock_s(self.last_step_sign)
+        ):
             return 0
         return self.last_step_sign
 
@@ -224,10 +252,12 @@ class FlowFeedback:
                     self.room_steps_up.get(sample.room, 0) + 1
                 )
                 stepped_up = True
-            self._room_count_s[sample.room] = min(float(DOWN_AFTER_S), count)
+            self._room_count_s[sample.room] = min(self.down_after_s, count)
         if stepped_up:
             self.variant_up += 1
-        elif all(self._room_count_s[sample.room] >= DOWN_AFTER_S for sample in samples):
+        elif all(
+            self._room_count_s[sample.room] >= self.down_after_s for sample in samples
+        ):
             self.variant_down += 1
             self._room_count_s.clear()
 

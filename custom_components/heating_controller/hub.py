@@ -52,6 +52,7 @@ from .const import (
     CurveEnd,
     RoofOrientation,
 )
+from .control.flow_correction import FlowCorrection
 from .control.flow_feedback import DemandSample, FlowFeedback
 from .control.heating_season import HeatingSeason
 from .control.hot_water import FlowChargeDetector
@@ -119,6 +120,7 @@ class HeatingHub:
         self.flow_seen_ts = time.time()
         self.season = HeatingSeason()
         self.flow_feedback = FlowFeedback()
+        self.flow_correction = FlowCorrection()
         self.charge_detector = FlowChargeDetector()
         # Nothing computes or writes before the inputs are there.
         self.startup_gate = StartupGate(hass, self._async_start)
@@ -169,6 +171,7 @@ class HeatingHub:
         self.write_budget.restore(stored.get("write_budget", {}))
         self.season.restore(stored.get("heating_season", {}))
         self.flow_feedback.restore(stored.get("flow_feedback", {}))
+        self.flow_correction.restore(stored.get("flow_correction", {}))
         surfaces = self.used_surfaces()
         if surfaces:
             self.irradiance = IrradianceProvider(
@@ -239,6 +242,7 @@ class HeatingHub:
             "write_budget": self.write_budget.export(),
             "heating_season": self.season.export(),
             "flow_feedback": self.flow_feedback.export(),
+            "flow_correction": self.flow_correction.export(),
         }
 
     @callback

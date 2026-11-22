@@ -73,9 +73,17 @@ Eigener Abschnitt der Tagesauswertung, alle 10 Räume, per MCP (`ha_get_state` a
 | Stunde | Profil Werktag/sonst, Sonnenkoeffizienten, `last_hour_outcome` | Süd-/Westräume `s > 0`, Nord ≈ 0, Schlafzimmer tagsüber negativ, Esszimmer Abendblock positiv |
 | Güte | `residual_rms_w`; Anteil gesperrter Stunden | RMS deutlich unter 10 % Norm-Heizlast |
 
-Ergebnis: Tabelle je Raum (bestimmt ja/nein je Term, Wert, auffällig) + Empfehlung „4b/4c freigeben / warten". Daten vor/nach Neustart A getrennt.
+Ergebnis: Tabelle je Raum (bestimmt ja/nein je Term, Wert, auffällig) + Empfehlung „4b/4c freigeben / warten". Gewinne aller Räume am 21.11. zurückgesetzt (`recalibrate reset_gains`): nur Daten ab dann werten. Nachtpunkte prüfen über Verlauf `last_mean_heating_w` gegen `last_mean_room_c − last_mean_outdoor_c` am UA-Lernstatus.
+
+Offen: Vor Neustart A stieg die Nacht-Heizleistung kaum mit der Temperaturdifferenz (kälteste Nächte mit der niedrigsten Leistung), danach etwa doppelt so viel je K. Klären, ob Ventilfahrweise der alten Ansteuerung oder Leistungsschätzung aus Ventilöffnung. Betrifft auch UA-Faktor vor A.
 
 ### 4b. Gewinne im Lerner
+
+Vorher `MPC/models/gains.py` absichern:
+- `gain_determined` nur, wenn Regressions-UA (`_night.theta[0]`) nicht an `MIN_UA_FACTOR`/`MAX_UA_FACTOR · base_ua` steht. An der Grenze fängt G den Fehler der Steigung auf.
+- Stunden-Ebene (`learner.py`, `unexplained_w`) zieht `steady_gain_w` nur mit dieser Prüfung ab; sonst 0.
+- Sonnenterm für Nord-Fenster (`window_north`) und Nord-Wand: diffuses Licht auf Nord folgt fast nur der Tageszeit und ist vom Profil nicht trennbar. Weglassen oder nur Direktanteil nutzen — Nutzer entscheidet.
+- Tests (`tests/controller/mpc/models/test_gains.py`, `test_gain_hours.py`): Regressions-UA an Untergrenze → `gain_determined` False, `steady_gain_w` 0; Stunden-Rest ohne G in dem Fall.
 
 `MPC/learner.py`:
 - UA-Ziel in `_balance_stretch` nach `stored_heat_j`: `gain_j = steady_gain_w · window_duration_s` (0 ohne Gewinn-Modell), `target_ua = (heat_j − stored_heat_j + gain_j) / temperature_difference_ks`. `STORAGE_DOMINATED`-Prüfung und `add_night_point(...)` weiter **ohne** Gewinn. Grenzen 0,15/2 bleiben.

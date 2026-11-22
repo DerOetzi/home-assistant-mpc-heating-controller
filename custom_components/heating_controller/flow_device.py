@@ -29,7 +29,9 @@ from .control.flow import (
     FlowInputs,
     HeatingCurve,
 )
+from .control.flow_correction import SETTLE_S, CorrectionFreeze
 from .control.flow_feedback import FeedbackFreeze
+from .night import NightWindow
 
 if TYPE_CHECKING:
     from .hub import HeatingHub
@@ -76,6 +78,7 @@ class FlowDevice:
         self._unwritten = False
         self._listeners: list[Callable[[], None]] = []
         self._context = Context()
+        self._night = NightWindow(hass)
 
     # --- Settings ----------------------------------------------------------
 
@@ -181,6 +184,7 @@ class FlowDevice:
         self.controller.observe_actual(actual, now_ts)
         hub = self.hub
         feedback = hub.flow_feedback
+        correction = hub.flow_correction
         inputs = FlowInputs(
             outdoor_c=hub.outdoor_temperature_c,
             feedforward_flow_c=hub.lead_feedforward_flow.value_c,
@@ -191,6 +195,9 @@ class FlowDevice:
             feedback_k=feedback.feedback_k,
             boost_flow_c=hub.lead_boost_flow.value_c,
             design_flow_c=hub.design_flow_c,
+            correction_k=correction.correction_k
+            if self.mode is ActuatorMode.OFFSET
+            else 0.0,
         )
         bounds = self.controller.bounds(inputs, self.curve)
         lifted = (
@@ -198,14 +205,24 @@ class FlowDevice:
             if bounds is None or inputs.feedforward_flow_c is None
             else inputs.feedforward_flow_c + inputs.feedback_k
         )
+        freeze = self._freeze_reason(inputs, bounds is None)
         feedback.update(
             hub.feedback_samples(),
             self._step,
-            self._freeze_reason(inputs, bounds is None),
+            freeze,
             now_ts,
             at_lower_limit=lifted is not None and lifted <= bounds.lower_c,
             at_upper_limit=lifted is not None and lifted >= bounds.upper_c,
+            night=self._night.is_night(now_ts),
         )
+        if self.mode is ActuatorMode.OFFSET:
+            correction.update(
+                hub.measured_flow_c,
+                self.effective_curve_c,
+                self._correction_freeze(freeze, now_ts),
+                now_ts,
+            )
+            inputs = dataclasses.replace(inputs, correction_k=correction.correction_k)
         decision = self.controller.decide(
             dataclasses.replace(inputs, feedback_k=feedback.feedback_k),
             self.curve,
@@ -249,6 +266,23 @@ class FlowDevice:
             return FeedbackFreeze.BOOST
         if self._unwritten:
             return FeedbackFreeze.NOT_WRITTEN
+        return None
+
+    def _correction_freeze(
+        self, freeze: FeedbackFreeze | None, now_ts: float
+    ) -> CorrectionFreeze | None:
+        """Why the measured correction must not learn now; None if it may.
+
+        Only in calm operation: whenever the feedback may move, the rooms do
+        not catch up after a pause, and the heat source had time to reach
+        the last value written.
+        """
+        if freeze is not None:
+            return CorrectionFreeze.FEEDBACK_FROZEN
+        if self.hub.flow_feedback.catching_up(now_ts):
+            return CorrectionFreeze.CATCH_UP
+        if now_ts - self.controller.last_write_ts < SETTLE_S:
+            return CorrectionFreeze.SETTLING
         return None
 
     async def _async_write(

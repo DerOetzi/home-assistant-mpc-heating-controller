@@ -5,9 +5,10 @@ offset (Daikin "leaving water offset") or takes a fixed flow setpoint. In
 both cases the target is the flow the flow lead rooms need to hold their
 setpoint (feedforward) plus the valve feedback, raised for a room that
 recovers after a mode change and around a planned hot-water charge, and
-never below the lowest flow the heat source usefully delivers. The
-controller decides what to write and when; the caller writes and reports
-back.
+never below the lowest flow the heat source usefully delivers. In offset
+mode the offset is computed against the curve plus the measured correction
+(how far the heat source really lands off its curve). The controller
+decides what to write and when; the caller writes and reports back.
 """
 
 from __future__ import annotations
@@ -94,6 +95,9 @@ class FlowInputs:
     boost_flow_c: float | None = None
     # The radiators' design flow; caps what the feedback may ask for.
     design_flow_c: float | None = None
+    # Offset mode: how far the heat source's measured flow lies above its
+    # effective curve; the offset is computed against curve plus this.
+    correction_k: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -162,7 +166,12 @@ class FlowController:
         return now_ts - self.last_write_ts < self.config.hold_s
 
     def _curve_flow(self, inputs: FlowInputs, curve: HeatingCurve) -> float | None:
-        return curve.flow_at(inputs.outdoor_c) if inputs.outdoor_c is not None else None
+        """The flow the heat source delivers without offset: the curve plus
+        the measured correction."""
+        if inputs.outdoor_c is None:
+            return None
+        flow = curve.flow_at(inputs.outdoor_c)
+        return None if flow is None else flow + inputs.correction_k
 
     def bounds(self, inputs: FlowInputs, curve: HeatingCurve) -> FeedbackBounds | None:
         """Limits of feedforward plus feedback; None without a feedforward.

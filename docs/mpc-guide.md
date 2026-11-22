@@ -673,9 +673,13 @@ works out:
     - else (only rooms above their target: cooking, sun): the count stays.
     - A room that wants more counts the faster the further it is short: its rounded
       deficit over 0.2 K, at least 1× and at most 3× (0.4 K short: twice as fast).
-    - At −30 minutes one actuator step **up**, at +60 minutes one step **down**; then the
-      count starts at 0. For 90 minutes after a step the count stays at 0 on that step's
-      side (radiators and rooms answer over hours); the other direction stays open. A short want after a long surplus only takes minutes off, a
+    - At −30 minutes one actuator step **up**, at +60 minutes (at night +90) one step
+      **down**; then the count starts at 0. After a step the count stays at 0 on that
+      step's side for a lock (radiators and rooms answer over hours); the other direction
+      stays open. Lock up 60 minutes, down 90; at night up 45, down 120 — a room short at
+      night cools further until the morning, a step down at night has little use. Night
+      is the heat-loss learner's: two hours after sunset until sunrise; the current time
+      decides. A short want after a long surplus only takes minutes off, a
       long surplus first has to be worked off before a step up. Without any usable room
       the count waits. It starts at 0 after a restart.
   - Limited to ±3 K. No step that the target limits would cut off anyway.
@@ -699,18 +703,30 @@ works out:
   *Flow raise for hot water at most* above that). Never below the flow threshold.
   Attribute `source` says which won: `lead`, `boost`, `charge`, `threshold` or
   `fallback`; further attributes `feedforward_flow_c`, `room`, `feedback_k`,
-  `boost_flow_c`, `boost_room`.
+  `measured_correction_k`, `measured_correction_frozen_reason`, `boost_flow_c`,
+  `boost_room`.
 - *Flow feedback* attributes: `lead_demand_pct`, `lead_room`, `lead_deficit_c`,
-  `feedforward_flow_c`, `frozen`, `frozen_reason`, `flow_timer_min` (the count, minutes; up at −30, down at +60),
+  `feedforward_flow_c`, `frozen`, `frozen_reason`, `flow_timer_min` (the count, minutes; up at −30, down at +60, at night +90),
+  `night`, `locked_direction` (+1 / −1 while a step's lock holds that direction back, else 0),
   `catch_up_until` / `catch_up_reason` (end and cause of a running catch-up, else empty),
   `room_variant_up` / `room_variant_down` (steps a count per room would have taken: up when
   one room's count reaches −30, down when every rated lead room's count is at +60; kept across restarts),
   `last_change`. The lead is the room
   that decides: one that wants more, else the most open one that holds the flow, else
   the most open one.
+- **Measured correction** `measured_correction_k` (offset mode): how far the heat source
+  really lands off its effective curve (curve plus offset). Measured flow minus effective
+  curve, smoothed with a time constant of 2 hours (the heat source reports whole degrees),
+  limited to ±2 K. It learns only in calm operation: while the feedback may move (not
+  frozen, see above), no catch-up runs, and 30 minutes after the last change of the
+  actuator (also after a start). Otherwise it keeps its value;
+  `measured_correction_frozen_reason` says why (`feedback_frozen`, `catch_up`,
+  `settling`, `no_measurement`). The value survives restarts. Seen on a Daikin: below
+  0 °C outdoor it lands about 1 K below its curve, around +5 °C slightly above.
 - **Actuator value**: in offset mode target minus the heat source's curve at the current
-  outdoor value, in setpoint mode the target itself. Rounded up to the step, so the flow
-  never falls below the target; clamped to the limits.
+  outdoor value plus the measured correction, in setpoint mode the target itself. Rounded
+  up to the step, so the flow never falls below the target; clamped to the limits. The
+  upper bound of the target moves with the correction too.
 
 It writes only when all hold:
 

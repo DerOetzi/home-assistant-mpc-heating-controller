@@ -3,7 +3,11 @@ from heating_controller.control.flow_feedback import (
     CATCH_UP_MAX_S,
     DOWN_AFTER_S,
     FEEDBACK_LIMIT_K,
-    STEP_LOCK_S,
+    NIGHT_DOWN_AFTER_S,
+    NIGHT_STEP_LOCK_DOWN_S,
+    NIGHT_STEP_LOCK_UP_S,
+    STEP_LOCK_DOWN_S,
+    STEP_LOCK_UP_S,
     UP_AFTER_S,
     DemandSample,
     FeedbackFreeze,
@@ -104,7 +108,7 @@ def test_each_step_up_needs_its_own_up_time_after_the_lock() -> None:
     end = _run(feedback, [_sample(99)], T0, UP_AFTER_S)
     assert feedback.feedback_k == 1.0
 
-    end = _run(feedback, [_sample(99)], end + 60, STEP_LOCK_S - 120)
+    end = _run(feedback, [_sample(99)], end + 60, STEP_LOCK_UP_S - 120)
     assert feedback.feedback_k == 1.0
     assert feedback.count_s == 0.0
     end = _run(feedback, [_sample(99)], end + 60, UP_AFTER_S - 120)
@@ -544,7 +548,54 @@ def test_the_lock_after_a_step_down_holds_down() -> None:
     end = _run(feedback, [_sample(60)], T0, DOWN_AFTER_S)
     assert feedback.feedback_k == -1.0
 
-    end = _run(feedback, [_sample(60)], end + 60, STEP_LOCK_S - 60)
+    end = _run(feedback, [_sample(60)], end + 60, STEP_LOCK_DOWN_S - 60)
     assert feedback.feedback_k == -1.0
     _run(feedback, [_sample(60)], end + 60, DOWN_AFTER_S)
     assert feedback.feedback_k == -2.0
+
+
+def test_the_lock_up_is_shorter_than_down_and_shorter_still_at_night() -> None:
+    for night, lock_up in ((False, STEP_LOCK_UP_S), (True, NIGHT_STEP_LOCK_UP_S)):
+        feedback = FlowFeedback()
+        end = _run(feedback, [_sample(99)], T0, UP_AFTER_S, night=night)
+        assert feedback.feedback_k == 1.0
+        assert feedback.locked_sign(end + lock_up - 60) == 1
+        assert feedback.locked_sign(end + lock_up) == 0
+
+        # The second step up: the lock, then its own up time.
+        end = _run(feedback, [_sample(99)], end + 60, lock_up - 60, night=night)
+        assert feedback.feedback_k == 1.0
+        _run(feedback, [_sample(99)], end + 60, UP_AFTER_S, night=night)
+        assert feedback.feedback_k == 2.0
+
+
+def test_the_lock_down_is_longer_at_night() -> None:
+    for night, lock_down in (
+        (False, STEP_LOCK_DOWN_S),
+        (True, NIGHT_STEP_LOCK_DOWN_S),
+    ):
+        feedback = FlowFeedback()
+        down_after = NIGHT_DOWN_AFTER_S if night else DOWN_AFTER_S
+        end = _run(feedback, [_sample(60)], T0, down_after, night=night)
+        assert feedback.feedback_k == -1.0
+        assert feedback.locked_sign(end + lock_down - 60) == -1
+        assert feedback.locked_sign(end + lock_down) == 0
+
+
+def test_at_night_a_step_down_takes_longer() -> None:
+    feedback = FlowFeedback()
+    end = _run(feedback, [_sample(60)], T0, DOWN_AFTER_S, night=True)
+    assert feedback.feedback_k == 0.0
+    assert feedback.count_s == DOWN_AFTER_S
+
+    _run(feedback, [_sample(60)], end + 60, NIGHT_DOWN_AFTER_S - DOWN_AFTER_S - 60)
+    assert feedback.feedback_k == -1.0
+
+
+def test_at_night_a_step_up_is_not_held_back_by_a_day_step_down() -> None:
+    feedback = FlowFeedback()
+    end = _run(feedback, [_sample(60)], T0, DOWN_AFTER_S)
+    assert feedback.feedback_k == -1.0
+
+    _run(feedback, [_sample(99)], end + 60, UP_AFTER_S, night=True)
+    assert feedback.feedback_k == 0.0

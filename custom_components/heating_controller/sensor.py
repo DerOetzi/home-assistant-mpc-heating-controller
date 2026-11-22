@@ -400,6 +400,10 @@ class FlowTargetSensor(_FlowTemperatureSensor):
             "feedforward_flow_c": lead.value_c,
             "room": lead.room,
             "feedback_k": hub.flow_feedback.feedback_k,
+            "measured_correction_k": round(hub.flow_correction.correction_k, 2),
+            "measured_correction_frozen_reason": None
+            if hub.flow_correction.frozen is None
+            else str(hub.flow_correction.frozen),
             "boost_flow_c": boost.value_c,
             "boost_room": boost.room,
             "threshold_c": self._flow.threshold_c,
@@ -435,6 +439,8 @@ class FlowFeedbackSensor(FlowEntity, SensorEntity):
             "frozen": feedback.frozen is not None,
             "frozen_reason": None if feedback.frozen is None else str(feedback.frozen),
             "flow_timer_min": round(feedback.count_s / 60),
+            "night": feedback.night,
+            "locked_direction": feedback.locked_sign(time.time()),
             "catch_up_until": dt_util.utc_from_timestamp(
                 feedback.catch_up_until_ts
             ).isoformat()

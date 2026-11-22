@@ -154,7 +154,9 @@ The device *Vorlauf* then holds the heating curve as numbers (two points and an 
 raise around 0 °C, as the heat source has it), hysteresis, hold time, the most a
 hot-water charge may raise the flow. The flow threshold replaces the hub's threshold
 entity: in offset mode the curve's warm end (*Flow threshold effective*), in setpoint mode
-a number on the device. The target never drops below it. *Write flow* starts off: the device computes and shows *Flow target* and
+a number on the device. The target never drops below it. In offset mode the offset is
+computed against the curve plus a slowly learned *measured correction* (measured flow
+against curve plus offset), so a heat source that lands off its curve still gets the flow. *Write flow* starts off: the device computes and shows *Flow target* and
 *Actuator target* but writes nothing until switched on. See
 [Flow control](docs/mpc-guide.md#flow-control). *Heating curve recommendation cold* /
 *warm* report the curve points the flow lead rooms need (hold flow at comfort with the

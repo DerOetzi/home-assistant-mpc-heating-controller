@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable, Mapping
-from datetime import date, datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -13,8 +13,6 @@ from homeassistant.const import (
     STATE_ON,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
-    SUN_EVENT_SUNRISE,
-    SUN_EVENT_SUNSET,
 )
 from homeassistant.core import (
     Event,
@@ -29,7 +27,6 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
 )
-from homeassistant.helpers.sun import get_astral_event_date
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -106,6 +103,7 @@ from .controller.trv_inputs import (
     raw_value,
 )
 from .irradiance import IrradianceProvider, SunSeries
+from .night import NightWindow
 from .profiles import TrvBinding
 from .startup_gate import entity_ready
 from .store import (
@@ -119,7 +117,6 @@ from .store import (
 _LOGGER = logging.getLogger(__name__)
 
 RECOMPUTE_DEBOUNCE_S = 1.0
-SUN_EVENT_CACHE_SIZE = 8
 
 LEARNING_CYCLE_INTERVAL = timedelta(minutes=LEARNING_CYCLE_INTERVAL_MINUTES)
 
@@ -147,8 +144,6 @@ ADAPTATION_MAX_HOLD_S = 3 * 3600
 
 WINDOW_CLOSED_SUPPRESS_UA_LEARNING_S = 30 * 60
 WINDOW_CLOSED_SUPPRESS_CAPACITY_LEARNING_S = 10 * 60
-
-SUNSET_LEARNING_DELAY = timedelta(hours=2)
 
 # The heat pump reports its flow temperature about every 10 minutes and drops
 # out for a poll now and then. Learning pauses only once no reading came for
@@ -351,7 +346,7 @@ class HeatingRoomCoordinator:
         # A recompute awaits TRV writes; a second one in between would compute
         # and write on half-updated state.
         self._recompute_lock = asyncio.Lock()
-        self._sun_events: dict[tuple[str, date], datetime | None] = {}
+        self._night = NightWindow(hass)
         self._listeners: list[Callable[[], None]] = []
 
     def set_sun_provider(
@@ -911,27 +906,7 @@ class HeatingRoomCoordinator:
         self._notify_listeners()
 
     def is_sun_condition_met(self, timestamp: float) -> bool:
-        moment = dt_util.utc_from_timestamp(timestamp)
-        today = dt_util.as_local(moment).date()
-
-        sunset_today = self._sun_event(SUN_EVENT_SUNSET, today)
-        if sunset_today is not None and moment >= sunset_today + SUNSET_LEARNING_DELAY:
-            return True
-
-        sunrise_today = self._sun_event(SUN_EVENT_SUNRISE, today)
-        sunset_yesterday = self._sun_event(SUN_EVENT_SUNSET, today - timedelta(days=1))
-        if sunrise_today is None or sunset_yesterday is None:
-            return False
-        return sunset_yesterday + SUNSET_LEARNING_DELAY <= moment < sunrise_today
-
-    def _sun_event(self, event: str, day: date) -> datetime | None:
-        # The learner asks for every sample of its history on every cycle.
-        key = (event, day)
-        if key not in self._sun_events:
-            if len(self._sun_events) >= SUN_EVENT_CACHE_SIZE:
-                self._sun_events.clear()
-            self._sun_events[key] = get_astral_event_date(self.hass, event, day)
-        return self._sun_events[key]
+        return self._night.is_night(timestamp)
 
     @property
     def flow_threshold_c(self) -> float:
