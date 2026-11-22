@@ -952,18 +952,12 @@ fadd('sensor.fb', 'flow_feedback', 3.0, {flow_timer_min: -22, step_up_at_min: -3
   lead_room: 'Rebekka', lead_demand_pct: 100, lead_deficit_c: 0.29, locked_direction: 1, night: false,
   frozen: false, last_change: '2026-11-22T10:41:11+00:00', room_variant_up: 59, room_variant_down: 8});
 fadd('sensor.kurve', 'flow_curve', 39.1);
-fadd('sensor.eff', 'flow_effective_curve', 42.1);
+fadd('sensor.ist', 'flow_actuator_actual', 2);
 fadd('sensor.stell', 'flow_actuator_target', 3, {last_error: null});
-fadd('sensor.schwelle', 'flow_threshold', 31);
-fadd('number.schwelle', 'flow_threshold', 31, {min: 20, max: 40, step: 0.5, unit_of_measurement: '°C'});
-fadd('number.hyst', 'flow_hysteresis', 0.5, {min: 0, max: 3, step: 0.1});
 fadd('sensor.curves', 'hold_flow_curves', 'ok', {outdoor_temperature_c: null});
 fadd('switch.write', 'flow_write', 'on');
-fadd('switch.pv', 'pv_boost', 'off');
 fadd('button.reset', 'flow_feedback_reset', 'unknown');
 fadd('binary_sensor.reach', 'heat_source_reachable', 'off');
-fadd('binary_sensor.on', 'heating_season_switch_on', 'on');
-fadd('sensor.budget', 'write_budget', 119, {own_writes_today: 6, max_writes_per_day: 40});
 var FLOW_HASS = {entities: FE, states: FS, locale: {language: 'de'},
   formatEntityState: function (s) { return s.state; }};
 function renderFlow() {
@@ -981,20 +975,58 @@ def test_flow_card_renders(ctx) -> None:
     for broken in ("undefined", "NaN", "null", "flow_"):
         assert broken not in html.replace("heating-controller-flow", "")
     assert "Wärmeerzeuger nicht erreichbar" in html and "Außentemperatur fehlt" in html
-    assert "Leiträume · Rebekka" in html
+    assert '<span>Leitraum</span><span class="rooms">Rebekka</span>' in html
+    FS = "FLOW_HASS.states['sensor.curves'].attributes"
+    ctx.eval(
+        FS
+        + ".rooms = [{name: 'Wohnzimmer', lead: true}, {name: 'Esszimmer', lead: false},"
+        " {name: 'Rebekka', lead: true}]"
+    )
+    assert (
+        '<span>Leiträume</span><span class="rooms">Wohnzimmer, <b>Rebekka</b></span>'
+        in ctx.eval("renderFlow()")
+    )
+    ctx.eval("delete " + FS + ".rooms")
     assert "Korrektur pausiert: Wärmeerzeuger stellt ein" in html
     assert "kein weiterer Schritt hoch" in html and "0.29 K unter Soll" in html
-    # -22 min on a bar from -30 to +60.
-    assert "left:" + str(8 / 90 * 100) + "%" in html
-    assert 'data-number="number.schwelle"' in html and 'min="20"' in html
-    assert 'data-number="sensor.schwelle"' not in html
-    assert 'class="toggle on" data-toggle="switch.write"' in html
-    assert "Einschalten fällig" in html
+    # -22 min on a bar from +60 (left) to -30 (right).
+    assert "left:" + str(82 / 90 * 100) + "%" in html
+    # The count and the steps without sign: the bar's side shows the direction.
+    assert "<span>22 min</span>" in html and "Schritt hoch bei 30 min" in html
+    assert "Schritt runter bei 60 min" in html
+    assert "Leitraum Esszimmer" not in html and "Rückkopplung</h3>" in html
+    # The feedback block sits between the two chains.
+    assert (
+        html.index("Rückkopplung</h3>")
+        < html.index("Steuerung</h3>")
+        < html.index(">Kurve<")
+    )
+    # Control: curve + correction = base; target − base = need → offset.
+    assert (
+        ">Basis</span><span>39.1\u00a0°C<" in html
+        and ">Bedarf</span><span>+2.4\u00a0K<" in html
+    )
+    assert (
+        'class="term pending" data-entity="sensor.stell"' in html
+        and "+3.0\u00a0K (+2.0\u00a0K)" in html
+    )
+    assert "Effektiv" not in html and "Reserve" not in html
+    ctx.eval("FLOW_HASS.states['sensor.ist'].state = '3'")
+    html_ok = ctx.eval("renderFlow()")
+    assert (
+        'class="term ok" data-entity="sensor.stell"' in html_ok
+        and "(+3.0" not in html_ok
+    )
+    ctx.eval("FLOW_HASS.states['sensor.ist'].state = '2'")
+    assert "Berechnung" in html and "Schwelle" not in html
+    # Switches, heating season and settings are not on this card.
+    assert "data-toggle" not in html and "data-number" not in html
+    assert "Schalter" not in html and "Heizsaison" not in html
 
 
 def test_flow_card_counter_position(ctx) -> None:
-    assert ctx.eval("counterPosition(0, -30, 60)") == pytest.approx(100 / 3)
-    assert ctx.eval("counterPosition(-99, -30, 60)") == 0
-    assert ctx.eval("counterPosition(99, -30, 90)") == 100
+    assert ctx.eval("counterPosition(0, -30, 60)") == pytest.approx(200 / 3)
+    assert ctx.eval("counterPosition(-99, -30, 60)") == 100
+    assert ctx.eval("counterPosition(99, -30, 90)") == 0
     assert ctx.eval("counterPosition(null, -30, 60)") is None
     assert ctx.eval("counterPosition('x', -30, 60)") is None

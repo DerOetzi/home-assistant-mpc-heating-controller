@@ -16,6 +16,19 @@ export const num = (value, digits = 1, locale) => {
   }
 };
 
+// A number with exactly `digits` decimals in the locale's decimal sign.
+export const fixed = (value, digits = 1, locale) => {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) return "–";
+  let sign = ".";
+  try {
+    sign = (1.5).toLocaleString(locale).replace(/\d/g, "") || ".";
+  } catch (err) {
+    sign = ".";
+  }
+  return parsed.toFixed(digits).replace(".", sign);
+};
+
 // A formatted number with its unit; "–" stays bare.
 export const withUnit = (text, unit) => (unit && text !== "–" ? `${text}\u00a0${unit}` : text);
 

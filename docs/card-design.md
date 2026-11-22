@@ -206,19 +206,18 @@ translation key.
 
 - **Warnings** in the header: heat source unreachable, outdoor temperature missing,
   radiators not heating (how many).
-- **Flow target** with its source (lead rooms and the room that sets it, boost, threshold,
-  hot water charge, fallback) and why it holds.
-- **Derivation:** feedforward + feedback = lead target, beside boost and threshold; curve +
-  measured correction → offset (target and actual) → effective curve, and the hold flow
-  reserve. Below: why the correction pauses, write errors, an offset changed elsewhere.
-- **Valve feedback:** a bar from the step up to the step down (the night's times at night)
-  with the count, the lead room's valve and deficit, a lock, night, freeze and catch-up,
-  the last change, the would-be steps per room, and a reset button (asks first).
-- **Switches:** write flow, comfort, PV surplus; the write budget.
-- **Heating season:** lead rooms demanding heat, switch on/off due, last demand, demand
-  hours in 24 h.
-- **Settings** (folded): hysteresis, hold time, hot water raise, flow threshold, heating
-  season thresholds — changed right on the card.
+- **Flow target** with, beside it, its source (lead rooms, boost, threshold, hot water
+  charge, fallback) and why it holds; below that the lead rooms, the one that sets the
+  flow in bold (or the boost room).
+- **Calculation:** feedforward + feedback = lead target, beside a boost. Right below, the
+  **feedback**: a bar from the step down (left, blue) to the step up (right, red; the night's
+  times at night) with the count, the room with the widest open valve and its deficit, a
+  lock, night, freeze and catch-up, the last change, the would-be steps per room, and a
+  reset button (asks first). Under **control**: curve + measured correction = base (what the
+  heat source gives without offset), target − base = need, rounded up to the offset. The
+  offset is green when the heat source has it, else yellow with the actual offset in
+  brackets. Below: why the correction pauses,
+  write errors, an offset changed elsewhere.
 
 Tap a value to open its entity.
 
