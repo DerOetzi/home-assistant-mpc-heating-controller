@@ -225,6 +225,12 @@ class FlowFeedback:
             return 0
         return self.last_step_sign
 
+    def locked_until_ts(self, now_ts: float) -> float | None:
+        """When the running lock ends; None without one."""
+        if self.locked_sign(now_ts) == 0 or self.last_step_ts is None:
+            return None
+        return self.last_step_ts + self.lock_s(self.last_step_sign)
+
     def _locked(self, count: float, now_ts: float) -> float:
         sign = self.locked_sign(now_ts)
         if sign > 0:

@@ -38,6 +38,8 @@ _MODULES = [
     "rooms-card.js",
     "flow.js",
     "flow-card.js",
+    "season.js",
+    "season-card.js",
 ]
 
 _IMPORT_RE = re.compile(
@@ -988,12 +990,41 @@ def test_flow_card_renders(ctx) -> None:
     )
     ctx.eval("delete " + FS + ".rooms")
     assert "Korrektur pausiert: Wärmeerzeuger stellt ein" in html
-    assert "kein weiterer Schritt hoch" in html and "0.29 K unter Soll" in html
+    assert "0.29 K unter Soll" in html
+    # The lock up hatches the right side and replaces its step text.
+    assert (
+        '<span class="lock" style="left:' + str(60 / 90 * 100) + '%;right:0">' in html
+    )
+    assert '<ha-icon icon="mdi:lock"></ha-icon> gesperrt</span>' in html
+    assert "Schritt hoch bei" not in html and "mdi:weather-night" not in html
     # -22 min on a bar from +60 (left) to -30 (right).
     assert "left:" + str(82 / 90 * 100) + "%" in html
     # The count and the steps without sign: the bar's side shows the direction.
-    assert "<span>22 min</span>" in html and "Schritt hoch bei 30 min" in html
-    assert "Schritt runter bei 60 min" in html
+    assert "<span>22 min</span>" in html and "Schritt runter bei 60 min" in html
+    FB = "FLOW_HASS.states['sensor.fb'].attributes"
+    ctx.eval(
+        FB
+        + ".locked_direction = -1; "
+        + FB
+        + ".night = true; "
+        + FB
+        + ".locked_until = new Date(Date.now() + 25 * 60000 - 1000).toISOString()"
+    )
+    html_down = ctx.eval("renderFlow()")
+    assert '<span class="lock" style="left:0;right:' in html_down
+    assert (
+        "gesperrt noch 25 min" in html_down and "Schritt hoch bei 30 min" in html_down
+    )
+    assert "Schritt runter bei" not in html_down
+    assert 'icon="mdi:weather-night" title="Nachtzeiten"' in html_down
+    ctx.eval(
+        FB
+        + ".locked_direction = 1; "
+        + FB
+        + ".night = false; delete "
+        + FB
+        + ".locked_until"
+    )
     assert "Leitraum Esszimmer" not in html and "Rückkopplung</h3>" in html
     # The feedback block sits between the two chains.
     assert (
@@ -1008,14 +1039,14 @@ def test_flow_card_renders(ctx) -> None:
     )
     assert (
         'class="term pending" data-entity="sensor.stell"' in html
-        and "+3.0\u00a0K (+2.0\u00a0K)" in html
+        and ">Offset · Ist +2.0\u00a0K</span><span>+3.0\u00a0K<" in html
     )
     assert "Effektiv" not in html and "Reserve" not in html
     ctx.eval("FLOW_HASS.states['sensor.ist'].state = '3'")
     html_ok = ctx.eval("renderFlow()")
     assert (
         'class="term ok" data-entity="sensor.stell"' in html_ok
-        and "(+3.0" not in html_ok
+        and "Offset · Ist" not in html_ok
     )
     ctx.eval("FLOW_HASS.states['sensor.ist'].state = '2'")
     assert "Berechnung" in html and "Schwelle" not in html
@@ -1030,3 +1061,74 @@ def test_flow_card_counter_position(ctx) -> None:
     assert ctx.eval("counterPosition(99, -30, 90)") == 0
     assert ctx.eval("counterPosition(null, -30, 60)") is None
     assert ctx.eval("counterPosition('x', -30, 60)") is None
+
+
+_SEASON_RENDER_SETUP = """
+var SE = {}, SS = {};
+function sadd(id, key, state, attributes, extra) {
+  SE[id] = {entity_id: id, platform: 'heating_controller', translation_key: key, device_id: 'hub'};
+  SS[id] = Object.assign({entity_id: id, state: String(state), attributes: attributes || {}}, extra || {});
+}
+var SEASON_ATTRS = {demand_hours_24h: 4.5, on_threshold_h: 6, hold_threshold_h: 2, off_after_h: 48,
+  last_demand: new Date(Date.now() - 3 * 3600000).toISOString(), heating_on: true,
+  heat_source_entity: 'climate.wp'};
+sadd('binary_sensor.ein', 'heating_season_switch_on', 'off', SEASON_ATTRS);
+sadd('binary_sensor.aus', 'heating_season_switch_off', 'off', SEASON_ATTRS);
+sadd('binary_sensor.anf', 'lead_heating_demand', 'on',
+  {hold_flow_temperature_c: 41, flow_threshold_c: 30, rooms: ['Wohnzimmer', 'Rebekka']},
+  {last_changed: new Date(Date.now() - 2 * 3600000).toISOString()});
+sadd('sensor.stunden', 'heating_demand_hours_24h', 4.5);
+sadd('sensor.letzte', 'heating_season_last_demand', 'x');
+sadd('number.ein', 'heating_season_on_threshold_h', 6);
+sadd('number.halt', 'heating_season_hold_threshold_h', 2);
+sadd('sensor.halte', 'lead_hold_flow_temperature', 41, {room: 'Rebekka', rooms: ['Wohnzimmer', 'Rebekka']});
+sadd('sensor.reserve', 'hold_flow_reserve', -1.5);
+SS['climate.wp'] = {entity_id: 'climate.wp', state: 'heat', attributes: {}};
+var SEASON_HASS = {entities: SE, states: SS, locale: {language: 'de'}};
+function renderSeason() {
+  var card = new HeatingControllerSeasonCard();
+  card.setConfig({});
+  card.hass = SEASON_HASS;
+  return card.shadowRoot.innerHTML;
+}
+"""
+
+
+def test_season_card_renders(ctx) -> None:
+    ctx.eval(_FLOW_RENDER_SETUP)
+    ctx.eval(_SEASON_RENDER_SETUP)
+    html = ctx.eval("renderSeason()")
+    for broken in ("undefined", "NaN", "null", "season_"):
+        assert broken not in html
+    assert "Heizsaison" in html and "Heizgrenze</h3>" in html
+    # Heat | Off: the current mode is marked, the other asks before switching.
+    assert 'class="heat active" data-entity="climate.wp"' in html
+    assert 'data-mode="off" data-target="climate.wp"' in html
+    # Hold flow against the threshold decides the demand.
+    assert ">Haltevorlauf</span><span>41.0\u00a0°C<" in html
+    assert '<span class="op">≥</span>' in html and ">Ja<" in html
+    assert "Leiträume: Wohnzimmer, <b>Rebekka</b>" in html
+    assert "Reserve zur Kurve</span> −1.5\u00a0K" in html
+    assert "Seit</span> vor 2 h" in html
+    # 4.5 h on the 24 h bar with ticks at the hold and switch-on thresholds.
+    assert "width:" + str(4.5 / 24 * 100) + "%" in html
+    assert "Halten 2.0\u00a0h" in html and "Ein 6.0\u00a0h" in html
+    assert "Letzte Anforderung</span> vor 3 h" in html
+    assert "Ausschalten empfohlen</span> in 45 h" in html
+    assert "empfohlen<" not in html.split("Heizgrenze")[0]
+    ctx.eval("SS['binary_sensor.ein'].state = 'on'; SS['climate.wp'].state = 'off'")
+    ctx.eval("SEASON_ATTRS.heating_on = false")
+    html_on = ctx.eval("renderSeason()")
+    assert "Einschalten empfohlen" in html_on
+    assert 'class="off active"' in html_on and 'data-mode="heat"' in html_on
+    assert "Ausschalten empfohlen" not in html_on
+
+
+def test_season_hours_helpers(ctx) -> None:
+    assert ctx.eval("hoursPosition(12)") == 50
+    assert ctx.eval("hoursPosition(30)") == 100
+    assert ctx.eval("hoursPosition(null)") is None
+    assert ctx.eval(
+        "hoursUntilOff('2026-11-20T00:00:00Z', 48, Date.parse('2026-11-21T00:00:00Z'))"
+    ) == pytest.approx(24)
+    assert ctx.eval("hoursUntilOff(null, 48, 0)") is None

@@ -211,12 +211,13 @@ translation key.
   flow in bold (or the boost room).
 - **Calculation:** feedforward + feedback = lead target, beside a boost. Right below, the
   **feedback**: a bar from the step down (left, blue) to the step up (right, red; the night's
-  times at night) with the count, the room with the widest open valve and its deficit, a
-  lock, night, freeze and catch-up, the last change, the would-be steps per room, and a
+  times at night, then a moon beside the heading) with the count. A step's lock hatches
+  its own side of the bar and shows a lock with the time left in place of the step. Then
+  the room with the widest open valve and its deficit, freeze and catch-up, the last change, the would-be steps per room, and a
   reset button (asks first). Under **control**: curve + measured correction = base (what the
   heat source gives without offset), target − base = need, rounded up to the offset. The
-  offset is green when the heat source has it, else yellow with the actual offset in
-  brackets. Below: why the correction pauses,
+  offset is green when the heat source has it, else yellow with the actual offset in its
+  label. Below: why the correction pauses,
   write errors, an offset changed elsewhere.
 
 Tap a value to open its entity.
@@ -224,6 +225,30 @@ Tap a value to open its entity.
 ```yaml
 type: custom:heating-controller-flow-card
 title: Vorlauf   # optional
+```
+
+## Heating season card
+
+`custom:heating-controller-season-card` shows the heating season the hub works out and lets
+you switch the heat source by hand. No configuration (optional `title:`); entities are found
+by translation key.
+
+- **Header:** a chip when switching on or off is recommended, and a *Heat | Off* switch for
+  the heat source's climate (`heat_source_entity` of the season sensors). The current mode
+  is marked; the other one asks first, then calls `climate.set_hvac_mode`. Nothing switches
+  by itself.
+- **Heating limit:** hold flow of the heating-limit lead rooms ≥ or < the flow threshold →
+  demand yes/no (green on yes). Below: the lead rooms, the one that sets the hold flow in
+  bold; the reserve to the curve and since when the demand holds.
+- **Demand last 24 h:** a bar 0–24 h with the demand hours and ticks at the hold and the
+  switch-on threshold; the last demand and, while heating, when switching off would be
+  recommended (last demand + switch-off time).
+
+The thresholds are set on their number entities, not on the card.
+
+```yaml
+type: custom:heating-controller-season-card
+title: Heizsaison   # optional
 ```
 
 ## Localization

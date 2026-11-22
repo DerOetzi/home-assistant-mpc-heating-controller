@@ -12,6 +12,7 @@ import { HeatingControllerCardEditor } from "./editor.js";
 import { CURVE_CARD_TAG, HeatingControllerCurveCard } from "./curve-card.js";
 import { ROOMS_CARD_TAG, HeatingControllerRoomsCard } from "./rooms-card.js";
 import { FLOW_CARD_TAG, HeatingControllerFlowCard } from "./flow-card.js";
+import { SEASON_CARD_TAG, HeatingControllerSeasonCard } from "./season-card.js";
 import { TRANSLATIONS } from "./translations.js";
 
 customElements.define(CARD_TAG, HeatingControllerCard);
@@ -19,6 +20,7 @@ customElements.define(EDITOR_TAG, HeatingControllerCardEditor);
 customElements.define(CURVE_CARD_TAG, HeatingControllerCurveCard);
 customElements.define(ROOMS_CARD_TAG, HeatingControllerRoomsCard);
 customElements.define(FLOW_CARD_TAG, HeatingControllerFlowCard);
+customElements.define(SEASON_CARD_TAG, HeatingControllerSeasonCard);
 
 window.customCards = window.customCards ?? [];
 window.customCards.push({
@@ -51,6 +53,15 @@ window.customCards.push({
   type: FLOW_CARD_TAG,
   name: TRANSLATIONS.en.flow_card_name,
   description: TRANSLATIONS.en.flow_card_description,
+  preview: true,
+  documentationURL:
+    "https://github.com/DerOetzi/home-assistant-mpc-heating-controller",
+});
+
+window.customCards.push({
+  type: SEASON_CARD_TAG,
+  name: TRANSLATIONS.en.season_card_name,
+  description: TRANSLATIONS.en.season_card_description,
   preview: true,
   documentationURL:
     "https://github.com/DerOetzi/home-assistant-mpc-heating-controller",

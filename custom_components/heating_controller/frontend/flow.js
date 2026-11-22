@@ -34,6 +34,13 @@ export const minutesSince = (iso, nowMs) => {
   return Math.max(0, Math.round((nowMs - then) / 60000));
 };
 
+// Minutes until an ISO time (at least 1 while it is ahead), or null.
+export const minutesUntil = (iso, nowMs) => {
+  const then = Date.parse(iso ?? "");
+  if (!Number.isFinite(then)) return null;
+  return Math.max(1, Math.ceil((then - nowMs) / 60000));
+};
+
 // The states of the integration's single-instance entities, by role.
 export const resolveIntegration = (hass, roleMap) => {
   const found = {};

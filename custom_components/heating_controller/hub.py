@@ -346,6 +346,11 @@ class HeatingHub:
     # --- Heating season ----------------------------------------------------
 
     @property
+    def heat_source_entity(self) -> str | None:
+        """The heat source's climate entity, switched heat/off by hand."""
+        return self._heat_source_entity
+
+    @property
     def heating_on(self) -> bool | None:
         """Whether the heat source heats; None without or with an empty entity."""
         if not self._heat_source_entity:

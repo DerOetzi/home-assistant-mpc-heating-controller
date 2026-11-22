@@ -14,6 +14,7 @@ import {
   FLOW_CARD_ROLES,
   counterPosition,
   minutesSince,
+  minutesUntil,
   resolveIntegration,
 } from "./flow.js";
 import { t } from "./translations.js";
@@ -60,8 +61,13 @@ const FLOW_STYLES = `
     margin-left: -2px; background: var(--primary-text-color); }
   .bar .mark span { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
     font-size: 0.75em; white-space: nowrap; }
+  .bar .lock { position: absolute; top: 0; bottom: 0; border-radius: 4px;
+    background: repeating-linear-gradient(135deg,
+      color-mix(in srgb, var(--card-background-color, #fff) 70%, transparent) 0 3px,
+      transparent 3px 6px); }
   .scale { display: flex; justify-content: space-between; font-size: 0.75em;
     color: var(--secondary-text-color); }
+  .scale ha-icon, .section h3 ha-icon { --mdc-icon-size: 14px; vertical-align: -2px; }
   .facts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.9em; }
   .facts > * { cursor: pointer; }
   .facts .k { color: var(--secondary-text-color); }
@@ -334,13 +340,15 @@ export class HeatingControllerFlowCard extends HTMLElement {
       Number.isFinite(Number(wanted)) &&
       Number.isFinite(Number(actual)) &&
       Math.abs(Number(wanted) - Number(actual)) < 1e-6;
-    const offsetValue = `${this._k(wanted)}${
-      same || !roles.actuatorActual ? "" : ` (${this._k(actual)})`
-    }`;
+    // The actual offset goes into the label while it differs, so the box keeps its width.
+    const offsetLabel =
+      same || !roles.actuatorActual
+        ? t(hass, "flow_offset")
+        : `${t(hass, "flow_offset")} · ${t(hass, "flow_actual")} ${this._k(actual)}`;
     const offset = this._term(
       roles.actuatorTarget,
-      t(hass, "flow_offset"),
-      offsetValue,
+      offsetLabel,
+      this._k(wanted),
       same ? "ok" : "pending"
     );
     rows.push(
@@ -366,18 +374,29 @@ export class HeatingControllerFlowCard extends HTMLElement {
     const downAt = attrs.step_down_at_min ?? (attrs.night ? 90 : 60);
     const position = counterPosition(attrs.flow_timer_min, upAt, downAt);
     const zero = counterPosition(0, upAt, downAt);
+    // A step's lock closes its own side of the bar: hatched, with a lock and
+    // the time left instead of where the count would step.
+    const locked = Number(attrs.locked_direction) || 0;
+    const lockLeft = minutesUntil(attrs.locked_until, Date.now());
+    const lockText = `<ha-icon icon="mdi:lock"></ha-icon> ${
+      lockLeft === null ? t(hass, "flow_locked") : t(hass, "flow_locked_left", { value: lockLeft })
+    }`;
+    const lockBand =
+      locked > 0
+        ? `<span class="lock" style="left:${zero}%;right:0"></span>`
+        : locked < 0
+          ? `<span class="lock" style="left:0;right:${100 - zero}%"></span>`
+          : "";
     const bar =
       position === null
         ? ""
-        : `<div class="bar" style="--zero:${zero}%"><span class="zero"></span><span class="mark" style="left:${position}%"><span>${this._n(
+        : `<div class="bar" style="--zero:${zero}%">${lockBand}<span class="zero"></span><span class="mark" style="left:${position}%"><span>${this._n(
             Math.abs(attrs.flow_timer_min),
             0
           )} min</span></span></div>
-        <div class="scale"><span>${t(hass, "flow_step_down", { value: Math.abs(downAt) })}</span><span>${t(
-          hass,
-          "flow_step_up",
-          { value: Math.abs(upAt) }
-        )}</span></div>`;
+        <div class="scale"><span>${
+          locked < 0 ? lockText : t(hass, "flow_step_down", { value: Math.abs(downAt) })
+        }</span><span>${locked > 0 ? lockText : t(hass, "flow_step_up", { value: Math.abs(upAt) })}</span></div>`;
     const facts = [];
     if (attrs.lead_room) {
       // The room with the widest open valve, which the count follows.
@@ -394,16 +413,6 @@ export class HeatingControllerFlowCard extends HTMLElement {
         }</span>`
       );
     }
-    if (attrs.locked_direction) {
-      facts.push(
-        this._fact(
-          feedback,
-          t(hass, "flow_locked"),
-          t(hass, attrs.locked_direction > 0 ? "flow_locked_up" : "flow_locked_down")
-        )
-      );
-    }
-    if (attrs.night) facts.push(this._fact(feedback, t(hass, "flow_night"), "✓"));
     if (attrs.frozen) {
       facts.push(
         this._fact(feedback, t(hass, "flow_frozen"), t(hass, `flow_freeze_${attrs.frozen_reason}`))
@@ -434,7 +443,10 @@ export class HeatingControllerFlowCard extends HTMLElement {
           "flow_reset"
         )}</button>`
       : "";
-    return `<div class="section"><h3>${t(hass, "flow_section_feedback")}</h3>${bar}<div class="facts" style="margin-top:6px">${facts.join("")}</div>${
+    const night = attrs.night
+      ? ` <ha-icon icon="mdi:weather-night" title="${escapeHtml(t(hass, "flow_night"))}"></ha-icon>`
+      : "";
+    return `<div class="section"><h3>${t(hass, "flow_section_feedback")}${night}</h3>${bar}<div class="facts" style="margin-top:6px">${facts.join("")}</div>${
       reset ? `<div class="row" style="margin-top:6px">${reset}</div>` : ""
     }</div>`;
   }

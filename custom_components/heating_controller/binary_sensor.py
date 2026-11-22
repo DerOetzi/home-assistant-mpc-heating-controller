@@ -169,6 +169,7 @@ class _HeatingSeasonBinarySensor(HeatingHubEntity, BinarySensorEntity):
             if last_ts is None
             else dt_util.as_local(dt_util.utc_from_timestamp(last_ts)).isoformat(),
             "heating_on": self._hub.heating_on,
+            "heat_source_entity": self._hub.heat_source_entity,
         }
 
 

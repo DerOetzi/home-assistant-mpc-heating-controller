@@ -644,7 +644,8 @@ mild days do not end it.
   demand*. **Switch off** is recommended while the heat source heats and that stamp is
   older than the switch-off time (48 h).
 
-Both are recommendations; switching the heat pump stays with you or your own automation.
+Both are recommendations; switching the heat pump stays with you or your own automation. The
+season card offers a hand switch (heat/off) for it.
 The demand periods and the stamp survive restarts; the time Home Assistant is down counts
 as no demand.
 
@@ -709,6 +710,7 @@ works out:
   `feedforward_flow_c`, `frozen`, `frozen_reason`, `flow_timer_min` (the count, minutes; up at −30, down at +60, at night +90),
   `step_up_at_min` / `step_down_at_min` (where the count steps, the night's value at night),
   `night`, `locked_direction` (+1 / −1 while a step's lock holds that direction back, else 0),
+  `locked_until` (when that lock ends),
   `catch_up_until` / `catch_up_reason` (end and cause of a running catch-up, else empty),
   `room_variant_up` / `room_variant_down` (steps a count per room would have taken: up when
   one room's count reaches −30, down when every rated lead room's count is at +60; kept across restarts),

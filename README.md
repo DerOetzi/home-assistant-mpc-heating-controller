@@ -219,7 +219,8 @@ The hub's device *Heizung* reports the lead rooms:
   heat; off while it heats and the hours have not been above the hold threshold for the
   switch-off time. Thresholds are the numbers *Heating season switch-on threshold* (6 h),
   *hold threshold* (2 h) and *switch off after* (48 h). Point a notification automation at
-  the two binary sensors.
+  the two binary sensors. Their attribute `heat_source_entity` names the heat source's
+  climate, which the season card switches by hand.
 
 ## Supported devices
 
@@ -282,6 +283,8 @@ try a different curve before setting it on the heat source.
 with supply, radiator and learning views.
 `custom:heating-controller-flow-card` (no configuration either) shows how the flow target
 comes about and the valve feedback.
+`custom:heating-controller-season-card` (no configuration) shows the heating demand of the
+last 24 h, the switch-on/off recommendation and a *Heat | Off* switch for the heat source.
 
 ## Notes
 

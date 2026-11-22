@@ -444,6 +444,7 @@ class FlowFeedbackSensor(FlowEntity, SensorEntity):
             "step_down_at_min": round(feedback.down_after_s / 60),
             "night": feedback.night,
             "locked_direction": feedback.locked_sign(time.time()),
+            "locked_until": _iso(feedback.locked_until_ts(time.time())),
             "catch_up_until": dt_util.utc_from_timestamp(
                 feedback.catch_up_until_ts
             ).isoformat()

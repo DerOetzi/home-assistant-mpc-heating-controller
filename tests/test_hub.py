@@ -78,6 +78,8 @@ async def test_heating_season_entities(hass: HomeAssistant) -> None:
     assert (
         hass.states.get("binary_sensor.heizung_heating_season_switch_off") is not None
     )
+    switch_on = hass.states.get("binary_sensor.heizung_heating_season_switch_on")
+    assert switch_on.attributes["heat_source_entity"] == "climate.heat_source"
     on_threshold = hass.states.get("number.heizung_heating_season_switch_on_threshold")
     assert on_threshold is not None
     assert float(on_threshold.state) == 6.0

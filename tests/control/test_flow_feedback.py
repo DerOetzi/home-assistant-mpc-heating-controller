@@ -561,6 +561,8 @@ def test_the_lock_up_is_shorter_than_down_and_shorter_still_at_night() -> None:
         assert feedback.feedback_k == 1.0
         assert feedback.locked_sign(end + lock_up - 60) == 1
         assert feedback.locked_sign(end + lock_up) == 0
+        assert feedback.locked_until_ts(end) == feedback.last_step_ts + lock_up
+        assert feedback.locked_until_ts(end + lock_up) is None
 
         # The second step up: the lock, then its own up time.
         end = _run(feedback, [_sample(99)], end + 60, lock_up - 60, night=night)
