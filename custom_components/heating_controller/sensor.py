@@ -529,7 +529,7 @@ class FlowHoldCurvesSensor(_FlowTemperatureSensor):
             value
             for room in self._flow.hub.rooms.values()
             if room.data.get(CONF_LEAD_FLOW)
-            and (value := room.comfort_hold_flow_c(outdoor)) is not None
+            and (value := room.comfort_hold_flow_c(outdoor, round_up=False)) is not None
         ]
         if not values:
             return None

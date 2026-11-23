@@ -1388,10 +1388,12 @@ class HeatingRoomCoordinator:
             return None
         return self.comfort_hold_flow_c(outdoor_c)
 
-    def comfort_hold_flow_c(self, outdoor_c: float) -> float | None:
+    def comfort_hold_flow_c(
+        self, outdoor_c: float, *, round_up: bool = True
+    ) -> float | None:
         """Flow that holds the comfort temperature at an outdoor value."""
         return self.mpc.calculate_hold_flow_temperature_c(
-            self.comfort_temperature_c, outdoor_c
+            self.comfort_temperature_c, outdoor_c, round_up=round_up
         )
 
     @property

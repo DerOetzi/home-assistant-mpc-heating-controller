@@ -84,6 +84,14 @@ def test_recommended_flow_temperature_increases_with_required_power():
     assert high_power_flow > low_power_flow
 
 
+def test_recommended_flow_temperature_without_round_up_lies_within_one_step():
+    model = make_model([TrvConfig(name="trv1")])
+    rounded = model.calculate_recommended_flow_temperature_c(430, 20)
+    exact = model.calculate_recommended_flow_temperature_c(430, 20, round_up=False)
+    assert rounded % 0.5 == 0
+    assert rounded - 0.5 < exact <= rounded
+
+
 def test_recommended_flow_temperature_zero_when_no_power_required():
     model = make_model([TrvConfig(name="trv1")])
     assert model.calculate_recommended_flow_temperature_c(0, 20) == 0

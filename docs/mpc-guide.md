@@ -935,6 +935,7 @@ before changing the heat source's curve:
 the curve's outdoor range, 2 K beyond each end, in whole degrees: attributes `outdoor_c`,
 `rooms` (`name`, `lead`, `flow_c`), `feedback_k`, `lead_demand_pct`, `lead_room` and the
 current `outdoor_temperature_c`. Its state is the lead rooms' highest hold flow plus
-feedback at the current outdoor value.
+feedback at the current outdoor value. Curves and state are not stepped up to the control's 0.5 K
+grid (0.1 K instead), so the curves come out smooth; the control itself still steps up.
 The curves stay out of the recorder. The heating curve card draws them (see
 [`card-design.md`](card-design.md#heating-curve-card)).

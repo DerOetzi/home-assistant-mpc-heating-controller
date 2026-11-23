@@ -36,7 +36,7 @@ const FLOW_STYLES = `
   .big .rooms { font-size: 0.85em; }
   .big .rooms b { font-weight: 500; color: var(--primary-text-color); }
   .section { margin-top: 12px; }
-  .section h3 { font-size: 0.8em; font-weight: 500; margin: 0 0 4px;
+  .section h3 { display: flex; align-items: center; gap: 4px; font-size: 0.8em; font-weight: 500; margin: 0 0 4px;
     color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.04em; }
   .chain + .chain { margin-top: 6px; }
   .chain { display: flex; align-items: center; gap: 4px 8px;
@@ -67,7 +67,9 @@ const FLOW_STYLES = `
       transparent 3px 6px); }
   .scale { display: flex; justify-content: space-between; font-size: 0.75em;
     color: var(--secondary-text-color); }
-  .scale ha-icon, .section h3 ha-icon { --mdc-icon-size: 14px; vertical-align: -2px; }
+  .scale ha-icon { --mdc-icon-size: 14px; vertical-align: -2px; }
+  /* The heading is all capitals: centre on their height, not the line box. */
+  .section h3 ha-icon { --mdc-icon-size: 14px; display: inline-flex; transform: translateY(-2px); }
   .facts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.9em; }
   .facts > * { cursor: pointer; }
   .facts .k { color: var(--secondary-text-color); }

@@ -566,7 +566,11 @@ class HeatEmitterModel:
         )
 
     def calculate_recommended_flow_temperature_c(
-        self, required_heating_power_w: float, target_room_temperature_c: float
+        self,
+        required_heating_power_w: float,
+        target_room_temperature_c: float,
+        *,
+        round_up: bool = True,
     ) -> float | None:
         """Lowest flow at which the open valves give off the required power.
 
@@ -597,6 +601,8 @@ class HeatEmitterModel:
             else:
                 low = mid
 
+        if not round_up:
+            return min(optimal_flow, self._flow_search_max_c)
         return min(
             self.round_up_flow_temperature_c(optimal_flow), self._flow_search_max_c
         )

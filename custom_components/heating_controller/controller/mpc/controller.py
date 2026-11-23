@@ -432,19 +432,21 @@ class RoomMpcController:
         )
 
     def calculate_hold_flow_temperature_c(
-        self, target_temp_c: float, outdoor_temp_c: float
+        self, target_temp_c: float, outdoor_temp_c: float, *, round_up: bool = True
     ) -> float | None:
         """Flow that holds target_temp_c at outdoor_temp_c with the learned UA.
 
         Also asked for outdoor values other than the current one, e.g. the
         heating curve's end points, to read off a curve the room would need.
+        Without round_up the flow is not stepped up to the search grid, for
+        drawing a smooth curve.
         """
         hold_power_w = max(
             0.0,
             self._loss_model.calculate_heat_loss_w(target_temp_c, outdoor_temp_c),
         )
         return self._emitter_model.calculate_recommended_flow_temperature_c(
-            hold_power_w, target_temp_c
+            hold_power_w, target_temp_c, round_up=round_up
         )
 
     def _calculate_recovery_flow(

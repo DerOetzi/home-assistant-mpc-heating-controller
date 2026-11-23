@@ -10,6 +10,7 @@ Only DOM-free helpers are exercised — enough to pin the config round-trip,
 where a silent data-loss bug lived, and the seeded detail rows.
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -768,6 +769,27 @@ def test_curve_card_tightest_point_stays_inside_the_curve(ctx) -> None:
     )
     # -14 lies beyond the curve's cold end and does not count.
     assert result == {"reserve": -1, "outdoor": 0}
+
+
+def test_curve_card_covering_ends_leave_no_deficit(ctx) -> None:
+    # A recommendation that bulges up to 4.8 K above the straight line
+    # between its values at the curve's ends (47 at -13, 30 at 18).
+    ctx.eval(
+        "var COVER_X = []; var COVER_REC = [];"
+        " for (var x = -15; x <= 20; x++) { COVER_X.push(x);"
+        " COVER_REC.push(Math.round((47 - 17 * (x + 13) / 31"
+        " + 0.02 * (x + 13) * (18 - x)) * 10) / 10); }"
+    )
+    ends = _json(ctx, f"coveringEnds({_CURVE}, COVER_X, COVER_REC)")
+    # The ends alone would give 47 and 30; the bulge lifts both.
+    assert ends == {"flowCold": 52, "flowWarm": 35}
+    tight = _json(
+        ctx,
+        f"tightestPoint(COVER_X, curveSeries(Object.assign({{}}, {_CURVE}, "
+        f"{json.dumps(ends)}), COVER_X), COVER_REC, {_CURVE})",
+    )
+    assert tight["reserve"] >= 0
+    assert _json(ctx, f"coveringEnds({_CURVE}, [0, 1], [40, 39])") is None
 
 
 def test_curve_card_escapes_room_names(ctx) -> None:

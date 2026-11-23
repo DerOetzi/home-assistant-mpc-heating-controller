@@ -13,12 +13,12 @@ import { num, localeOf } from "./format.js";
 import {
   CURVE_NUMBER_KEYS,
   HOLD_CURVES_KEY,
+  coveringEnds,
   curveSeries,
   envelopeSeries,
   escapeHtml,
   recommendationSeries,
   tightestPoint,
-  valueAt,
   valueRange,
   ticks,
 } from "./curve.js";
@@ -404,21 +404,15 @@ export class HeatingControllerCurveCard extends HTMLElement {
     if (action === "source") {
       this._experiment = { ...data.curve };
     } else {
-      // The envelope of the chosen rooms plus feedback at the curve's two ends;
-      // bump and width stay.
+      // The envelope of the chosen rooms plus feedback, covered over the whole
+      // curve range; bump and width stay.
       const chosen = data.rooms.filter((room) =>
         action === "lead" ? room.lead : action === "shown" ? this._visible.has(room.name) : true
       );
       const recommendation = envelopeSeries(chosen, data.feedback);
-      const at = (outdoor) => valueAt(data.outdoorValues, recommendation, outdoor);
-      const cold = at(data.curve.outdoorCold);
-      const warm = at(data.curve.outdoorWarm);
-      if (!Number.isFinite(cold) || !Number.isFinite(warm)) return;
-      this._experiment = {
-        ...this._experiment,
-        flowCold: Math.ceil(cold),
-        flowWarm: Math.ceil(warm),
-      };
+      const ends = coveringEnds(this._experiment, data.outdoorValues, recommendation);
+      if (!ends) return;
+      this._experiment = { ...this._experiment, ...ends };
     }
     this._syncFields();
     this._saveState();
@@ -448,12 +442,13 @@ export class HeatingControllerCurveCard extends HTMLElement {
     const source = curveSeries(data.curve, xs);
     const experiment = curveSeries(this._experiment, xs);
     const recommendation = recommendationSeries(data.rooms, data.feedback);
-    // Rooms are drawn with the feedback, like the recommendation, so every line
-    // reads directly as "the curve needs to be at least here".
+    // Rooms are drawn as their model gives them; only the recommendation carries
+    // the feedback, so the gap between the lead rooms and it shows what the
+    // model misses.
     const shown = data.rooms
       .map((room, index) => ({
         ...room,
-        flow_c: envelopeSeries([room], data.feedback),
+        flow_c: envelopeSeries([room], 0),
         color: ROOM_COLORS[index % ROOM_COLORS.length],
       }))
       .filter((room) => this._visible.has(room.name));

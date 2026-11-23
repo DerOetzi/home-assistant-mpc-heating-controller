@@ -69,6 +69,35 @@ export const valueAt = (outdoorValues, series, outdoor) => {
   return null;
 };
 
+// Curve ends that keep the whole curve at or above the recommendation within
+// its range: the straight line through the recommendation at both ends, both
+// raised by the largest deficit in between (the recommendation bulges above
+// that line), then rounded up to whole degrees. Slope, bump and width stay.
+export const coveringEnds = (curve, outdoorValues, recommendation) => {
+  const at = (outdoor) => valueAt(outdoorValues, recommendation, outdoor);
+  const cold = at(curve.outdoorCold);
+  const warm = at(curve.outdoorWarm);
+  if (!Number.isFinite(cold) || !Number.isFinite(warm)) return null;
+  const deficit = (candidate) => {
+    let worst = 0;
+    outdoorValues.forEach((outdoor, index) => {
+      if (outdoor < candidate.outdoorCold || outdoor > candidate.outdoorWarm) return;
+      const needed = recommendation[index];
+      const value = curveFlowAt(candidate, outdoor);
+      if (Number.isFinite(needed) && Number.isFinite(value)) worst = Math.max(worst, needed - value);
+    });
+    return worst;
+  };
+  const exact = { ...curve, flowCold: cold, flowWarm: warm };
+  const lift = deficit(exact);
+  let ends = { ...curve, flowCold: Math.ceil(cold + lift), flowWarm: Math.ceil(warm + lift) };
+  // Rounding the drawn curve to tenths can leave a hair of deficit; one more degree covers it.
+  for (let pass = 0; pass < 3 && deficit(ends) > 0.001; pass += 1) {
+    ends = { ...ends, flowCold: ends.flowCold + 1, flowWarm: ends.flowWarm + 1 };
+  }
+  return { flowCold: ends.flowCold, flowWarm: ends.flowWarm };
+};
+
 // The tightest point of a curve against the recommendation within the
 // curve's own range: smallest reserve and where it is.
 export const tightestPoint = (outdoorValues, series, recommendation, curve) => {

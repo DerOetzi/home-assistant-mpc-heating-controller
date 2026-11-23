@@ -488,12 +488,21 @@ class HeatingHub:
         )
 
     def hold_flow_curves(self, outdoor_values: list[float]) -> list[dict[str, Any]]:
-        """Each room's comfort hold flow over the outdoor values, for the card."""
+        """Each room's comfort hold flow over the outdoor values, for the card.
+
+        Not stepped up to the control's grid, so the curves come out smooth.
+        """
         return [
             {
                 "name": room.room_name,
                 "lead": bool(room.data.get(CONF_LEAD_FLOW)),
-                "flow_c": [room.comfort_hold_flow_c(value) for value in outdoor_values],
+                "flow_c": [
+                    None
+                    if (flow_c := room.comfort_hold_flow_c(value, round_up=False))
+                    is None
+                    else round(flow_c, 1)
+                    for value in outdoor_values
+                ],
             }
             for room in self.rooms.values()
         ]

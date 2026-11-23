@@ -273,8 +273,10 @@ async def test_curve_recommendation_from_the_lead_rooms_hold_flow(
     (room,) = curves.attributes["rooms"]
     assert room["name"] == "Wohnzimmer" and room["lead"] is True
     assert len(room["flow_c"]) == len(outdoor)
-    assert room["flow_c"][outdoor.index(-13.0)] == float(cold.state)
-    assert room["flow_c"][outdoor.index(18.0)] == float(warm.state)
+    # The card's curves are not stepped up to the control's 0.5 K grid.
+    for end, state in ((-13.0, cold), (18.0, warm)):
+        assert float(state.state) - 0.5 < room["flow_c"][outdoor.index(end)]
+        assert room["flow_c"][outdoor.index(end)] <= float(state.state)
 
 
 def _hub(hass: HomeAssistant):

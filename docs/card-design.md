@@ -136,13 +136,16 @@ The percentage is the room's highest valve opening.
 plots flow temperature over outdoor temperature:
 
 - the heat source's curve, as set in the flow device's curve numbers;
-- each room's comfort hold flow plus the flow feedback — chips under the chart show or hide a
+- each room's comfort hold flow as its model gives it (without feedback; the gap to the
+  recommendation shows what the model misses) — chips under the chart show or hide a
   room; flow lead rooms (marked with a dot) start visible, the rest hidden, dashed when
   shown;
 - the recommendation (highest lead room plus feedback) as a thin grey line;
 - a trial curve (dashed) with its own cold/warm flow, raise and raise width. "Copy
-  heating curve" resets it; "Ends from rooms" puts its cold and warm ends on the
-  highest hold flow plus feedback of all rooms, the lead rooms or the rooms shown.
+  heating curve" resets it; "Ends from rooms" sets its cold and warm ends so the trial
+  curve stays at or above the highest hold flow plus feedback of all rooms, the lead
+  rooms or the rooms shown over its whole range: the straight line through both ends,
+  both raised by the largest deficit in between, rounded up to whole degrees.
   Below, the tightest point of both curves against the recommendation: the smallest
   reserve inside the curve's range, red when negative. Then the valve feedback in K
   with the lead demand and its room.
