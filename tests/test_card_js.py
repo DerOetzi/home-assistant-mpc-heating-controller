@@ -1138,6 +1138,28 @@ def test_season_card_renders(ctx) -> None:
     assert "Letzte Anforderung</span> vor 3 h" in html
     assert "Ausschalten empfohlen</span> in 45 h" in html
     assert "empfohlen<" not in html.split("Heizgrenze")[0]
+
+
+def test_season_card_shows_the_automatic_switch(ctx) -> None:
+    ctx.eval(_FLOW_RENDER_SETUP)
+    ctx.eval(_SEASON_RENDER_SETUP)
+    ctx.eval("sadd('switch.auto', 'heating_season_auto', 'on');")
+    ctx.eval("sadd('binary_sensor.aus', 'heating_season_switch_off', 'on', SEASON_ATTRS);")
+    html = ctx.eval("renderSeason()")
+    for broken in ("undefined", "NaN", "null", "season_"):
+        assert broken not in html
+    assert 'class="auto on" data-auto-toggle="switch.auto"' in html
+    assert ">Automatik</button>" in html
+    # With the automatic on the hub switches instead of recommending.
+    assert "Wird ausgeschaltet" in html
+    assert "Schaltet aus</span> in 45 h" in html
+    # A hand switch knows it turns the automatic off.
+    assert 'data-target="climate.wp" data-auto="switch.auto"' in html
+
+    ctx.eval("sadd('switch.auto', 'heating_season_auto', 'off');")
+    html = ctx.eval("renderSeason()")
+    assert 'class="auto" data-auto-toggle="switch.auto"' in html
+    assert "Ausschalten empfohlen<" in html
     ctx.eval("SS['binary_sensor.ein'].state = 'on'; SS['climate.wp'].state = 'off'")
     ctx.eval("SEASON_ATTRS.heating_on = false")
     html_on = ctx.eval("renderSeason()")

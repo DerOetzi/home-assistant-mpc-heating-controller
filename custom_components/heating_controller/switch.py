@@ -32,7 +32,9 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     hub: HeatingHub = entry.runtime_data
-    async_add_entities([HouseComfortSwitch(hub), PvBoostSwitch(hub)])
+    async_add_entities(
+        [HouseComfortSwitch(hub), PvBoostSwitch(hub), HeatingSeasonAutoSwitch(hub)]
+    )
     _remove_dropped_room_comfort_switches(hass, hub)
     async_add_room_entities(
         entry,
@@ -130,6 +132,35 @@ class PvBoostSwitch(HeatingHubEntity, SwitchEntity, RestoreEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self._hub.async_set_pv_boost(False)
+
+
+class HeatingSeasonAutoSwitch(HeatingHubEntity, SwitchEntity, RestoreEntity):
+    """The hub switches the heat source heat/off by the season criterion.
+
+    A switch of the heat source by hand turns this off. On until restored
+    otherwise.
+    """
+
+    _attr_translation_key = "heating_season_auto"
+    _attr_icon = "mdi:thermostat-auto"
+
+    def __init__(self, hub: HeatingHub) -> None:
+        super().__init__(hub, "heating_season_auto")
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        await self._hub.async_set_season_auto(last is None or last.state == STATE_ON)
+
+    @property
+    def is_on(self) -> bool:
+        return self._hub.season_auto_on
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._hub.async_set_season_auto(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._hub.async_set_season_auto(False)
 
 
 class RoomComfortSwitch(HeatingControllerEntity, SwitchEntity, RestoreEntity):

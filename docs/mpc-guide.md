@@ -638,14 +638,22 @@ The hub sums up how many of the last 24 hours *Lead rooms heating demand* was on
 duration, not the moment, decides: a cold morning hour does not start the season, a few
 mild days do not end it.
 
-- **Switch on** is recommended while the 24 h sum is above the switch-on threshold (6 h)
-  and the heat source is not heating.
+- **Switch on** is due while the 24 h sum is above the switch-on threshold (6 h) and the
+  heat source is not heating.
 - Every minute the sum is above the hold threshold (2 h) stamps *Heating season last
-  demand*. **Switch off** is recommended while the heat source heats and that stamp is
-  older than the switch-off time (48 h).
+  demand*. **Switch off** is due while the heat source heats and that stamp is older than
+  the switch-off time (48 h).
 
-Both are recommendations; switching the heat pump stays with you or your own automation. The
-season card offers a hand switch (heat/off) for it.
+While the hub switch *Heating season automatic* is on (default), the hub sets the heat
+source's climate to `heat` or `off` when one of them is due: only once the startup gate is
+open, the heat source reachable and its state known. The write counts as required on the
+write budget. Until the climate follows, the command goes out again at most every 30 min.
+
+A change of the climate between `heat` and `off` the hub did not command within the last
+30 min is a switch by hand (season card, Daikin app, another automation) and turns
+*Heating season automatic* off; the hand switch then holds until you turn the automatic on
+again. A change to or from `unavailable` is no switch. With the automatic off, both sensors
+are recommendations only. Notifications on a switch belong to an automation on the climate.
 The demand periods and the stamp survive restarts; the time Home Assistant is down counts
 as no demand.
 

@@ -7,6 +7,7 @@ demand and the reserve of the heat pump's curve.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
@@ -54,7 +56,12 @@ from .const import (
 )
 from .control.flow_correction import FlowCorrection
 from .control.flow_feedback import DemandSample, FlowFeedback
-from .control.heating_season import HeatingSeason
+from .control.heating_season import (
+    HEAT_MODE,
+    OFF_MODE,
+    HeatingSeason,
+    SeasonSwitcher,
+)
 from .control.hot_water import FlowChargeDetector
 from .control.write_budget import WriteBudget, WritePriority
 from .coordinator import HeatingRoomCoordinator
@@ -63,6 +70,8 @@ from .hot_water_device import HotWaterDevice
 from .irradiance import IrradianceProvider, SurfaceGeometry, building_surfaces
 from .startup_gate import StartupGate
 from .store import HubStore
+
+_LOGGER = logging.getLogger(__name__)
 
 HUB_TICK = timedelta(minutes=1)
 HUB_SAVE_DELAY_S = 300
@@ -119,6 +128,9 @@ class HeatingHub:
         # A start counts as a fresh value; the gap runs from here.
         self.flow_seen_ts = time.time()
         self.season = HeatingSeason()
+        self.season_switcher = SeasonSwitcher()
+        # Switch the heat source by the season criterion; off after a hand switch.
+        self.season_auto_on = True
         self.flow_feedback = FlowFeedback()
         self.flow_correction = FlowCorrection()
         self.charge_detector = FlowChargeDetector()
@@ -260,6 +272,7 @@ class HeatingHub:
             self.flow_seen_ts = now_ts
         self.update_charge()
         self.season.update(self.heating_demand, now_ts, self.season_hold_threshold_h)
+        self._switch_season(now_ts)
         self._store.async_delay_save(self._export, HUB_SAVE_DELAY_S)
         if self.hot_water is not None:
             self.hass.async_create_task(self.hot_water.async_evaluate())
@@ -347,8 +360,70 @@ class HeatingHub:
 
     @property
     def heat_source_entity(self) -> str | None:
-        """The heat source's climate entity, switched heat/off by hand."""
+        """The heat source's climate entity, switched heat/off by the hub."""
         return self._heat_source_entity
+
+    async def async_set_season_auto(self, value: bool) -> None:
+        """Switch the automatic heat/off of the heat source."""
+        self.season_auto_on = value
+        if value:
+            self._switch_season(time.time())
+        self._notify_listeners()
+
+    def _switch_season(self, now_ts: float) -> None:
+        """Command the heat source to the mode the season criterion asks for."""
+        if (
+            not self.season_auto_on
+            or not self.started
+            or not self._heat_source_entity
+            or self.heating_on is None
+            or not self.heat_source_reachable
+        ):
+            return
+        mode = SeasonSwitcher.wanted(
+            self.season_switch_on_recommended, self.season_switch_off_recommended
+        )
+        if mode is None or not self.season_switcher.due(mode, now_ts):
+            return
+        self.season_switcher.sent(mode, now_ts)
+        self.request_write(WritePriority.REQUIRED)
+        self.hass.async_create_task(self._async_command_heat_source(mode))
+
+    async def _async_command_heat_source(self, mode: str) -> None:
+        try:
+            await self.hass.services.async_call(
+                "climate",
+                "set_hvac_mode",
+                {"entity_id": self._heat_source_entity, "hvac_mode": mode},
+                blocking=True,
+            )
+        except HomeAssistantError as err:
+            _LOGGER.warning(
+                "Switching %s to %s failed: %s", self._heat_source_entity, mode, err
+            )
+
+    @callback
+    def _heat_source_changed(self, event: Event[EventStateChangedData]) -> None:
+        """A change between heat and off not commanded by the hub is by hand."""
+        old = event.data["old_state"]
+        new = event.data["new_state"]
+        modes = (HEAT_MODE, OFF_MODE)
+        if (
+            old is None
+            or new is None
+            or old.state not in modes
+            or new.state not in modes
+            or old.state == new.state
+        ):
+            return
+        if not self.season_switcher.take_change(new.state, time.time()):
+            if self.season_auto_on:
+                _LOGGER.info(
+                    "%s switched to %s by hand; automatic heating season off",
+                    self._heat_source_entity,
+                    new.state,
+                )
+            self.season_auto_on = False
 
     @property
     def heating_on(self) -> bool | None:
@@ -409,7 +484,9 @@ class HeatingHub:
             update_callback()
 
     @callback
-    def _async_handle_state_change(self, _event: Event[EventStateChangedData]) -> None:
+    def _async_handle_state_change(self, event: Event[EventStateChangedData]) -> None:
+        if event.data["entity_id"] == self._heat_source_entity:
+            self._heat_source_changed(event)
         self._notify_listeners()
 
     def _lead(

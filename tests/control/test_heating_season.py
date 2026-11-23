@@ -1,4 +1,9 @@
-from heating_controller.control.heating_season import HeatingSeason
+from heating_controller.control.heating_season import (
+    OWN_CHANGE_S,
+    SWITCH_RETRY_S,
+    HeatingSeason,
+    SeasonSwitcher,
+)
 
 H = 3600.0
 T0 = 1_800_000_000.0
@@ -72,3 +77,31 @@ def test_restart_closes_running_period_where_it_was_last_seen() -> None:
     # Down for an hour, then the demand is on again.
     restored.update(True, ts + H, hold_threshold_h=2.0)
     assert round(restored.hours(ts + 2 * H), 2) == round(2 - 1 / 60 + 1, 2)
+
+
+def test_switcher_wants_the_recommended_mode() -> None:
+    assert SeasonSwitcher.wanted(True, False) == "heat"
+    assert SeasonSwitcher.wanted(False, True) == "off"
+    assert SeasonSwitcher.wanted(False, False) is None
+
+
+def test_switcher_repeats_a_command_only_after_the_retry_time() -> None:
+    switcher = SeasonSwitcher()
+    assert switcher.due("off", T0)
+    switcher.sent("off", T0)
+    assert not switcher.due("off", T0 + SWITCH_RETRY_S - 1)
+    assert switcher.due("off", T0 + SWITCH_RETRY_S)
+    assert switcher.due("heat", T0 + 1)
+
+
+def test_switcher_tells_own_changes_from_hand_switches() -> None:
+    switcher = SeasonSwitcher()
+    switcher.sent("off", T0)
+    assert switcher.take_change("off", T0 + 60)
+    # The command is used up; the next change is by hand.
+    assert not switcher.take_change("heat", T0 + 120)
+
+    switcher.sent("off", T0)
+    assert not switcher.take_change("heat", T0 + 60)
+    switcher.sent("off", T0)
+    assert not switcher.take_change("off", T0 + OWN_CHANGE_S + 1)

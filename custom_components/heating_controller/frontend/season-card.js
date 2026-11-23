@@ -2,9 +2,10 @@
  * Heating season card.
  *
  * Whether the lead rooms ask for heat, how long over the last 24 h, when the
- * hub recommends switching the heat source on or off, and a hand switch for
- * the heat source (heat/off). Nothing switches by itself. Entities are found
- * by translation key; the card needs no configuration.
+ * hub switches the heat source on or off, the hub's automatic switch and a
+ * hand switch for the heat source (heat/off). A hand switch turns the
+ * automatic off. Entities are found by translation key; the card needs no
+ * configuration.
  */
 
 import { fixed, localeOf, withUnit, num } from "./format.js";
@@ -30,6 +31,12 @@ const SEASON_STYLES = `
   .toggle button.active { cursor: default; color: var(--text-primary-color, #fff); }
   .toggle button.active.heat { background: var(--state-climate-heat-color, #ff8100); }
   .toggle button.active.off { background: var(--disabled-color, #9e9e9e); }
+  .auto { display: inline-flex; align-items: center; gap: 4px; font: inherit; font-size: 0.9em;
+    padding: 4px 10px; border: 1px solid var(--divider-color); border-radius: 16px;
+    background: none; color: var(--secondary-text-color); cursor: pointer; }
+  .auto ha-icon { --mdc-icon-size: 16px; }
+  .auto.on { color: var(--text-primary-color, #fff); border-color: transparent;
+    background: var(--primary-color, #03a9f4); }
   .section { margin-top: 12px; }
   .section h3 { font-size: 0.8em; font-weight: 500; margin: 0 0 4px;
     color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.04em; }
@@ -151,9 +158,9 @@ export class HeatingControllerSeasonCard extends HTMLElement {
     }
     const html = `<style>${SEASON_STYLES}</style>
       <ha-card>
-        <div class="head"><div class="title">${title}</div>${this._recommendation(roles)}${this._toggle(
-          heatSource
-        )}</div>
+        <div class="head"><div class="title">${title}</div>${this._recommendation(roles)}${this._auto(
+          roles.auto
+        )}${this._toggle(heatSource, roles.auto)}</div>
         ${content}
       </ha-card>`;
     if (html === this._html) return;
@@ -173,11 +180,18 @@ export class HeatingControllerSeasonCard extends HTMLElement {
     root.querySelectorAll("[data-mode]").forEach((element) =>
       element.addEventListener("click", () => {
         const mode = element.dataset.mode;
-        if (!window.confirm(t(this._hass, `season_confirm_${mode}`))) return;
+        const auto = this._hass.states[element.dataset.auto ?? ""]?.state === "on";
+        const question = t(this._hass, `season_confirm_${mode}`);
+        if (!window.confirm(auto ? `${question} ${t(this._hass, "season_confirm_auto_off")}` : question)) return;
         this._hass.callService("climate", "set_hvac_mode", {
           entity_id: element.dataset.target,
           hvac_mode: mode,
         });
+      })
+    );
+    root.querySelectorAll("[data-auto-toggle]").forEach((element) =>
+      element.addEventListener("click", () => {
+        this._hass.callService("switch", "toggle", { entity_id: element.dataset.autoToggle });
       })
     );
   }
@@ -200,20 +214,36 @@ export class HeatingControllerSeasonCard extends HTMLElement {
       `<span class="chip" data-entity="${escapeHtml(stateObj.entity_id)}"><ha-icon icon="${icon}"></ha-icon>${escapeHtml(
         t(hass, key)
       )}</span>`;
-    if (roles.switchOn?.state === "on") return chip(roles.switchOn, "mdi:radiator", "season_recommend_on");
-    if (roles.switchOff?.state === "on") return chip(roles.switchOff, "mdi:radiator-off", "season_recommend_off");
+    const auto = roles.auto?.state === "on";
+    if (roles.switchOn?.state === "on")
+      return chip(roles.switchOn, "mdi:radiator", auto ? "season_switching_on" : "season_recommend_on");
+    if (roles.switchOff?.state === "on")
+      return chip(roles.switchOff, "mdi:radiator-off", auto ? "season_switching_off" : "season_recommend_off");
     return "";
   }
 
+  // The hub's automatic switch; a click toggles it.
+  _auto(auto) {
+    if (!auto) return "";
+    const on = auto.state === "on";
+    return `<button type="button" class="auto${on ? " on" : ""}" data-auto-toggle="${escapeHtml(
+      auto.entity_id
+    )}" title="${escapeHtml(t(this._hass, on ? "season_auto_on" : "season_auto_off"))}"><ha-icon icon="mdi:thermostat-auto"></ha-icon>${escapeHtml(
+      t(this._hass, "season_auto")
+    )}</button>`;
+  }
+
   // Heat | Off for the heat source; the current mode is marked, the other asks first.
-  _toggle(heatSource) {
+  _toggle(heatSource, auto) {
     if (!heatSource) return "";
     const hass = this._hass;
     const id = escapeHtml(heatSource.entity_id);
     const button = (mode) => {
       const active = heatSource.state === mode;
       return `<button type="button" class="${mode}${active ? " active" : ""}"${
-        active ? ` data-entity="${id}"` : ` data-mode="${mode}" data-target="${id}"`
+        active
+          ? ` data-entity="${id}"`
+          : ` data-mode="${mode}" data-target="${id}"${auto ? ` data-auto="${escapeHtml(auto.entity_id)}"` : ""}`
       }>${escapeHtml(t(hass, `season_mode_${mode}`))}</button>`;
     };
     return `<span class="toggle">${button("heat")}${button("off")}</span>`;
@@ -290,7 +320,7 @@ export class HeatingControllerSeasonCard extends HTMLElement {
         facts.push(
           this._fact(
             roles.offAfter ?? season,
-            t(hass, "season_off_at"),
+            t(hass, roles.auto?.state === "on" ? "season_off_auto_at" : "season_off_at"),
             until <= 0 ? t(hass, "season_off_due") : this._span(Math.round(until * 60), "season_in")
           )
         );

@@ -698,6 +698,9 @@
       },
       "pv_boost": {
         "name": "PV surplus"
+      },
+      "heating_season_auto": {
+        "name": "Heating season automatic"
       }
     }
   },

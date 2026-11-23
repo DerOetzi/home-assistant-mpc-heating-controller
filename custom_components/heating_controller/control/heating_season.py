@@ -3,8 +3,9 @@
 Keeps the periods in which the hub's heating demand was on (the lead rooms'
 hold flow at or above the heat pump's lowest useful flow), sums them over
 the last 24 h and keeps the last time that sum was above the hold threshold.
-From these it recommends switching the heating on or off; it never switches
-anything itself.
+From these it recommends switching the heating on or off. The hub switches
+the heat source by these while its automatic switch is on; a switch by hand
+turns that off.
 """
 
 from __future__ import annotations
@@ -12,6 +13,12 @@ from __future__ import annotations
 from typing import Any
 
 DAY_S = 24 * 3600
+# A command goes out again after this while the heat source has not followed.
+SWITCH_RETRY_S = 30 * 60
+# A change of the heat source to the commanded mode within this is the hub's own.
+OWN_CHANGE_S = 30 * 60
+HEAT_MODE = "heat"
+OFF_MODE = "off"
 
 
 class HeatingSeason:
@@ -92,3 +99,46 @@ class HeatingSeason:
         last = data.get("last_demand_ts")
         self.last_demand_ts = None if last is None else float(last)
         self._alive_ts = None if alive_ts is None else float(alive_ts)
+
+
+class SeasonSwitcher:
+    """When the hub commands the heat source, and which changes were its own."""
+
+    def __init__(self) -> None:
+        self.command: str | None = None
+        self.command_ts: float | None = None
+
+    @staticmethod
+    def wanted(switch_on: bool, switch_off: bool) -> str | None:
+        """The mode the recommendations ask for, if any."""
+        if switch_on:
+            return HEAT_MODE
+        if switch_off:
+            return OFF_MODE
+        return None
+
+    def due(self, mode: str, now_ts: float) -> bool:
+        """Whether a command for mode may go out now."""
+        return not (
+            self.command == mode
+            and self.command_ts is not None
+            and now_ts - self.command_ts < SWITCH_RETRY_S
+        )
+
+    def sent(self, mode: str, now_ts: float) -> None:
+        self.command = mode
+        self.command_ts = now_ts
+
+    def take_change(self, new_mode: str, now_ts: float) -> bool:
+        """Whether a change of the heat source to new_mode was the hub's own.
+
+        An own change ends the command; any other is a switch by hand.
+        """
+        own = (
+            self.command == new_mode
+            and self.command_ts is not None
+            and now_ts - self.command_ts <= OWN_CHANGE_S
+        )
+        self.command = None
+        self.command_ts = None
+        return own

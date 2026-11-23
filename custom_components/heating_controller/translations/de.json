@@ -698,6 +698,9 @@
       },
       "pv_boost": {
         "name": "PV-Überschuss"
+      },
+      "heating_season_auto": {
+        "name": "Heizsaison automatisch"
       }
     }
   },

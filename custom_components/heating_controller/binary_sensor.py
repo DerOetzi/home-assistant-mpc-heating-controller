@@ -170,11 +170,13 @@ class _HeatingSeasonBinarySensor(HeatingHubEntity, BinarySensorEntity):
             else dt_util.as_local(dt_util.utc_from_timestamp(last_ts)).isoformat(),
             "heating_on": self._hub.heating_on,
             "heat_source_entity": self._hub.heat_source_entity,
+            "automatic": self._hub.season_auto_on,
         }
 
 
 class HeatingSeasonSwitchOnBinarySensor(_HeatingSeasonBinarySensor):
-    """On while the lead rooms ask for heat long enough and heating is off."""
+    """On while the lead rooms ask for heat long enough and heating is off;
+    the hub then switches the heat source on if automatic."""
 
     _attr_translation_key = "heating_season_switch_on"
 
@@ -187,7 +189,8 @@ class HeatingSeasonSwitchOnBinarySensor(_HeatingSeasonBinarySensor):
 
 
 class HeatingSeasonSwitchOffBinarySensor(_HeatingSeasonBinarySensor):
-    """On while heating although the lead rooms have not asked for long."""
+    """On while heating although the lead rooms have not asked for long;
+    the hub then switches the heat source off if automatic."""
 
     _attr_translation_key = "heating_season_switch_off"
 

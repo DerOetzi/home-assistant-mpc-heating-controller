@@ -214,13 +214,17 @@ The hub's device *Heizung* reports the lead rooms:
 - *Heating demand last 24 h* — hours in which *Lead rooms heating demand* was on, kept
   across restarts (the time HA is down counts as no demand).
 - *Heating season last demand* — last time those hours were above the hold threshold.
-- *Heating season: switch on* / *switch off* — recommendations only, nothing is switched:
-  on while the 24 h demand is above the switch-on threshold and the heat source does not
-  heat; off while it heats and the hours have not been above the hold threshold for the
-  switch-off time. Thresholds are the numbers *Heating season switch-on threshold* (6 h),
-  *hold threshold* (2 h) and *switch off after* (48 h). Point a notification automation at
-  the two binary sensors. Their attribute `heat_source_entity` names the heat source's
-  climate, which the season card switches by hand.
+- *Heating season: switch on* / *switch off* — the season criterion: on while the 24 h
+  demand is above the switch-on threshold and the heat source does not heat; off while it
+  heats and the hours have not been above the hold threshold for the switch-off time.
+  Thresholds are the numbers *Heating season switch-on threshold* (6 h), *hold threshold*
+  (2 h) and *switch off after* (48 h). Their attribute `heat_source_entity` names the heat
+  source's climate, `automatic` the state of the switch below.
+- *Heating season automatic* (switch, default on) — the hub switches the heat source's
+  climate `heat`/`off` by the criterion. Switching it by hand (season card, vendor app)
+  turns this off, so the hand switch holds; turn it on again to hand back. Point a
+  notification automation at the climate's mode. See
+  [Heating season](docs/mpc-guide.md#heating-season).
 
 ## Supported devices
 

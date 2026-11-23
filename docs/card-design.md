@@ -232,20 +232,21 @@ title: Vorlauf   # optional
 
 ## Heating season card
 
-`custom:heating-controller-season-card` shows the heating season the hub works out and lets
-you switch the heat source by hand. No configuration (optional `title:`); entities are found
+`custom:heating-controller-season-card` shows the heating season the hub works out, its
+automatic switch, and lets you switch the heat source by hand. No configuration (optional `title:`); entities are found
 by translation key.
 
-- **Header:** a chip when switching on or off is recommended, and a *Heat | Off* switch for
-  the heat source's climate (`heat_source_entity` of the season sensors). The current mode
-  is marked; the other one asks first, then calls `climate.set_hvac_mode`. Nothing switches
-  by itself.
+- **Header:** a chip when switching on or off is due (*Switching on/off* with the automatic
+  on, *recommended* without), an *Automatic* button that toggles *Heating season automatic*,
+  and a *Heat | Off* switch for the heat source's climate (`heat_source_entity` of the
+  season sensors). The current mode is marked; the other one asks first (noting that this
+  turns the automatic off), then calls `climate.set_hvac_mode`.
 - **Heating limit:** hold flow of the heating-limit lead rooms ≥ or < the flow threshold →
   demand yes/no (green on yes). Below: the lead rooms, the one that sets the hold flow in
   bold; the reserve to the curve and since when the demand holds.
 - **Demand last 24 h:** a bar 0–24 h with the demand hours and ticks at the hold and the
-  switch-on threshold; the last demand and, while heating, when switching off would be
-  recommended (last demand + switch-off time).
+  switch-on threshold; the last demand and, while heating, when switching off is due
+  (last demand + switch-off time).
 
 The thresholds are set on their number entities, not on the card.
 

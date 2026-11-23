@@ -5,6 +5,7 @@
 export const SEASON_CARD_ROLES = {
   heating_season_switch_on: "switchOn",
   heating_season_switch_off: "switchOff",
+  heating_season_auto: "auto",
   lead_heating_demand: "demand",
   heating_demand_hours_24h: "hours",
   heating_season_last_demand: "lastDemand",
