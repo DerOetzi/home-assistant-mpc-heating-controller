@@ -943,7 +943,7 @@ def test_rooms_card_renders_every_view(ctx, view) -> None:
     assert html.index("Wohnzimmer") < lead < html.index("</td>", lead)
     assert ">Leitraum<" in html
     if view == "supply":
-        assert 'class="chip undersupplied">Zu knapp 92 %' in html
+        assert 'class="chip undersupplied">Unterversorgt 92 %' in html
         assert 'class="flow-room"' in html and 'class="muted"' in html
         assert ">44.2\u00a0°C<" in html or ">44,2\u00a0°C<" in html
     elif view == "radiators":

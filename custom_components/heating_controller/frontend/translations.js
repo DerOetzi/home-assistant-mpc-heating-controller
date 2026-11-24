@@ -280,9 +280,9 @@ export const TRANSLATIONS = {
     row_additional_heat: "Zusatzwärme",
     row_additional_heat_learning: "{value} (lernt: {ungated})",
 
-    supply_undersupplied: "Zu knapp",
-    supply_supplied: "Am Limit",
-    supply_oversupplied: "Reserve",
+    supply_undersupplied: "Unterversorgt",
+    supply_supplied: "Versorgt",
+    supply_oversupplied: "Überversorgt",
     supply_not_rated: "Nicht bewertet",
     supply_reason_window_open: "Fenster offen",
     supply_reason_frost_protection: "Frostschutz",

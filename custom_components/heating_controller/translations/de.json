@@ -462,9 +462,9 @@
       "supply": {
         "name": "Versorgung",
         "state": {
-          "undersupplied": "zu knapp",
-          "supplied": "am Limit",
-          "oversupplied": "Reserve",
+          "undersupplied": "unterversorgt",
+          "supplied": "versorgt",
+          "oversupplied": "überversorgt",
           "not_rated": "nicht bewertet"
         },
         "state_attributes": {
