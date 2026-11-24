@@ -5,12 +5,11 @@ from __future__ import annotations
 import dataclasses
 import logging
 import time
-from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.core import Context, HomeAssistant, callback
+from homeassistant.core import Context, HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import (
@@ -31,7 +30,9 @@ from .control.flow import (
 )
 from .control.flow_correction import SETTLE_S, CorrectionFreeze
 from .control.flow_feedback import FeedbackFreeze
+from .listeners import Observable
 from .night import NightWindow
+from .state_reader import attribute_float, state_float
 
 if TYPE_CHECKING:
     from .hub import HeatingHub
@@ -54,10 +55,11 @@ FLOW_NUMBER_DEFAULTS: dict[str, float] = {
 }
 
 
-class FlowDevice:
+class FlowDevice(Observable):
     def __init__(
         self, hass: HomeAssistant, hub: HeatingHub, subentry: ConfigSubentry
     ) -> None:
+        super().__init__()
         self.hass = hass
         self.hub = hub
         self.subentry_id = subentry.subentry_id
@@ -76,7 +78,6 @@ class FlowDevice:
         self.last_error: str | None = None
         # The last decision wanted a new value that did not go out.
         self._unwritten = False
-        self._listeners: list[Callable[[], None]] = []
         self._context = Context()
         self._night = NightWindow(hass)
 
@@ -100,15 +101,15 @@ class FlowDevice:
             raise ValueError(f"Unknown flow number {key}")
         self.numbers[key] = float(value)
         self.controller.config = self._config()
-        self._notify()
+        self._notify_listeners()
 
     def set_write_enabled(self, enabled: bool) -> None:
         self.write_enabled = enabled
-        self._notify()
+        self._notify_listeners()
 
     def reset_feedback(self) -> None:
         self.hub.reset_flow_feedback()
-        self._notify()
+        self._notify_listeners()
 
     @property
     def curve(self) -> HeatingCurve:
@@ -147,17 +148,9 @@ class FlowDevice:
         state = self.hass.states.get(self.actuator_entity)
         if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return None
-        raw = (
-            state.attributes.get("temperature")
-            if self.actuator_entity.startswith("climate.")
-            else state.state
-        )
-        if raw is None:
-            return None
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return None
+        if self.actuator_entity.startswith("climate."):
+            return attribute_float(state, "temperature")
+        return state_float(state)
 
     @property
     def curve_flow_c(self) -> float | None:
@@ -241,7 +234,7 @@ class FlowDevice:
         self._unwritten = decision.reason == "hold" or (
             decision.write is not None and not written
         )
-        self._notify()
+        self._notify_listeners()
 
     def _freeze_reason(
         self, inputs: FlowInputs, no_feedforward: bool
@@ -315,14 +308,3 @@ class FlowDevice:
         return True
 
     # --- Listeners ---------------------------------------------------------
-
-    def async_add_listener(
-        self, update_callback: Callable[[], None]
-    ) -> Callable[[], None]:
-        self._listeners.append(update_callback)
-        return lambda: self._listeners.remove(update_callback)
-
-    @callback
-    def _notify(self) -> None:
-        for update_callback in list(self._listeners):
-            update_callback()

@@ -84,7 +84,31 @@ async def async_setup_entry(
     )
 
 
-class HotWaterTemperatureNumber(HotWaterEntity, RestoreNumber):
+class _RestoredNumber(RestoreNumber):
+    """A number that hands every value to one method, the saved one first."""
+
+    # The value without a saved one; None leaves the owner's own default.
+    _restore_default: float | None = None
+
+    async def _async_apply(self, value: float) -> None:
+        raise NotImplementedError
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        value = (
+            last_data.native_value
+            if last_data is not None and last_data.native_value is not None
+            else self._restore_default
+        )
+        if value is not None:
+            await self._async_apply(value)
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self._async_apply(value)
+
+
+class HotWaterTemperatureNumber(HotWaterEntity, _RestoredNumber):
     """A hot water target of one phase."""
 
     _attr_entity_category = EntityCategory.CONFIG
@@ -100,17 +124,11 @@ class HotWaterTemperatureNumber(HotWaterEntity, RestoreNumber):
         self._key = key
         self._attr_translation_key = f"hot_water_{key}"
 
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        last_data = await self.async_get_last_number_data()
-        if last_data and last_data.native_value is not None:
-            self._hot_water.set_number(self._key, last_data.native_value)
-
     @property
     def native_value(self) -> float:
         return self._hot_water.numbers[self._key]
 
-    async def async_set_native_value(self, value: float) -> None:
+    async def _async_apply(self, value: float) -> None:
         self._hot_water.set_number(self._key, value)
 
 
@@ -138,7 +156,7 @@ FLOW_NUMBERS = (
 )
 
 
-class FlowNumber(FlowEntity, RestoreNumber):
+class FlowNumber(FlowEntity, _RestoredNumber):
     """A setting of the flow device: heating curve, hysteresis, timing."""
 
     _attr_entity_category = EntityCategory.CONFIG
@@ -155,21 +173,15 @@ class FlowNumber(FlowEntity, RestoreNumber):
         if spec.temperature:
             self._attr_device_class = NumberDeviceClass.TEMPERATURE
 
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        last_data = await self.async_get_last_number_data()
-        if last_data and last_data.native_value is not None:
-            self._flow.set_number(self._key, last_data.native_value)
-
     @property
     def native_value(self) -> float:
         return self._flow.numbers[self._key]
 
-    async def async_set_native_value(self, value: float) -> None:
+    async def _async_apply(self, value: float) -> None:
         self._flow.set_number(self._key, value)
 
 
-class HeatingSeasonNumber(HeatingHubEntity, RestoreNumber):
+class HeatingSeasonNumber(HeatingHubEntity, _RestoredNumber):
     """One of the heating season limits, in hours."""
 
     _attr_entity_category = EntityCategory.CONFIG
@@ -187,30 +199,20 @@ class HeatingSeasonNumber(HeatingHubEntity, RestoreNumber):
     ) -> None:
         super().__init__(hub, f"heating_season_{name}")
         self._name = name
-        self._default = default
+        self._restore_default = default
         self._attr_translation_key = f"heating_season_{name}"
         self._attr_native_min_value = minimum
         self._attr_native_max_value = maximum
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        last_data = await self.async_get_last_number_data()
-        value = (
-            last_data.native_value
-            if last_data and last_data.native_value is not None
-            else self._default
-        )
-        self._hub.set_season_threshold(self._name, value)
 
     @property
     def native_value(self) -> float:
         return getattr(self._hub, f"season_{self._name}")
 
-    async def async_set_native_value(self, value: float) -> None:
+    async def _async_apply(self, value: float) -> None:
         self._hub.set_season_threshold(self._name, value)
 
 
-class ComfortTemperatureNumber(HeatingControllerEntity, RestoreNumber):
+class ComfortTemperatureNumber(HeatingControllerEntity, _RestoredNumber):
     _attr_translation_key = "comfort_temperature"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_device_class = NumberDeviceClass.TEMPERATURE
@@ -219,29 +221,20 @@ class ComfortTemperatureNumber(HeatingControllerEntity, RestoreNumber):
     _attr_native_max_value = 24.0
     _attr_native_step = 0.5
     _attr_mode = NumberMode.SLIDER
+    _restore_default = DEFAULT_COMFORT_TEMPERATURE_C
 
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
         super().__init__(coordinator, "comfort_temperature")
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        last_data = await self.async_get_last_number_data()
-        value = (
-            last_data.native_value
-            if last_data and last_data.native_value is not None
-            else DEFAULT_COMFORT_TEMPERATURE_C
-        )
-        await self._coordinator.async_set_comfort_temperature(value)
 
     @property
     def native_value(self) -> float:
         return self._coordinator.state.comfort_temperature_c
 
-    async def async_set_native_value(self, value: float) -> None:
+    async def _async_apply(self, value: float) -> None:
         await self._coordinator.async_set_comfort_temperature(value)
 
 
-class EcoOffsetNumber(HeatingControllerEntity, RestoreNumber):
+class EcoOffsetNumber(HeatingControllerEntity, _RestoredNumber):
     _attr_translation_key = "eco_offset"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_device_class = NumberDeviceClass.TEMPERATURE
@@ -251,22 +244,14 @@ class EcoOffsetNumber(HeatingControllerEntity, RestoreNumber):
     _attr_native_step = 0.5
     _attr_mode = NumberMode.BOX
 
+    _restore_default = DEFAULT_ECO_TEMPERATURE_OFFSET_C
+
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
         super().__init__(coordinator, "eco_offset")
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        last_data = await self.async_get_last_number_data()
-        value = (
-            last_data.native_value
-            if last_data and last_data.native_value is not None
-            else DEFAULT_ECO_TEMPERATURE_OFFSET_C
-        )
-        await self._coordinator.async_set_eco_temperature_offset(value)
 
     @property
     def native_value(self) -> float:
         return self._coordinator.state.eco_temperature_offset_c
 
-    async def async_set_native_value(self, value: float) -> None:
+    async def _async_apply(self, value: float) -> None:
         await self._coordinator.async_set_eco_temperature_offset(value)

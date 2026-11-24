@@ -68,7 +68,9 @@ from .coordinator import HeatingRoomCoordinator
 from .flow_device import FlowDevice
 from .hot_water_device import HotWaterDevice
 from .irradiance import IrradianceProvider, SurfaceGeometry, building_surfaces
+from .listeners import Observable
 from .startup_gate import StartupGate
+from .state_reader import entity_float
 from .store import HubStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -90,8 +92,9 @@ class LeadValue:
     rooms: list[str]
 
 
-class HeatingHub:
+class HeatingHub(Observable):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        super().__init__()
         self.hass = hass
         self.entry = entry
         self.rooms: dict[str, HeatingRoomCoordinator] = {}
@@ -101,7 +104,6 @@ class HeatingHub:
             CONF_FLOW_THRESHOLD_ENTITY
         )
         self.flow_curve_entity: str | None = entry.data.get(CONF_FLOW_CURVE_ENTITY)
-        self._listeners: list[Callable[[], None]] = []
         self._unsub: list[Callable[[], None]] = []
         self.workday_entity: str | None = entry.data.get(CONF_WORKDAY_ENTITY)
         self.irradiance: IrradianceProvider | None = None
@@ -267,7 +269,7 @@ class HeatingHub:
             return
         if (
             self._flow_temperature_entity
-            and self._float_state(self._flow_temperature_entity) is not None
+            and entity_float(self.hass, self._flow_temperature_entity) is not None
         ):
             self.flow_seen_ts = now_ts
         self.update_charge()
@@ -321,9 +323,7 @@ class HeatingHub:
 
     @property
     def outdoor_temperature_c(self) -> float | None:
-        if not self._outdoor_entity:
-            return None
-        return self._float_state(self._outdoor_entity)
+        return entity_float(self.hass, self._outdoor_entity)
 
     @property
     def charge_flow_c(self) -> float | None:
@@ -335,9 +335,7 @@ class HeatingHub:
     @property
     def rate_limit_remaining(self) -> int | None:
         """Calls the heat source's cloud still allows today, if known."""
-        if not self.rate_limit_remaining_entity:
-            return None
-        value = self._float_state(self.rate_limit_remaining_entity)
+        value = entity_float(self.hass, self.rate_limit_remaining_entity)
         return None if value is None else int(value)
 
     def request_write(self, priority: WritePriority) -> bool:
@@ -472,17 +470,6 @@ class HeatingHub:
         setattr(self, f"season_{name}", float(value))
         self._notify_listeners()
 
-    def async_add_listener(
-        self, update_callback: Callable[[], None]
-    ) -> Callable[[], None]:
-        self._listeners.append(update_callback)
-        return lambda: self._listeners.remove(update_callback)
-
-    @callback
-    def _notify_listeners(self) -> None:
-        for update_callback in list(self._listeners):
-            update_callback()
-
     @callback
     def _async_handle_state_change(self, event: Event[EventStateChangedData]) -> None:
         if event.data["entity_id"] == self._heat_source_entity:
@@ -541,9 +528,7 @@ class HeatingHub:
 
     @property
     def measured_flow_c(self) -> float | None:
-        if not self._flow_temperature_entity:
-            return None
-        return self._float_state(self._flow_temperature_entity)
+        return entity_float(self.hass, self._flow_temperature_entity)
 
     @property
     def hot_water_charging(self) -> bool:
@@ -584,22 +569,13 @@ class HeatingHub:
             for room in self.rooms.values()
         ]
 
-    def _float_state(self, entity_id: str) -> float | None:
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-            return None
-        try:
-            return float(state.state)
-        except ValueError:
-            return None
-
     @property
     def flow_threshold_c(self) -> float | None:
         """The threshold the demand compares to; None while its entity is empty."""
         if self.flow is not None:
             return self.flow.threshold_c
         if self._flow_threshold_entity:
-            return self._float_state(self._flow_threshold_entity)
+            return entity_float(self.hass, self._flow_threshold_entity)
         return self.entry.data.get(CONF_FLOW_THRESHOLD, DEFAULT_FLOW_THRESHOLD_C)
 
     @property
@@ -632,7 +608,7 @@ class HeatingHub:
             return self.flow.effective_curve_c
         if not self.flow_curve_entity:
             return None
-        return self._float_state(self.flow_curve_entity)
+        return entity_float(self.hass, self.flow_curve_entity)
 
     @property
     def hold_flow_reserve(self) -> float | None:

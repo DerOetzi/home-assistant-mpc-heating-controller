@@ -55,6 +55,8 @@ from .control.legionella import (
     LegionellaState,
 )
 from .control.write_budget import WritePriority
+from .listeners import Observable
+from .state_reader import attribute_float, entity_float
 
 if TYPE_CHECKING:
     from .hub import HeatingHub
@@ -144,10 +146,11 @@ def _optional_time(value: str | None) -> time | None:
     return _time(value) if value else None
 
 
-class HotWaterDevice:
+class HotWaterDevice(Observable):
     def __init__(
         self, hass: HomeAssistant, hub: HeatingHub, subentry: ConfigSubentry
     ) -> None:
+        super().__init__()
         self.hass = hass
         self.hub = hub
         self.subentry_id = subentry.subentry_id
@@ -175,7 +178,6 @@ class HotWaterDevice:
         self.last_written: float | None = None
         self.last_write_ts: float | None = None
         self.last_error: str | None = None
-        self._listeners: list[Callable[[], None]] = []
         self._unsub: list[Callable[[], None]] = []
         self._context = Context()
         self._store: Store[dict] = Store(
@@ -334,32 +336,15 @@ class HotWaterDevice:
             return None
         return state
 
-    def _float(self, entity_id: str | None) -> float | None:
-        state = self._state(entity_id)
-        if state is None:
-            return None
-        try:
-            return float(state.state)
-        except ValueError:
-            return None
-
     @property
     def current_target_c(self) -> float | None:
-        state = self._state(self.water_heater)
-        if state is None:
-            return None
-        value = state.attributes.get("temperature")
-        return float(value) if isinstance(value, int | float) else None
+        return attribute_float(self._state(self.water_heater), "temperature")
 
     @property
     def tank_c(self) -> float | None:
         if self.tank_entity:
-            return self._float(self.tank_entity)
-        state = self._state(self.water_heater)
-        if state is None:
-            return None
-        value = state.attributes.get("current_temperature")
-        return float(value) if isinstance(value, int | float) else None
+            return entity_float(self.hass, self.tank_entity)
+        return attribute_float(self._state(self.water_heater), "current_temperature")
 
     @property
     def heater_off(self) -> bool:
@@ -414,13 +399,13 @@ class HotWaterDevice:
                 LegionellaInputs(
                     now=now,
                     outlet_c=(
-                        self._float(self.data.get("outlet_entity"))
+                        entity_float(self.hass, self.data.get("outlet_entity"))
                         if self.data.get("outlet_entity")
                         else self.tank_c
                     ),
-                    return_c=self._float(self.data.get("return_entity")),
+                    return_c=entity_float(self.hass, self.data.get("return_entity")),
                     heater_off=self.heater_off,
-                    forecast=self._float(self.data.get("forecast_entity")),
+                    forecast=entity_float(self.hass, self.data.get("forecast_entity")),
                     target_c=self.current_target_c,
                 )
             )
@@ -436,10 +421,14 @@ class HotWaterDevice:
         decision = self.controller.decide(
             HotWaterInputs(
                 now=now,
-                grid_export_w=self._float(self.data.get("grid_export_entity")),
-                battery_soc=self._float(self.data.get("battery_soc_entity")),
-                battery_discharge_w=self._float(
-                    self.data.get("battery_discharge_entity")
+                grid_export_w=entity_float(
+                    self.hass, self.data.get("grid_export_entity")
+                ),
+                battery_soc=entity_float(
+                    self.hass, self.data.get("battery_soc_entity")
+                ),
+                battery_discharge_w=entity_float(
+                    self.hass, self.data.get("battery_discharge_entity")
                 ),
                 outdoor_c=self.hub.outdoor_temperature_c,
                 tank_c=self.tank_c,
@@ -459,7 +448,7 @@ class HotWaterDevice:
         # A charge the tank starts reaches rooms and feedback at once.
         self.hub.update_charge()
         self._store.async_delay_save(self._export, 300)
-        self._notify()
+        self._notify_listeners()
 
     def _recently_written(self, value: float, now_ts: float) -> bool:
         return (
@@ -556,8 +545,8 @@ class HotWaterDevice:
                 enabled=self.circulation_main,
                 pump_on=pump_on,
                 pump_minutes=(now - pump.last_changed).total_seconds() / 60,
-                return_c=self._float(d.get("circ_return_entity")),
-                outlet_c=self._float(d.get("circ_outlet_entity")),
+                return_c=entity_float(self.hass, d.get("circ_return_entity")),
+                outlet_c=entity_float(self.hass, d.get("circ_outlet_entity")),
                 continuous=self.continuous,
                 heater_ok=heater_ok,
                 people_gates_open=gates,
@@ -586,7 +575,7 @@ class HotWaterDevice:
             )
             changed = True
         if changed:
-            self._notify()
+            self._notify_listeners()
 
     async def _async_call(self, domain: str, service: str, entities: list[str]) -> None:
         try:
@@ -601,14 +590,3 @@ class HotWaterDevice:
             _LOGGER.warning("%s.%s on %s failed: %s", domain, service, entities, err)
 
     # --- Listeners ---------------------------------------------------------
-
-    def async_add_listener(
-        self, update_callback: Callable[[], None]
-    ) -> Callable[[], None]:
-        self._listeners.append(update_callback)
-        return lambda: self._listeners.remove(update_callback)
-
-    @callback
-    def _notify(self) -> None:
-        for update_callback in list(self._listeners):
-            update_callback()

@@ -11,55 +11,56 @@ from .coordinator import HeatingRoomCoordinator
 from .flow_device import FlowDevice
 from .hot_water_device import HotWaterDevice
 from .hub import HeatingHub
+from .listeners import Observable
 
 
-class HeatingControllerEntity(Entity):
-    """An entity of one room; ids hang on the room's subentry id."""
+class _DeviceEntity(Entity):
+    """An entity on one device of the integration, updated by its source."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
 
     def __init__(
+        self,
+        source: Observable,
+        device_id: str,
+        device_name: str,
+        unique_id_suffix: str,
+    ) -> None:
+        self._source = source
+        self._attr_unique_id = f"{device_id}_{unique_id_suffix}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_id)},
+            name=device_name,
+            manufacturer="Heating Controller",
+        )
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(self._source.async_add_listener(self._handle_update))
+        await super().async_added_to_hass()
+
+    def _handle_update(self) -> None:
+        self.async_write_ha_state()
+
+
+class HeatingControllerEntity(_DeviceEntity):
+    """An entity of one room; ids hang on the room's subentry id."""
+
+    def __init__(
         self, coordinator: HeatingRoomCoordinator, unique_id_suffix: str
     ) -> None:
+        super().__init__(
+            coordinator, coordinator.room_id, coordinator.room_name, unique_id_suffix
+        )
         self._coordinator = coordinator
-        self._attr_unique_id = f"{coordinator.room_id}_{unique_id_suffix}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, coordinator.room_id)},
-            name=coordinator.room_name,
-            manufacturer="Heating Controller",
-        )
-
-    async def async_added_to_hass(self) -> None:
-        self.async_on_remove(
-            self._coordinator.async_add_listener(self._handle_coordinator_update)
-        )
-
-    def _handle_coordinator_update(self) -> None:
-        self.async_write_ha_state()
 
 
-class HeatingHubEntity(Entity):
+class HeatingHubEntity(_DeviceEntity):
     """An entity of the whole house, on the hub's device."""
 
-    _attr_has_entity_name = True
-    _attr_should_poll = False
-
     def __init__(self, hub: HeatingHub, unique_id_suffix: str) -> None:
+        super().__init__(hub, f"{hub.entry.entry_id}_hub", HUB_TITLE, unique_id_suffix)
         self._hub = hub
-        hub_id = f"{hub.entry.entry_id}_hub"
-        self._attr_unique_id = f"{hub_id}_{unique_id_suffix}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, hub_id)},
-            name=HUB_TITLE,
-            manufacturer="Heating Controller",
-        )
-
-    async def async_added_to_hass(self) -> None:
-        self.async_on_remove(self._hub.async_add_listener(self._handle_hub_update))
-
-    def _handle_hub_update(self) -> None:
-        self.async_write_ha_state()
 
 
 def async_add_room_entities(
@@ -75,26 +76,12 @@ def async_add_room_entities(
         )
 
 
-class FlowEntity(Entity):
+class FlowEntity(_DeviceEntity):
     """An entity of the flow device; ids hang on the flow subentry id."""
 
-    _attr_has_entity_name = True
-    _attr_should_poll = False
-
     def __init__(self, flow: FlowDevice, unique_id_suffix: str) -> None:
+        super().__init__(flow, flow.subentry_id, flow.title, unique_id_suffix)
         self._flow = flow
-        self._attr_unique_id = f"{flow.subentry_id}_{unique_id_suffix}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, flow.subentry_id)},
-            name=flow.title,
-            manufacturer="Heating Controller",
-        )
-
-    async def async_added_to_hass(self) -> None:
-        self.async_on_remove(self._flow.async_add_listener(self._handle_flow_update))
-
-    def _handle_flow_update(self) -> None:
-        self.async_write_ha_state()
 
 
 def async_add_flow_entities(
@@ -110,28 +97,14 @@ def async_add_flow_entities(
         )
 
 
-class HotWaterEntity(Entity):
+class HotWaterEntity(_DeviceEntity):
     """An entity of the hot water device; ids hang on its subentry id."""
 
-    _attr_has_entity_name = True
-    _attr_should_poll = False
-
     def __init__(self, hot_water: HotWaterDevice, unique_id_suffix: str) -> None:
+        super().__init__(
+            hot_water, hot_water.subentry_id, hot_water.title, unique_id_suffix
+        )
         self._hot_water = hot_water
-        self._attr_unique_id = f"{hot_water.subentry_id}_{unique_id_suffix}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, hot_water.subentry_id)},
-            name=hot_water.title,
-            manufacturer="Heating Controller",
-        )
-
-    async def async_added_to_hass(self) -> None:
-        self.async_on_remove(
-            self._hot_water.async_add_listener(self._handle_hot_water_update)
-        )
-
-    def _handle_hot_water_update(self) -> None:
-        self.async_write_ha_state()
 
 
 def async_add_hot_water_entities(

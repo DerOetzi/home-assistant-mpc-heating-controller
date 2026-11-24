@@ -78,38 +78,55 @@ def _remove_dropped_room_comfort_switches(hass: HomeAssistant, hub: HeatingHub) 
             registry.async_remove(entity_id)
 
 
-class HouseComfortSwitch(HeatingHubEntity, SwitchEntity, RestoreEntity):
-    """House-wide comfort; off (e.g. on holiday) every following room is eco.
+class _ToggleSwitch(SwitchEntity):
+    """A switch that hands on and off to one method."""
 
-    On until restored otherwise.
-    """
+    async def _async_apply(self, on: bool) -> None:
+        raise NotImplementedError
 
-    _attr_translation_key = "house_comfort"
-    _attr_icon = "mdi:sofa"
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._async_apply(True)
 
-    def __init__(self, hub: HeatingHub) -> None:
-        super().__init__(hub, "comfort")
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._async_apply(False)
+
+
+class _RestoredToggleSwitch(_ToggleSwitch, RestoreEntity):
+    """A toggle switch that takes its last state back after a restart."""
+
+    # The state without a saved one.
+    _restore_default = False
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         last = await self.async_get_last_state()
-        await self._hub.async_set_comfort(last is None or last.state == STATE_ON)
+        await self._async_apply(
+            self._restore_default if last is None else last.state == STATE_ON
+        )
+
+
+class HouseComfortSwitch(HeatingHubEntity, _RestoredToggleSwitch):
+    """House-wide comfort; off (e.g. on holiday) every following room is eco."""
+
+    _attr_translation_key = "house_comfort"
+    _attr_icon = "mdi:sofa"
+    _restore_default = True
+
+    def __init__(self, hub: HeatingHub) -> None:
+        super().__init__(hub, "comfort")
 
     @property
     def is_on(self) -> bool:
         return self._hub.comfort_on
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._hub.async_set_comfort(True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._hub.async_set_comfort(False)
+    async def _async_apply(self, on: bool) -> None:
+        await self._hub.async_set_comfort(on)
 
 
-class PvBoostSwitch(HeatingHubEntity, SwitchEntity, RestoreEntity):
+class PvBoostSwitch(HeatingHubEntity, _RestoredToggleSwitch):
     """PV surplus: rooms with PV boost raise their setpoint.
 
-    Switched by hand or by an automation. Off until restored otherwise.
+    Switched by hand or by an automation.
     """
 
     _attr_translation_key = "pv_boost"
@@ -118,56 +135,37 @@ class PvBoostSwitch(HeatingHubEntity, SwitchEntity, RestoreEntity):
     def __init__(self, hub: HeatingHub) -> None:
         super().__init__(hub, "pv_boost")
 
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        last = await self.async_get_last_state()
-        await self._hub.async_set_pv_boost(last is not None and last.state == STATE_ON)
-
     @property
     def is_on(self) -> bool:
         return self._hub.pv_boost_on
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._hub.async_set_pv_boost(True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._hub.async_set_pv_boost(False)
+    async def _async_apply(self, on: bool) -> None:
+        await self._hub.async_set_pv_boost(on)
 
 
-class HeatingSeasonAutoSwitch(HeatingHubEntity, SwitchEntity, RestoreEntity):
+class HeatingSeasonAutoSwitch(HeatingHubEntity, _RestoredToggleSwitch):
     """The hub switches the heat source heat/off by the season criterion.
 
-    A switch of the heat source by hand turns this off. On until restored
-    otherwise.
+    A switch of the heat source by hand turns this off.
     """
 
     _attr_translation_key = "heating_season_auto"
     _attr_icon = "mdi:thermostat-auto"
+    _restore_default = True
 
     def __init__(self, hub: HeatingHub) -> None:
         super().__init__(hub, "heating_season_auto")
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        last = await self.async_get_last_state()
-        await self._hub.async_set_season_auto(last is None or last.state == STATE_ON)
 
     @property
     def is_on(self) -> bool:
         return self._hub.season_auto_on
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._hub.async_set_season_auto(True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._hub.async_set_season_auto(False)
+    async def _async_apply(self, on: bool) -> None:
+        await self._hub.async_set_season_auto(on)
 
 
-class RoomComfortSwitch(HeatingControllerEntity, SwitchEntity, RestoreEntity):
-    """The room's own comfort release (e.g. a guest in the guest room).
-
-    Off until restored otherwise.
-    """
+class RoomComfortSwitch(HeatingControllerEntity, _RestoredToggleSwitch):
+    """The room's own comfort release (e.g. a guest in the guest room)."""
 
     _attr_translation_key = "room_comfort"
     _attr_icon = "mdi:sofa-single-outline"
@@ -175,25 +173,15 @@ class RoomComfortSwitch(HeatingControllerEntity, SwitchEntity, RestoreEntity):
     def __init__(self, coordinator: HeatingRoomCoordinator) -> None:
         super().__init__(coordinator, "comfort")
 
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        last = await self.async_get_last_state()
-        await self._coordinator.async_set_room_comfort(
-            last is not None and last.state == STATE_ON
-        )
-
     @property
     def is_on(self) -> bool:
         return bool(self._coordinator.state.room_comfort)
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._coordinator.async_set_room_comfort(True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._coordinator.async_set_room_comfort(False)
+    async def _async_apply(self, on: bool) -> None:
+        await self._coordinator.async_set_room_comfort(on)
 
 
-class HotWaterBoostSwitch(HotWaterEntity, SwitchEntity):
+class HotWaterBoostSwitch(HotWaterEntity, _ToggleSwitch):
     """Boost target until switched off or the maximum duration is over.
 
     Not restored: a boost never survives a restart.
@@ -209,16 +197,12 @@ class HotWaterBoostSwitch(HotWaterEntity, SwitchEntity):
     def is_on(self) -> bool:
         return self._hot_water.boost_on
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        self._hot_water.set_boost(True)
-        self.async_write_ha_state()
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        self._hot_water.set_boost(False)
+    async def _async_apply(self, on: bool) -> None:
+        self._hot_water.set_boost(on)
         self.async_write_ha_state()
 
 
-class CirculationMainSwitch(HotWaterEntity, SwitchEntity):
+class CirculationMainSwitch(HotWaterEntity, _ToggleSwitch):
     """Off: pump stays off, overriding continuous runs and legionella."""
 
     _attr_translation_key = "circulation_main"
@@ -231,16 +215,12 @@ class CirculationMainSwitch(HotWaterEntity, SwitchEntity):
     def is_on(self) -> bool:
         return self._hot_water.circulation_main
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        self._hot_water.set_circulation_main(True)
-        self.async_write_ha_state()
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        self._hot_water.set_circulation_main(False)
+    async def _async_apply(self, on: bool) -> None:
+        self._hot_water.set_circulation_main(on)
         self.async_write_ha_state()
 
 
-class CirculationContinuousSwitch(HotWaterEntity, SwitchEntity):
+class CirculationContinuousSwitch(HotWaterEntity, _ToggleSwitch):
     """Continuous circulation run; released once the loop held hot."""
 
     _attr_translation_key = "circulation_continuous"
@@ -253,16 +233,12 @@ class CirculationContinuousSwitch(HotWaterEntity, SwitchEntity):
     def is_on(self) -> bool:
         return self._hot_water.continuous_request
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        self._hot_water.set_continuous_request(True)
-        self.async_write_ha_state()
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        self._hot_water.set_continuous_request(False)
+    async def _async_apply(self, on: bool) -> None:
+        self._hot_water.set_continuous_request(on)
         self.async_write_ha_state()
 
 
-class FlowWriteSwitch(FlowEntity, SwitchEntity, RestoreEntity):
+class FlowWriteSwitch(FlowEntity, _RestoredToggleSwitch):
     """Off: the flow device computes and shows, but writes nothing (shadow)."""
 
     _attr_translation_key = "flow_write"
@@ -272,17 +248,9 @@ class FlowWriteSwitch(FlowEntity, SwitchEntity, RestoreEntity):
     def __init__(self, flow: FlowDevice) -> None:
         super().__init__(flow, "flow_write")
 
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        last = await self.async_get_last_state()
-        self._flow.set_write_enabled(last is not None and last.state == STATE_ON)
-
     @property
     def is_on(self) -> bool:
         return self._flow.write_enabled
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        self._flow.set_write_enabled(True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        self._flow.set_write_enabled(False)
+    async def _async_apply(self, on: bool) -> None:
+        self._flow.set_write_enabled(on)

@@ -744,9 +744,7 @@ class SupplyCountSensor(_DiagnosticSensor):
         """Also follow the flow device: it moves the count, not the room."""
         await super().async_added_to_hass()
         if self._hub.flow is not None:
-            self.async_on_remove(
-                self._hub.flow.async_add_listener(self._handle_coordinator_update)
-            )
+            self.async_on_remove(self._hub.flow.async_add_listener(self._handle_update))
 
     @property
     def native_value(self) -> int | None:

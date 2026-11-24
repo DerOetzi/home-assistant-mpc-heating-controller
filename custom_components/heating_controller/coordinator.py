@@ -104,9 +104,17 @@ from .controller.trv_inputs import (
     raw_value,
 )
 from .irradiance import IrradianceProvider, SunSeries
+from .listeners import Observable
 from .night import NightWindow
 from .profiles import TrvBinding
 from .startup_gate import entity_ready
+from .state_reader import (
+    attribute_float,
+    entity_float,
+    entity_is_on,
+    state_float,
+    state_is_on,
+)
 from .store import (
     FlowGateStateStore,
     GainStore,
@@ -171,7 +179,7 @@ def _build_trv_configs(trvs: list[TrvBinding]) -> list[TrvConfig]:
     ]
 
 
-class HeatingRoomCoordinator:
+class HeatingRoomCoordinator(Observable):
     def __init__(
         self,
         hass: HomeAssistant,
@@ -185,6 +193,7 @@ class HeatingRoomCoordinator:
         room_id is the room's subentry id; stores, unique ids and the device
         hang on it. data holds the hub's settings merged with the room's.
         """
+        super().__init__()
         self.hass = hass
         self.hub_entry = hub_entry
         self.room_id = room_id
@@ -348,7 +357,6 @@ class HeatingRoomCoordinator:
         # and write on half-updated state.
         self._recompute_lock = asyncio.Lock()
         self._night = NightWindow(hass)
-        self._listeners: list[Callable[[], None]] = []
 
     def set_sun_provider(
         self, provider: IrradianceProvider, workday_entity: str | None
@@ -388,16 +396,6 @@ class HeatingRoomCoordinator:
             gains.sun_regressors(self.fresh_sun_series(), now_ts),
         )
 
-    def async_add_listener(
-        self, update_callback: Callable[[], None]
-    ) -> Callable[[], None]:
-        self._listeners.append(update_callback)
-        return lambda: self._listeners.remove(update_callback)
-
-    def _notify_listeners(self) -> None:
-        for update_callback in self._listeners:
-            update_callback()
-
     async def async_setup(self) -> None:
         self._started_ts = time.time()
         factors = await self.store.async_load()
@@ -419,12 +417,16 @@ class HeatingRoomCoordinator:
         )
 
         for entity_id in self.data.get(CONF_WINDOW_CONTACT_ENTITIES, []):
-            self.state.update_window_state(entity_id, self._is_on(entity_id))
+            self.state.update_window_state(
+                entity_id, entity_is_on(self.hass, entity_id)
+            )
         self.mpc.set_window_open(self.state.is_window_open, time.time())
         self._update_window_unknown()
 
         if self._learning_block_entity:
-            self._learning_blocked = self._is_on(self._learning_block_entity)
+            self._learning_blocked = entity_is_on(
+                self.hass, self._learning_block_entity
+            )
 
         # A missing flow reading counts from startup on, like a gap.
         self._flow_temperature_seen_ts = self._started_ts
@@ -552,7 +554,7 @@ class HeatingRoomCoordinator:
         for index, entity_id in enumerate(self._trv_entity_ids):
             state = self.hass.states.get(entity_id)
             self.mpc.set_trv_temperature(
-                index, self._climate_temperature_from_state(state)
+                index, attribute_float(state, "current_temperature")
             )
         for index in range(len(self._valve_position_entities)):
             self._update_valve_position(index)
@@ -562,7 +564,7 @@ class HeatingRoomCoordinator:
             self._update_room_sensor(self.hass.states.get(room_sensor_entity))
 
         self.mpc.set_outdoor_temperature(
-            self._float_state(self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY])
+            entity_float(self.hass, self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY])
         )
         self._update_flow_temperature(
             self.hass.states.get(self._flow_temperature_entity)
@@ -584,7 +586,7 @@ class HeatingRoomCoordinator:
         await self._async_recompute()
 
     def _update_flow_temperature(self, state: State | None) -> None:
-        value = self._float_from_state(state)
+        value = state_float(state)
         if value is not None:
             self._flow_temperature_c = value
             self._flow_temperature_seen_ts = time.time()
@@ -710,7 +712,7 @@ class HeatingRoomCoordinator:
         # The poll hands in an unchanged state again: its age is that of the
         # sensor's last report, or a sensor that hangs would never go stale.
         self.mpc.set_room_sensor_temperature(
-            self._float_from_state(state),
+            state_float(state),
             state.last_reported.timestamp() if state is not None else None,
         )
 
@@ -718,7 +720,7 @@ class HeatingRoomCoordinator:
         entity_id = self._valve_position_entities[index]
         if entity_id:
             self.mpc.set_valve_position(
-                index, self._float_state(entity_id), self._trv_reported_ts(index)
+                index, entity_float(self.hass, entity_id), self._trv_reported_ts(index)
             )
 
     def _trv_demand_pct(self, index: int) -> float | None:
@@ -731,13 +733,7 @@ class HeatingRoomCoordinator:
             or time.time() - reported_ts > VALVE_POSITION_MAX_AGE_S
         ):
             return None
-        return self._float_state(entity_id)
-
-    def _is_on(self, entity_id: str) -> bool:
-        return self._bool_from_state(self.hass.states.get(entity_id))
-
-    def _float_state(self, entity_id: str) -> float | None:
-        return self._float_from_state(self.hass.states.get(entity_id))
+        return entity_float(self.hass, entity_id)
 
     def _update_window_unknown(self) -> None:
         # A contact that is unavailable counts as closed for control, but a
@@ -749,37 +745,6 @@ class HeatingRoomCoordinator:
                 for entity_id in self.data.get(CONF_WINDOW_CONTACT_ENTITIES, [])
             )
         )
-
-    @staticmethod
-    def _bool_from_state(state: State | None) -> bool:
-        return state is not None and state.state == STATE_ON
-
-    @staticmethod
-    def _float_from_state(state: State | None) -> float | None:
-        if state is None:
-            return None
-        try:
-            return float(state.state)
-        except (TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _climate_temperature_from_state(state: State | None) -> float | None:
-        if state is None:
-            return None
-        try:
-            return float(state.attributes["current_temperature"])
-        except (KeyError, TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _climate_target_from_state(state: State | None) -> float | None:
-        if state is None:
-            return None
-        try:
-            return float(state.attributes["temperature"])
-        except (KeyError, TypeError, ValueError):
-            return None
 
     @callback
     def _async_handle_state_change(self, event: Event[EventStateChangedData]) -> None:
@@ -820,7 +785,7 @@ class HeatingRoomCoordinator:
         if entity_id in self._trv_entity_ids:
             index = self._trv_entity_ids.index(entity_id)
             self.mpc.set_trv_temperature(
-                index, self._climate_temperature_from_state(new_state)
+                index, attribute_float(new_state, "current_temperature")
             )
             # The TRV reported: its unchanged valve opening is still current.
             self._update_valve_position(index)
@@ -832,7 +797,7 @@ class HeatingRoomCoordinator:
             self._update_room_sensor(new_state)
 
         elif entity_id == self.data[CONF_OUTDOOR_TEMPERATURE_ENTITY]:
-            self.mpc.set_outdoor_temperature(self._float_from_state(new_state))
+            self.mpc.set_outdoor_temperature(state_float(new_state))
 
         elif entity_id == self._flow_temperature_entity:
             self._update_flow_temperature(new_state)
@@ -840,7 +805,7 @@ class HeatingRoomCoordinator:
         elif entity_id in self.data.get(CONF_WINDOW_CONTACT_ENTITIES, []):
             was_open = self.state.is_window_open
             _, is_open = self.state.update_window_state(
-                entity_id, self._bool_from_state(new_state)
+                entity_id, state_is_on(new_state)
             )
             self.mpc.set_window_open(is_open, time.time())
             self._update_window_unknown()
@@ -851,7 +816,7 @@ class HeatingRoomCoordinator:
                 )
 
         elif entity_id == self._learning_block_entity:
-            self._learning_blocked = self._bool_from_state(new_state)
+            self._learning_blocked = state_is_on(new_state)
 
     async def _async_handle_learning_cycle(self, _now: Any) -> None:
         if not self.running:
@@ -925,7 +890,7 @@ class HeatingRoomCoordinator:
         fixed = self.data.get(CONF_FLOW_THRESHOLD, DEFAULT_FLOW_THRESHOLD_C)
         if not self._flow_threshold_entity:
             return fixed
-        value = self._float_state(self._flow_threshold_entity)
+        value = entity_float(self.hass, self._flow_threshold_entity)
         if value is None:
             return fixed
         return value
@@ -1144,7 +1109,7 @@ class HeatingRoomCoordinator:
                 if (
                     off_value is not None
                     and entity_id not in self._external_off_sent
-                    and self._float_from_state(state) != off_value
+                    and state_float(state) != off_value
                 ):
                     await self._async_set_number(entity_id, off_value)
                     self._count_external_write(entity_id)
@@ -1152,8 +1117,8 @@ class HeatingRoomCoordinator:
                 continue
             if room_c is None:
                 continue
-            covered = trv.radiator_covered_entity is not None and self._is_on(
-                trv.radiator_covered_entity
+            covered = trv.radiator_covered_entity is not None and entity_is_on(
+                self.hass, trv.radiator_covered_entity
             )
             schedule = self._external_schedules[entity_id]
             if not schedule.due(room_c, covered, now_ts):
@@ -1216,7 +1181,7 @@ class HeatingRoomCoordinator:
         mean = load_room_mean(
             [
                 (
-                    self._float_from_state(state),
+                    state_float(state),
                     state.last_reported.timestamp() if state is not None else None,
                 )
                 for _, entities in sharing_entities
@@ -1284,7 +1249,7 @@ class HeatingRoomCoordinator:
         written = self._written_targets.get(entity_id)
         if written is not None and time.time() - written[1] < TARGET_WRITE_SETTLE_S:
             return written[0]
-        return self._climate_target_from_state(self.hass.states.get(entity_id))
+        return attribute_float(self.hass.states.get(entity_id), "temperature")
 
     async def async_set_manual_heat_mode(self, mode: HeatMode) -> None:
         self.state.set_active_heat_mode(mode)
