@@ -28,7 +28,6 @@ class HeatingStateController:
         self._comfort_temperature_c = DEFAULT_COMFORT_TEMPERATURE_C
         self._eco_temperature_offset_c = DEFAULT_ECO_TEMPERATURE_OFFSET_C
         self._pv_boost = False
-        self._trv_active = True
         self._window_open = False
         self._active_heat_mode = HeatMode.ECO
 
@@ -62,9 +61,6 @@ class HeatingStateController:
 
     def set_pv_boost(self, value: bool) -> None:
         self._pv_boost = value
-
-    def set_trv_active(self, value: bool) -> None:
-        self._trv_active = value
 
     def set_active_heat_mode(self, heat_mode: HeatMode) -> None:
         self._active_heat_mode = heat_mode
@@ -122,10 +118,6 @@ class HeatingStateController:
     @property
     def is_window_open(self) -> bool:
         return self._window_open
-
-    @property
-    def is_trv_active(self) -> bool:
-        return self._trv_active
 
     @property
     def is_pv_boost_active(self) -> bool:

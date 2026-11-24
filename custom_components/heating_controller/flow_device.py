@@ -8,7 +8,7 @@ import time
 from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigSubentry
-from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
@@ -32,7 +32,7 @@ from .control.flow_correction import SETTLE_S, CorrectionFreeze
 from .control.flow_feedback import FeedbackFreeze, TargetLimit
 from .listeners import Observable
 from .night import NightWindow
-from .state_reader import attribute_float, state_float
+from .state_reader import attribute_float, available_state, state_float
 
 if TYPE_CHECKING:
     from .hub import HeatingHub
@@ -136,17 +136,13 @@ class FlowDevice(Observable):
             return self.numbers["threshold"]
         return self.numbers["curve_flow_warm"]
 
-    @property
-    def charge_raise_max_k(self) -> float:
-        return self.numbers["charge_raise_max"]
-
     # --- Readings ----------------------------------------------------------
 
     @property
     def actual(self) -> float | None:
         """The actuator's value: a climate's target, else the entity state."""
-        state = self.hass.states.get(self.actuator_entity)
-        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+        state = available_state(self.hass, self.actuator_entity)
+        if state is None:
             return None
         if self.actuator_entity.startswith("climate."):
             return attribute_float(state, "temperature")

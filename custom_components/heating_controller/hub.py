@@ -15,7 +15,6 @@ from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import (
@@ -70,7 +69,7 @@ from .hot_water_device import HotWaterDevice
 from .irradiance import IrradianceProvider, SurfaceGeometry, building_surfaces
 from .listeners import Observable
 from .startup_gate import StartupGate
-from .state_reader import entity_float
+from .state_reader import available_state, entity_float
 from .store import HubStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -436,10 +435,8 @@ class HeatingHub(Observable):
     @property
     def heating_on(self) -> bool | None:
         """Whether the heat source heats; None without or with an empty entity."""
-        if not self._heat_source_entity:
-            return None
-        state = self.hass.states.get(self._heat_source_entity)
-        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+        state = available_state(self.hass, self._heat_source_entity)
+        if state is None:
             return None
         return state.state == HEAT_SOURCE_ACTIVE_STATE
 

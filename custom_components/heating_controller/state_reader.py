@@ -4,8 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.const import STATE_ON
+from homeassistant.const import STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, State
+
+
+def available_state(hass: HomeAssistant, entity_id: str | None) -> State | None:
+    """The entity's state; None without one or while unavailable or unknown."""
+    if not entity_id:
+        return None
+    state = hass.states.get(entity_id)
+    if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+        return None
+    return state
 
 
 def to_float(value: Any) -> float | None:

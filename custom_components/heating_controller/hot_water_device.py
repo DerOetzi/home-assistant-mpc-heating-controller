@@ -21,7 +21,6 @@ from homeassistant.core import (
     Event,
     EventStateChangedData,
     HomeAssistant,
-    State,
     callback,
 )
 from homeassistant.exceptions import HomeAssistantError
@@ -59,7 +58,7 @@ from .hot_water_settings import (
     HotWaterSettings,
 )
 from .listeners import Observable
-from .state_reader import attribute_float, entity_float
+from .state_reader import attribute_float, available_state, entity_float
 
 if TYPE_CHECKING:
     from .hub import HeatingHub
@@ -170,27 +169,23 @@ class HotWaterDevice(Observable):
 
     # --- Readings ----------------------------------------------------------
 
-    def _state(self, entity_id: str | None) -> State | None:
-        if not entity_id:
-            return None
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-            return None
-        return state
-
     def _reading(self, key: HotWaterKey) -> float | None:
         """A configured sensor's number; None if unset or without one."""
         return entity_float(self.hass, self.settings.entity(key))
 
     @property
     def current_target_c(self) -> float | None:
-        return attribute_float(self._state(self.water_heater), "temperature")
+        return attribute_float(
+            available_state(self.hass, self.water_heater), "temperature"
+        )
 
     @property
     def tank_c(self) -> float | None:
         if self.tank_entity:
             return entity_float(self.hass, self.tank_entity)
-        return attribute_float(self._state(self.water_heater), "current_temperature")
+        return attribute_float(
+            available_state(self.hass, self.water_heater), "current_temperature"
+        )
 
     @property
     def heater_off(self) -> bool:
@@ -362,9 +357,8 @@ class HotWaterDevice(Observable):
         if not self.hub.started:
             return
         settings = self.settings
-        pump_entity = settings.entity(K.PUMP_ENTITY)
-        pump = self.hass.states.get(pump_entity) if pump_entity else None
-        if pump is None or pump.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+        pump = available_state(self.hass, settings.entity(K.PUMP_ENTITY))
+        if pump is None:
             return
         now = dt_util.now()
         pump_on = pump.state == STATE_ON

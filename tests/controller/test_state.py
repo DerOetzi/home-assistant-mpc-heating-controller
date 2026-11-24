@@ -92,7 +92,6 @@ def test_should_force_frost_protection_only_on_open_window():
     assert controller.should_force_frost_protection(blocked=False) is True
 
     controller.update_window_state("a", False)
-    controller.set_trv_active(False)
     assert controller.should_force_frost_protection(blocked=False) is False
 
 
@@ -106,7 +105,6 @@ def test_resolve_display_mode_shows_frost_protection_when_forced():
 def test_blocked_bypasses_forced_frost_protection_regardless_of_chosen_mode():
     controller = make_controller()
     controller.update_window_state("a", True)
-    controller.set_trv_active(False)
 
     assert controller.should_force_frost_protection(blocked=False) is True
     assert controller.should_force_frost_protection(blocked=True) is False
@@ -163,6 +161,5 @@ def test_initial_state_defaults():
     controller = make_controller()
     assert controller.is_comfort() is False
     assert controller.is_window_open is False
-    assert controller.is_trv_active is True
     assert controller.is_pv_boost_active is False
     assert controller.current_heat_mode == HeatMode.ECO

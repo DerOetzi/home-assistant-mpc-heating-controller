@@ -136,7 +136,7 @@ Voraussetzung: Neustart A und B eingeschwungen.
 - Je Ladung: Start, Dauer, Art (Nachtende, Ladefenster, Legionellen, Nachladen, PV, nach Dusche), je Raum größter Abstand unter Soll von Ladungsbeginn bis 60 min nach Ende.
 - Mindestens 3 Wochen, darin 2 Legionellen-Zyklen. Ergebnis: wie oft Dip > 0,2 K, welche Räume, welche Art. Nutzer entscheidet: kein Bedarf (Abschnitt streichen, Stub `charge_flow_c` bleibt) / nur Vorlauf (6b + 6d mit festem Fenster 30 min vor bis 60 min nach, Anhebung `charge_raise_max`) / voll (6b–6d).
 
-**Ist-Stand (vor 6b prüfen):** `CC/hub.py` `charge_flow_c` Stub; `CC/control/flow.py` `FlowInputs.charge_flow_c`, `FlowSource.CHARGE`, Pflicht-Schreiben fertig; `CC/flow_device.py` Zahl `charge_raise_max_k`; `CC/control/hot_water.py` `HotWaterConfig`, `HotWaterController.decide`, `ChargeDetector`; `CC/control/legionella.py` `LegionellaController._windows`; `CC/hot_water_device.py` Store, `tank_c`, `charging`.
+**Ist-Stand (vor 6b prüfen):** `CC/hub.py` `charge_flow_c` Stub; `CC/control/flow.py` `FlowInputs.charge_flow_c`, `FlowSource.CHARGE`, Pflicht-Schreiben fertig; `CC/flow_device.py` Zahl `charge_raise_max` (Entity da, wirkungslos bis 6d; Getter beim Bau anlegen); `CC/control/hot_water.py` `HotWaterConfig`, `HotWaterController.decide`, `ChargeDetector`; `CC/control/legionella.py` `LegionellaController._windows`; `CC/hot_water_device.py` Store, `tank_c`, `charging`.
 
 ### 6b. `CC/control/charge_plan.py` (reines Python)
 
@@ -150,7 +150,7 @@ Kurzzeitige Anhebung des geschriebenen Sollwerts um `lift` (0,5-K-Schritte, Deck
 
 ### 6d. Hub, Deploy, Doku
 
-`charge_flow_c` = min(max Ladevorlauf aller Räume, Vorlauf-Ziel + `charge_raise_max_k`), `None` außerhalb Fenster. Rückkopplung friert in Ladung ohnehin ein. Tests `test_hub.py`. Doku „Hot-water charges", „Flow control". Nach Neustart eine Zwangsladung beobachten.
+`charge_flow_c` = min(max Ladevorlauf aller Räume, Vorlauf-Ziel + `numbers["charge_raise_max"]`), `None` außerhalb Fenster. Rückkopplung friert in Ladung ohnehin ein. Tests `test_hub.py`. Doku „Hot-water charges", „Flow control". Nach Neustart eine Zwangsladung beobachten.
 
 ## 7. Simulationen (`tools/`, offline, nicht in Integration)
 

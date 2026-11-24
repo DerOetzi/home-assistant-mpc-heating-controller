@@ -13,7 +13,6 @@ from homeassistant.const import (
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
-    STATE_UNKNOWN,
 )
 from homeassistant.core import (
     Event,
@@ -109,6 +108,7 @@ from .room.trv_writer import TrvWriter
 from .startup_gate import entity_ready
 from .state_reader import (
     attribute_float,
+    available_state,
     entity_float,
     entity_is_on,
     state_float,
@@ -533,9 +533,7 @@ class HeatingRoomCoordinator(Observable):
                 self._trv_entity_ids[index],
                 self._valve_position_entities[index],
             )
-            if entity_id
-            and (state := self.hass.states.get(entity_id)) is not None
-            and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+            if (state := available_state(self.hass, entity_id)) is not None
         ]
         return max(reported, default=None)
 
@@ -752,7 +750,6 @@ class HeatingRoomCoordinator(Observable):
         now_ts = time.time()
         self._update_learning_paused(now_ts)
         self.trv_active = self._heat_available(now_ts)
-        self.state.set_trv_active(self.trv_active)
         self.mpc.apply_context(self._room_context(now_ts))
 
         display_mode = self.state.resolve_display_mode(self.blocked)

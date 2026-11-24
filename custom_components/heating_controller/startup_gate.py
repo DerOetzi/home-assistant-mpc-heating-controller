@@ -25,6 +25,8 @@ from homeassistant.helpers.event import (
 )
 from homeassistant.helpers.start import async_at_started
 
+from .state_reader import available_state
+
 _LOGGER = logging.getLogger(__name__)
 
 # No needed entity came in for this long: the rest is not on its way.
@@ -34,8 +36,7 @@ STARTUP_TIMEOUT_S = 3 * 60
 
 
 def entity_ready(hass: HomeAssistant, entity_id: str) -> bool:
-    state = hass.states.get(entity_id)
-    return state is not None and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+    return available_state(hass, entity_id) is not None
 
 
 class StartupGate:

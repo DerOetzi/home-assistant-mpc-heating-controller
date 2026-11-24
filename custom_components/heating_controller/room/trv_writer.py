@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import time
 
-from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant, State
 
 from ..controller.mpc.math_helper import clamp, round_to_step
 from ..controller.trv_inputs import ExternalTemperatureSchedule, raw_value
 from ..profiles import TrvBinding
-from ..state_reader import attribute_float, entity_is_on, state_float
+from ..state_reader import (
+    attribute_float,
+    available_state,
+    entity_is_on,
+    state_float,
+)
 from .adaptation import AdaptationWatch
 
 TARGET_TEMPERATURE_TOLERANCE_C = 0.01
@@ -78,8 +83,8 @@ class TrvWriter:
             # Every write wakes the TRV and aborts a running adaptation run,
             # so only send a target the TRV does not already report, none to a
             # TRV that cannot take it, and none while it adapts.
-            state = self._hass.states.get(entity_id)
-            if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            state = available_state(self._hass, entity_id)
+            if state is None:
                 continue
             if self._adaptation.running(trv, now_ts):
                 continue
