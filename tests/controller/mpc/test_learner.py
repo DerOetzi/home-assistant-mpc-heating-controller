@@ -242,6 +242,50 @@ def test_heat_balance_counts_hot_water_charges_as_no_heating():
     assert loss_model.learned_ua_factor < _expected_factor(0.5)
 
 
+def _night_into_a_morning_charge(charge_index):
+    """A held night; from the charge on the room cools 0.6 K in an hour."""
+    learner, loss_model, _ = make_learner()
+    learner.enable()
+    count = charge_index + 13
+    for index in range(count):
+        cooled = max(0, index - charge_index) * 0.05
+        learner.append_history(
+            make_input(
+                NIGHT_START_TS + index * STEP_S,
+                room_temp_c=20.0 - cooled,
+                outdoor_temp_c=0.0,
+                flow_temp_c=40.0,
+                target_temp_c=20.0,
+                hot_water_charge=charge_index <= index < charge_index + 6,
+            ),
+            applied_heating_power_w=312.5,
+            radiator_power_w=312.5,
+        )
+    learner.set_learning_paused(True, NIGHT_START_TS + count * STEP_S)
+    learner.run_learning_cycle()
+    return learner, loss_model
+
+
+def test_a_hot_water_charge_ends_a_long_enough_stretch():
+    charge_index = int(5 * 3600 / STEP_S)
+    learner, loss_model = _night_into_a_morning_charge(charge_index)
+
+    info = learner.get_ua_balance_info()
+    assert info.outcome == UaBalanceOutcome.LEARNED
+    assert info.last_window_s == pytest.approx((charge_index - 1) * STEP_S)
+    assert loss_model.learned_ua_factor == pytest.approx(
+        _expected_factor(0.5, hours=(charge_index - 1) * STEP_S / 3600)
+    )
+
+
+def test_a_hot_water_charge_does_not_end_a_short_stretch():
+    charge_index = int(3 * 3600 / STEP_S)
+    learner, loss_model = _night_into_a_morning_charge(charge_index)
+
+    assert learner.get_ua_balance_info().outcome == UaBalanceOutcome.DRIFT
+    assert loss_model.learned_ua_factor == 1.0
+
+
 def test_heat_balance_needs_a_meaningful_temperature_difference():
     learner, loss_model, _ = make_learner()
     learner.enable()

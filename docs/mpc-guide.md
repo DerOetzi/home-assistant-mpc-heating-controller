@@ -139,8 +139,10 @@ losses are.
   window contact opens, the configured room sensor drops out (the TRVs read up to a kelvin
   off at the radiator; the next stretch starts once it reports again), a TRV starts
   calibrating its valve, the outdoor temperature goes missing (see
-  [Sensor reliability](#sensor-reliability)), the sun condition ends, or heating stays off for more than three
-  controller cycles (15 minutes). A stretch that reaches eight hours is balanced right away.
+  [Sensor reliability](#sensor-reliability)), the sun condition ends, heating stays off for more than three
+  controller cycles (15 minutes), or a hot-water charge starts once the stretch has its four
+  hours (the morning charge comes with the household's morning and a defrost, all rooms cool
+  at once and the stretch would end in a drift; a shorter stretch runs on through the charge). A stretch that reaches eight hours is balanced right away.
   Shorter interruptions of heating (a missed heat-source poll, the flow briefly under the
   threshold) are bridged and count as no heating. A balance needs at least four gap-free
   hours (no gap above 20 minutes), a drift of at most 0.3 K, and on average at least 8 K

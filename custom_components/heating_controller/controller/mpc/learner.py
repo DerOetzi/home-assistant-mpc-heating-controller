@@ -88,8 +88,9 @@ VENT_START_SHARE = 0.3
 #
 # The window is a stretch of usable time: it runs until learning is paused, a
 # window contact opens, the configured room
-# sensor drops out, heating stays off for longer than a short interruption, or
-# the sun condition ends, and is balanced
+# sensor drops out, heating stays off for longer than a short interruption, a
+# hot-water charge starts once the stretch is long enough, or the sun
+# condition ends, and is balanced
 # once at that end. A night shortened by an interruption still counts as long as
 # the remaining stretch is long enough; a stretch that reaches the maximum is
 # balanced right away so a stretch that never ends still learns.
@@ -379,6 +380,12 @@ class RoomMpcModelLearner:
         radiator_power_w: float,
     ) -> None:
         self._track_degraded_inputs(mpc_input)
+        if (
+            mpc_input.hot_water_charge
+            and self._history
+            and not self._history[-1].hot_water_charge
+        ):
+            self._close_ua_balance_at_charge(self._history[-1].timestamp)
         self._history.append(
             LearnerHistoryEntry(
                 timestamp=mpc_input.now_ts,
@@ -1046,6 +1053,18 @@ class RoomMpcModelLearner:
             return
         self._ua_balance_closed = (start_ts, end_ts)
         self._ua_balance_from_ts = max(self._ua_balance_from_ts, end_ts)
+
+    def _close_ua_balance_at_charge(self, end_ts: float) -> None:
+        """A hot-water charge ends a stretch that is long enough already.
+
+        The morning charge comes with the household's morning and a defrost:
+        all rooms cool at once, and the stretch would end in a drift. A
+        shorter stretch keeps running and books the charge as no heating.
+        """
+        settled_ts = self._settled_since_ts(self._ua_balance_start_ts())
+        if settled_ts is None or end_ts - settled_ts < UA_BALANCE_MIN_WINDOW_S:
+            return
+        self._close_ua_balance(end_ts)
 
     def _learn_ua_from_heat_balance(self) -> bool:
         outcome = self._evaluate_heat_balance()

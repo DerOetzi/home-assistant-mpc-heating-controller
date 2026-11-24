@@ -109,13 +109,9 @@ Doku: `mpc-guide.md` „Gains and sun", „Flow control"; Offset-Empfehlung neu 
 
 ## 5. Boiler-Modus TRV (~01.12.)
 
-Nach Z2M 2.15.0 (Schreib-Fix `heating_system_mode` UINT8) alle 13 `select.heizung_*_heating_system_mode` auf `default_heating`. Nur nach Nutzer-Okay. Danach Takten und Raumfehler je TRV gegen Tage davor.
+Nach Z2M 2.15.0 (Schreib-Fix `heating_system_mode` UINT8) alle 13 `select.heizung_*_heating_system_mode` auf `default_heating`. Nur nach Nutzer-Okay. Danach Takten und Raumfehler je TRV gegen Tage davor. Danach `radiator_covered` neu bewerten: läuft Auto-Offset-Nachlauf (Rebekka) weiter, alle freiliegenden TRVs mit Raumsensor gleichzeitig auf an.
 
 ## Beobachten (laufend, Tagesauswertung)
-
-Durch Nutzer (Stand prüfen):
-- Raumsensor Rebekka (`sensor.sensor_rebekka_temperature`) meldet nur ~stündlich — Reporting-Intervall am Gerät prüfen (TRV braucht Raumwert ≥ alle 3 h, verdeckt alle 30 min). Raumsensor gilt nach 150 min ohne Meldung als veraltet (`room_sensor_fallback`).
-- Arbeitszimmer unter Soll bei 100 % Ventil: vermutlich Voreinstellung — prüfen.
 
 Laufend:
 - Ventiltakten je TRV (Faktor 1) seit Neustart A; bei Takten Faktor-Empfehlung an Nutzer.
