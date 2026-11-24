@@ -920,9 +920,9 @@ class HeatingDemandSensor(_DiagnosticSensor):
     def extra_state_attributes(self) -> dict[str, Any]:
         return {
             "trv_target_temps": self._coordinator.trv_target_temperatures,
-            "trv_setpoint_writes": dict(self._coordinator.trv_setpoint_writes),
-            "trv_external_writes": dict(self._coordinator.trv_external_writes),
-            "load_room_mean": self._coordinator.load_room_mean,
+            "trv_setpoint_writes": dict(self._coordinator.trv_writer.setpoint_writes),
+            "trv_external_writes": dict(self._coordinator.trv_writer.external_writes),
+            "load_room_mean": self._coordinator.load_sharing.room_mean,
             "trv_valve_positions": self._coordinator.trv_valve_positions,
         }
 

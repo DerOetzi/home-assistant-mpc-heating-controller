@@ -1,12 +1,12 @@
 """What the room hands its TRVs: setpoint, room temperature, shared load."""
 
-import time
 from datetime import timedelta
 
 import pytest
 from heating_controller.const import DOMAIN, HeatMode
 from heating_controller.coordinator import HeatingRoomCoordinator
 from heating_controller.profiles import StatusMatch, TrvBinding
+from heating_controller.room.trv_writer import trv_setpoint_c
 from homeassistant.core import HomeAssistant, ServiceCall, State
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from test_coordinator import (
@@ -88,7 +88,7 @@ def test_the_setpoint_follows_the_climate_attributes(
     attributes: dict, target: float, expected: float
 ) -> None:
     state = State(CLIMATE, "heat", attributes)
-    assert HeatingRoomCoordinator._trv_setpoint_c(state, target) == expected
+    assert trv_setpoint_c(state, target) == expected
 
 
 async def test_comfort_hands_the_trv_its_target(hass: HomeAssistant) -> None:
@@ -222,7 +222,7 @@ async def test_the_room_sensor_goes_to_an_exposed_trv_rarely(
     assert _numbers(calls, EXTERNAL) == [1850.0, 1870.0]
     await _report(hass, coordinator, freezer, 5, 18.7)
     assert _numbers(calls, EXTERNAL) == [1850.0, 1870.0, 1870.0]
-    assert coordinator.trv_external_writes == {EXTERNAL: 3}
+    assert coordinator.trv_writer.external_writes == {EXTERNAL: 3}
 
     coordinator.async_unload()
 
@@ -339,12 +339,12 @@ async def test_two_trvs_share_the_room_load(hass: HomeAssistant, freezer) -> Non
     assert "switch.heizung_klein_load_balancing_enable" in switched_on
     assert _numbers(calls, "number.heizung_gross_load_room_mean") == [362]
     assert _numbers(calls, "number.heizung_klein_load_room_mean") == [362]
-    assert coordinator.load_room_mean == 362
+    assert coordinator.load_sharing.room_mean == 362
 
     # An unknown load leaves the other alone in the mean.
     hass.states.async_set("sensor.heizung_klein_load_estimate", "-8000")
     calls.clear()
-    await coordinator._async_update_load_sharing(time.time())
+    await coordinator._async_update_load_sharing()
     assert _numbers(calls, "number.heizung_gross_load_room_mean") == [438]
 
     coordinator.async_unload()
@@ -388,7 +388,7 @@ async def test_a_single_trv_works_alone(hass: HomeAssistant) -> None:
         if call.domain == "switch" and call.service == "turn_off"
     ] == ["switch.heizung_gross_load_balancing_enable"]
     assert _numbers(calls, "number.heizung_gross_load_room_mean") == []
-    assert coordinator.load_room_mean is None
+    assert coordinator.load_sharing.room_mean is None
 
     coordinator.async_unload()
 
@@ -396,7 +396,7 @@ async def test_a_single_trv_works_alone(hass: HomeAssistant) -> None:
 async def test_an_adaptation_holds_the_setpoint_back_no_longer_than_the_limit(
     hass: HomeAssistant, freezer
 ) -> None:
-    from heating_controller.coordinator import ADAPTATION_MAX_HOLD_S
+    from heating_controller.room.adaptation import ADAPTATION_MAX_HOLD_S
 
     _seed_entities(hass)
     hass.states.async_set(ADAPTATION_ENTITY, "in_progress")

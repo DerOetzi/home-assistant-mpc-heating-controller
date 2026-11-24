@@ -15,11 +15,12 @@ from heating_controller.const import (
 )
 from heating_controller.controller.mpc.results import RoomTemperature
 from heating_controller.coordinator import (
-    FLOW_DIP_TOLERANCE_S,
     FLOW_TEMPERATURE_MAX_GAP_S,
     HeatingRoomCoordinator,
 )
 from heating_controller.profiles import StatusMatch, TrvBinding
+from heating_controller.room.heat_availability import FLOW_DIP_TOLERANCE_S
+from heating_controller.room.house import DetachedHouse
 from homeassistant.const import (
     SUN_EVENT_SUNRISE,
     SUN_EVENT_SUNSET,
@@ -1350,7 +1351,7 @@ async def test_a_setpoint_echo_does_not_trigger_a_second_write(
     coordinator = await _setup_coordinator(hass)
     await hass.async_block_till_done()
     written = coordinator.trv_target_temperatures["climate.heizung_wohnzimmer"]
-    writes = coordinator.trv_setpoint_writes.get("climate.heizung_wohnzimmer", 0)
+    writes = coordinator.trv_writer.setpoint_writes.get("climate.heizung_wohnzimmer", 0)
     assert writes >= 1
 
     # The TRV reports its previous target once more, then the new one.
@@ -1361,7 +1362,9 @@ async def test_a_setpoint_echo_does_not_trigger_a_second_write(
     )
     await hass.async_block_till_done()
 
-    assert coordinator.trv_setpoint_writes["climate.heizung_wohnzimmer"] == writes
+    assert (
+        coordinator.trv_writer.setpoint_writes["climate.heizung_wohnzimmer"] == writes
+    )
 
     coordinator.async_unload()
 
@@ -1376,7 +1379,7 @@ async def test_no_target_is_written_to_an_unavailable_trv(
     await hass.async_block_till_done()
 
     assert calls == []
-    assert coordinator.trv_setpoint_writes == {}
+    assert coordinator.trv_writer.setpoint_writes == {}
 
     coordinator.async_unload()
 
@@ -1422,7 +1425,7 @@ async def test_an_uncalibrated_trv_stops_learning_but_not_writes(
     await hass.async_block_till_done()
 
     assert coordinator.last_result.input.trv_adapting is True
-    assert coordinator.trv_setpoint_writes["climate.heizung_wohnzimmer"] == 1
+    assert coordinator.trv_writer.setpoint_writes["climate.heizung_wohnzimmer"] == 1
 
     # Calibrated and mounted: the room learns again.
     hass.states.async_set(ADAPTATION_ENTITY, "found")
@@ -1452,7 +1455,7 @@ async def test_nothing_is_written_to_a_trv_while_it_adapts(
     hass.services.async_register("switch", "turn_off", switch_handler)
     await hass.async_block_till_done()
 
-    assert coordinator.trv_setpoint_writes == {}
+    assert coordinator.trv_writer.setpoint_writes == {}
     assert coordinator.last_result.input.trv_adapting is True
     hass.states.async_set("sensor.flow_temperature", "20.0")
     await hass.async_block_till_done()
@@ -1466,7 +1469,7 @@ async def test_nothing_is_written_to_a_trv_while_it_adapts(
     hass.states.async_set(ADAPTATION_ENTITY, "found")
     await hass.async_block_till_done()
 
-    assert coordinator.trv_setpoint_writes["climate.heizung_wohnzimmer"] == 1
+    assert coordinator.trv_writer.setpoint_writes["climate.heizung_wohnzimmer"] == 1
     assert [call.service for call in switch_calls] == ["turn_off"]
     assert coordinator.last_result.input.trv_adapting is False
 
@@ -1763,6 +1766,13 @@ async def test_supply_not_rated_without_heat_at_the_valves(
     coordinator.async_unload()
 
 
+class _CatchingUpHouse(DetachedHouse):
+    catching_up = True
+
+    def rooms_catching_up(self) -> bool:
+        return self.catching_up
+
+
 async def test_supply_not_rated_while_catching_up_after_a_pause(
     hass: HomeAssistant, freezer
 ) -> None:
@@ -1770,12 +1780,12 @@ async def test_supply_not_rated_while_catching_up_after_a_pause(
     hass.states.async_set(VALVE_ENTITY, "100")
     coordinator = await _setup_coordinator(hass, trvs=[_trv_with_valve()])
     await _poll(hass, freezer, 5)
-    catching_up = True
-    coordinator.catch_up_provider = lambda: catching_up
+    house = _CatchingUpHouse()
+    coordinator.house = house
 
     assert coordinator.supply[:2] == (RoomSupply.NOT_RATED, SupplyReason.CATCH_UP)
 
-    catching_up = False
+    house.catching_up = False
     assert coordinator.supply[:2] == (RoomSupply.UNDERSUPPLIED, None)
 
     coordinator.async_unload()

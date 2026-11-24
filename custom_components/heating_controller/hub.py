@@ -154,10 +154,7 @@ class HeatingHub(Observable):
 
     def add_room(self, coordinator: HeatingRoomCoordinator) -> None:
         self.rooms[coordinator.room_id] = coordinator
-        coordinator.catch_up_provider = lambda: self.flow_feedback.catching_up(
-            time.time()
-        )
-        coordinator.hot_water_charge_provider = self.room_hot_water_charge
+        coordinator.house = self
         self._unsub.append(coordinator.async_add_listener(self._notify_listeners))
 
     def used_surfaces(self) -> list[SurfaceGeometry]:
@@ -193,7 +190,7 @@ class HeatingHub(Observable):
             )
             self.irradiance.async_start()
             for room in self.rooms.values():
-                room.set_sun_provider(self.irradiance, self.workday_entity)
+                room.gain_clock.set_sun_provider(self.irradiance, self.workday_entity)
         tracked = [
             entity_id
             for entity_id in (
@@ -286,12 +283,25 @@ class HeatingHub(Observable):
     def set_flow(self, flow: FlowDevice) -> None:
         """Hand the flow device the actuator; rooms take its threshold."""
         self.flow = flow
-        for room in self.rooms.values():
-            room.flow_threshold_provider = lambda: flow.threshold_c
-            room.curve_outdoor_provider = lambda: (
-                flow.numbers["curve_outdoor_cold"],
-                flow.numbers["curve_outdoor_warm"],
-            )
+
+    # --- What the rooms ask the house for ----------------------------------
+
+    def flow_threshold_override_c(self) -> float | None:
+        """The flow device's threshold; None without a flow device."""
+        return None if self.flow is None else self.flow.threshold_c
+
+    def curve_outdoor_ends_c(self) -> tuple[float, float] | None:
+        """The heating curve's outdoor end points (cold, warm); None without."""
+        if self.flow is None:
+            return None
+        return (
+            self.flow.numbers["curve_outdoor_cold"],
+            self.flow.numbers["curve_outdoor_warm"],
+        )
+
+    def rooms_catching_up(self) -> bool:
+        """The rooms catch up after a pause of the room heating."""
+        return self.flow_feedback.catching_up(time.time())
 
     def reset_flow_feedback(self) -> None:
         """Drop the valve feedback to zero, e.g. after a change of its rules."""

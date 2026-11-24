@@ -187,7 +187,7 @@ async def test_hub_with_room_surfaces_adds_irradiance_sensors(
         Surface.SOUTH,
         Surface.ROOF_WEST,
     }
-    assert hass.data[DOMAIN][entry.entry_id].sun_provider is hub.irradiance
+    assert hass.data[DOMAIN][entry.entry_id].gain_clock.sun_provider is hub.irradiance
     sensors = [
         state.entity_id
         for state in hass.states.async_all("sensor")
