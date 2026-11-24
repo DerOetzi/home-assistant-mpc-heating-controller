@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-import voluptuous as vol
+import probatio as vol
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -115,7 +115,7 @@ _FLOW_THRESHOLD_DOMAINS = ["input_number", "number", "sensor"]
 def _marker(
     key: type[vol.Required] | type[vol.Optional], name: str, defaults: dict[str, Any]
 ) -> vol.Marker:
-    # Voluptuous takes plain strings only, not an enum member.
+    # Plain strings, so the stored data never holds an enum member.
     if name in defaults and defaults[name] is not None:
         return key(str(name), default=defaults[name])
     return key(str(name))

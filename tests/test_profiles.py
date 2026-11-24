@@ -1,5 +1,5 @@
+import probatio as vol
 import pytest
-import voluptuous as vol
 from heating_controller.profiles import (
     StatusMatch,
     TrvResolveError,

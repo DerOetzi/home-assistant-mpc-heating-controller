@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import voluptuous as vol
+import probatio as vol
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -327,17 +327,8 @@ def device_selector_filters(
 def find_profile(
     hass: HomeAssistant, profiles: tuple[DeviceProfile, ...], device: dr.DeviceEntry
 ) -> DeviceProfile | None:
-    # Newer cores tie a device to a single config entry and deprecate the set.
-    entry_ids = (
-        [device.config_entry_id]
-        if hasattr(device, "config_entry_id")
-        else device.config_entries
-    )
-    integrations = {
-        config_entry.domain
-        for entry_id in entry_ids
-        if (config_entry := hass.config_entries.async_get_entry(entry_id)) is not None
-    }
+    config_entry = hass.config_entries.async_get_entry(device.config_entry_id)
+    integrations = {config_entry.domain} if config_entry is not None else set()
     return next(
         (
             profile
@@ -367,7 +358,7 @@ def resolve_trv(
     runs without what it provides.
     """
     device_id = trv[CONF_TRV_DEVICE_ID]
-    device = dr.async_get(hass).async_get(device_id)
+    device = dr.async_get(hass).async_get(device_id, include_child_devices=False)
     if device is None:
         raise TrvResolveError("device_missing", f"Device {device_id} does not exist")
     profile = find_profile(hass, profiles, device)

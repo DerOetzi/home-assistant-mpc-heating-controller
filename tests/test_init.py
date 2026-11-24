@@ -1,5 +1,5 @@
+import probatio as vol
 import pytest
-import voluptuous as vol
 from heating_controller.const import DOMAIN, HeatMode
 from heating_controller.controller.mpc.types import LearningFactors
 from heating_controller.store import LearningFactorsStore
