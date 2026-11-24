@@ -105,3 +105,22 @@ class CapacityStretchInfo:
     estimate_factor: float | None = None
     saturated_share: float | None = None
     last_learned_ts: float | None = None
+
+
+@dataclass(frozen=True)
+class RoomContext:
+    """What the house tells a room before each calculation."""
+
+    now_ts: float
+    # The lowest flow the heat source can usefully deliver.
+    flow_threshold_c: float
+    # Whether the TRVs get hot water; without it the radiators cool down and
+    # nothing is learned.
+    heat_available: bool = True
+    # A TRV calibrates its valve: it moves the valve by itself.
+    trv_adapting: bool = False
+    # A charge seen outside the room: the house's one signal (decisive,
+    # replaces the room's own detection on its flow) or the hot water
+    # control's (adds to it).
+    external_hot_water_charge: bool = False
+    external_hot_water_decisive: bool = False

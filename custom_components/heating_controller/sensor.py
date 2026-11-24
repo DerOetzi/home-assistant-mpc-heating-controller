@@ -37,6 +37,7 @@ from .control.flow_feedback import UP_AFTER_S
 from .control.hot_water import HotWaterPhase
 from .control.legionella import LegionellaState
 from .controller.mpc.learner import UA_BALANCE_MIN_WINDOW_S
+from .controller.mpc.results import RoomMpcError
 from .coordinator import HeatingRoomCoordinator
 from .entity import (
     FlowEntity,
@@ -1052,7 +1053,7 @@ class MeasuredHeatingPowerSensor(_DiagnosticSensor):
     @property
     def native_value(self) -> float | None:
         result = self._coordinator.last_result
-        if result is None or result.measured_heating_power_w is None:
+        if result is None:
             return None
         return round(result.measured_heating_power_w, 1)
 
@@ -1070,13 +1071,13 @@ class RoomTemperatureSensor(_DiagnosticSensor):
 
     @property
     def native_value(self) -> float | None:
-        result = self._coordinator.mpc.get_room_temperature_result()
-        return result.temperature_c if result.valid else None
+        result = self._coordinator.mpc.get_room_temperature()
+        return None if isinstance(result, RoomMpcError) else result.temperature_c
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        result = self._coordinator.mpc.get_room_temperature_result()
-        if not result.valid:
+        result = self._coordinator.mpc.get_room_temperature()
+        if isinstance(result, RoomMpcError):
             return {}
         last_result = self._coordinator.last_result
         return {
@@ -1091,8 +1092,8 @@ class RoomTemperatureSensor(_DiagnosticSensor):
             "trv_temperatures": dict(
                 zip(
                     self._coordinator.trv_entity_ids,
-                    result.trv_temperatures or [],
-                    strict=False,
+                    result.trv_temperatures,
+                    strict=True,
                 )
             ),
         }

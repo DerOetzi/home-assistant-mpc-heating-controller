@@ -307,7 +307,7 @@ class RoomGainModel:
 
     # --- persistence -------------------------------------------------------
 
-    def consume_changed(self) -> bool:
+    def take_changed(self) -> bool:
         changed = self._changed
         self._changed = False
         return changed

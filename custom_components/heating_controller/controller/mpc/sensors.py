@@ -12,8 +12,7 @@ from .results import (
     RoomMpcError,
     RoomMpcErrorCode,
     RoomMpcInput,
-    RoomMpcInputResult,
-    RoomTemperatureResult,
+    RoomTemperature,
 )
 from .types import TrvConfig
 
@@ -234,7 +233,7 @@ class RoomMpcSensors:
 
     def get_room_temperature(
         self, now_ts: float | None = None
-    ) -> RoomTemperatureResult:
+    ) -> RoomTemperature | RoomMpcError:
         now_ts = time.time() if now_ts is None else now_ts
         trv_temperatures = [
             entry.get_fresh_value(now_ts) for entry in self._trv_temperatures
@@ -242,8 +241,7 @@ class RoomMpcSensors:
         room_sensor_temperature = self._room_sensor.get_fresh_value(now_ts)
 
         if room_sensor_temperature is not None:
-            return RoomTemperatureResult(
-                valid=True,
+            return RoomTemperature(
                 temperature_c=room_sensor_temperature,
                 used_strategy=RoomTemperatureStrategy.ROOM_SENSOR,
                 trv_temperatures=trv_temperatures,
@@ -252,18 +250,14 @@ class RoomMpcSensors:
 
         valid_trv_temperatures = [t for t in trv_temperatures if t is not None]
         if not valid_trv_temperatures:
-            return RoomTemperatureResult(
-                valid=False,
-                error=RoomMpcError(
-                    code=RoomMpcErrorCode.MISSING_ROOM_TEMPERATURE,
-                    message="Missing room sensor and TRV temperatures",
-                    details={"trv_temperatures": trv_temperatures},
-                ),
+            return RoomMpcError(
+                code=RoomMpcErrorCode.MISSING_ROOM_TEMPERATURE,
+                message="Missing room sensor and TRV temperatures",
+                details={"trv_temperatures": trv_temperatures},
             )
 
         average_temperature = sum(valid_trv_temperatures) / len(valid_trv_temperatures)
-        return RoomTemperatureResult(
-            valid=True,
+        return RoomTemperature(
             temperature_c=average_temperature,
             used_strategy=RoomTemperatureStrategy.TRV_AVERAGE,
             trv_temperatures=trv_temperatures,
@@ -273,24 +267,17 @@ class RoomMpcSensors:
 
     def create_input(
         self, target_temp_c: float, now_ts: float | None = None
-    ) -> RoomMpcInputResult:
+    ) -> RoomMpcInput | RoomMpcError:
         now_ts = time.time() if now_ts is None else now_ts
-        room_temperature_result = self.get_room_temperature(now_ts)
+        room = self.get_room_temperature(now_ts)
+        if isinstance(room, RoomMpcError):
+            return room
         outdoor_temp_c = self._outdoor_temperature_sensor.get_fresh_value(now_ts)
 
-        room_temp_c = room_temperature_result.temperature_c
-        used_strategy = room_temperature_result.used_strategy
-        trv_temperatures = room_temperature_result.trv_temperatures
-        if room_temp_c is None or used_strategy is None or trv_temperatures is None:
-            return RoomMpcInputResult(valid=False, error=room_temperature_result.error)
-
         if outdoor_temp_c is None:
-            return RoomMpcInputResult(
-                valid=False,
-                error=RoomMpcError(
-                    code=RoomMpcErrorCode.MISSING_OUTDOOR_TEMPERATURE,
-                    message="Missing outdoor temperature",
-                ),
+            return RoomMpcError(
+                code=RoomMpcErrorCode.MISSING_OUTDOOR_TEMPERATURE,
+                message="Missing outdoor temperature",
             )
 
         valve_positions_pct = [
@@ -308,20 +295,17 @@ class RoomMpcSensors:
             )
         )
 
-        return RoomMpcInputResult(
-            valid=True,
-            input=RoomMpcInput(
-                now_ts=now_ts,
-                target_temp_c=target_temp_c,
-                room_temp_c=room_temp_c,
-                outdoor_temp_c=outdoor_temp_c,
-                flow_temp_c=self._flow_temperature_sensor.get_fresh_value(now_ts),
-                used_room_sensor_strategy=used_strategy,
-                trv_temperatures=trv_temperatures,
-                room_sensor_temp_c=room_temperature_result.room_sensor_temp_c,
-                room_sensor_fallback=room_temperature_result.room_sensor_fallback,
-                valve_positions_pct=valve_positions_pct,
-                valve_position_missing=valve_position_missing,
-                trv_adapting=self._trv_adapting,
-            ),
+        return RoomMpcInput(
+            now_ts=now_ts,
+            target_temp_c=target_temp_c,
+            room_temp_c=room.temperature_c,
+            outdoor_temp_c=outdoor_temp_c,
+            flow_temp_c=self._flow_temperature_sensor.get_fresh_value(now_ts),
+            used_room_sensor_strategy=room.used_strategy,
+            trv_temperatures=room.trv_temperatures,
+            room_sensor_temp_c=room.room_sensor_temp_c,
+            room_sensor_fallback=room.room_sensor_fallback,
+            valve_positions_pct=valve_positions_pct,
+            valve_position_missing=valve_position_missing,
+            trv_adapting=self._trv_adapting,
         )

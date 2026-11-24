@@ -19,13 +19,14 @@ from .results import (
     RoomMpcError,
     RoomMpcInput,
     RoomMpcResult,
-    RoomTemperatureResult,
+    RoomTemperature,
 )
 from .sensors import RoomMpcSensors
 from .types import (
     CapacityStretchInfo,
     FlowGateState,
     LearningFactors,
+    RoomContext,
     RoomModelLearningState,
     RoomThermalConfig,
     TrvConfig,
@@ -112,13 +113,6 @@ class _SurplusFlowGate:
 class _RecoveryFlow:
     flow_temperature_c: float
     saturated: bool = False
-
-
-@dataclass
-class RoomMpcComputeResult:
-    valid: bool
-    result: RoomMpcResult | None = None
-    error: RoomMpcError | None = None
 
 
 class RoomMpcController:
@@ -216,11 +210,19 @@ class RoomMpcController:
             return self._external_hot_water_charge
         return self._hot_water.charging or self._external_hot_water_charge
 
-    def set_heat_available(self, available: bool) -> None:
-        """Whether the TRVs get hot water; without it the radiators cool down."""
-        self._heat_available = available
+    def apply_context(self, context: RoomContext) -> None:
+        """Take what the house tells the room; once before each calculation."""
+        self._emitter_model.set_flow_threshold_c(context.flow_threshold_c)
+        self._sensors.set_trv_adapting(context.trv_adapting)
+        self._external_hot_water_charge = context.external_hot_water_charge
+        self._external_hot_water_decisive = context.external_hot_water_decisive
+        self._heat_available = context.heat_available
+        if context.heat_available:
+            self._learner.enable(context.now_ts)
+        else:
+            self._learner.disable(context.now_ts)
 
-    def get_room_temperature_result(self) -> RoomTemperatureResult:
+    def get_room_temperature(self) -> RoomTemperature | RoomMpcError:
         return self._sensors.get_room_temperature()
 
     def get_learning_state(self) -> RoomModelLearningState:
@@ -266,69 +268,75 @@ class RoomMpcController:
         """reported_ts: when the TRV last reported, now if not given."""
         self._sensors.set_valve_position(index, value, reported_ts)
 
-    def set_trv_adapting(self, adapting: bool) -> None:
-        self._sensors.set_trv_adapting(adapting)
-
     def set_outdoor_temperature(self, value: float | None) -> None:
         self._sensors.set_outdoor_temperature(value)
 
     def set_flow_temperature(self, value: float | None) -> None:
         self._sensors.set_flow_temperature(value)
 
-    def set_external_hot_water_charge(
-        self, charging: bool, decisive: bool = False
-    ) -> None:
-        self._external_hot_water_charge = charging
-        self._external_hot_water_decisive = decisive
-
-    def set_flow_threshold_c(self, flow_threshold_c: float) -> None:
-        self._emitter_model.set_flow_threshold_c(flow_threshold_c)
-
     def compute(
         self,
         target_temperature_c: float,
-        apply_side_effects: bool = True,
         mode_target_temperature_c: float | None = None,
-    ) -> RoomMpcComputeResult:
-        """Compute the flow requirements and feed the learner.
+    ) -> RoomMpcResult | RoomMpcError:
+        """Compute the flow requirements and feed the observer and learner.
 
         The TRVs regulate the room themselves; the demand is what their
         valves report. The learner judges the room on the mode's setpoint,
         target_temperature_c where none is given.
         """
         now_ts = time.time()
-        if apply_side_effects:
-            # Learning pauses while the outdoor temperature is missing, also
-            # when the room temperature is missing as well.
-            self._outdoor_temperature_missing = (
-                self._sensors.is_outdoor_temperature_missing(now_ts)
-            )
-            self._learner.set_outdoor_temperature_missing(
-                self._outdoor_temperature_missing, now_ts
-            )
-        input_result = self._sensors.create_input(target_temperature_c, now_ts)
-        mpc_input = input_result.input
-        if mpc_input is None:
-            return RoomMpcComputeResult(valid=False, error=input_result.error)
-
+        # Learning pauses while the outdoor temperature is missing, also when
+        # the room temperature is missing as well.
+        self._outdoor_temperature_missing = (
+            self._sensors.is_outdoor_temperature_missing(now_ts)
+        )
+        self._learner.set_outdoor_temperature_missing(
+            self._outdoor_temperature_missing, now_ts
+        )
+        mpc_input = self._sensors.create_input(target_temperature_c, now_ts)
+        if isinstance(mpc_input, RoomMpcError):
+            return mpc_input
         mpc_input.mode_target_temp_c = mode_target_temperature_c
-        if apply_side_effects:
-            self._hot_water.update(
-                mpc_input.now_ts,
-                mpc_input.flow_temp_c,
-                self._heat_available,
-                self._external_hot_water_charge
-                if self._external_hot_water_decisive
-                else None,
-            )
-        if self.hot_water_charging:
-            # The radiators get no water; the valves keep the demand of the
-            # heating flow they get back once the charge is done.
-            mpc_input.hot_water_charge = True
-            if self._hot_water.heating_flow_c is not None:
-                mpc_input.flow_temp_c = self._hot_water.heating_flow_c
-        if apply_side_effects:
-            self._update_radiator_monitors(mpc_input)
+        self._hot_water.update(
+            mpc_input.now_ts,
+            mpc_input.flow_temp_c,
+            self._heat_available,
+            self._external_hot_water_charge
+            if self._external_hot_water_decisive
+            else None,
+        )
+        self._apply_hot_water_charge(mpc_input)
+        self._update_radiator_monitors(mpc_input)
+        self._apply_radiator_state(mpc_input)
+        estimate = self._observer.estimate(mpc_input)
+        result = self._derive_result(mpc_input, estimate, self._live_flow_gate)
+        self._commit(mpc_input, estimate, result.measured_heating_power_w)
+        return result
+
+    def preview(self, target_temperature_c: float) -> RoomMpcResult | RoomMpcError:
+        """The flow requirements for another setpoint, without side effects.
+
+        Only the preview's own surplus gate moves.
+        """
+        mpc_input = self._sensors.create_input(target_temperature_c, time.time())
+        if isinstance(mpc_input, RoomMpcError):
+            return mpc_input
+        self._apply_hot_water_charge(mpc_input)
+        self._apply_radiator_state(mpc_input)
+        estimate = self._observer.estimate(mpc_input)
+        return self._derive_result(mpc_input, estimate, self._preview_flow_gate)
+
+    def _apply_hot_water_charge(self, mpc_input: RoomMpcInput) -> None:
+        if not self.hot_water_charging:
+            return
+        # The radiators get no water; the valves keep the demand of the
+        # heating flow they get back once the charge is done.
+        mpc_input.hot_water_charge = True
+        if self._hot_water.heating_flow_c is not None:
+            mpc_input.flow_temp_c = self._hot_water.heating_flow_c
+
+    def _apply_radiator_state(self, mpc_input: RoomMpcInput) -> None:
         mpc_input.radiator_not_heating = any(self.radiators_not_heating)
         mpc_input.radiator_not_heating_since_ts = min(
             (
@@ -338,38 +346,50 @@ class RoomMpcController:
             ),
             default=None,
         )
-        estimate = self._observer.estimate(mpc_input)
 
-        available_heating_power_w = max(
-            0.0,
-            self._emitter_model.calculate_available_heating_power_w(
-                mpc_input.room_temp_c, mpc_input.flow_temp_c
+    def _derive_result(
+        self,
+        mpc_input: RoomMpcInput,
+        estimate: ObserverEstimate,
+        flow_gate: _SurplusFlowGate,
+    ) -> RoomMpcResult:
+        """The flow requirements from the input and the observed state."""
+        hold_flow_c = self._calculate_hold_flow_temperature_c(mpc_input)
+        flow_gate_closed = self._update_flow_gate(mpc_input, flow_gate)
+        recovery_flow = self._calculate_recovery_flow(mpc_input, estimate)
+        return RoomMpcResult(
+            input=mpc_input,
+            available_heating_power_w=max(
+                0.0,
+                self._emitter_model.calculate_available_heating_power_w(
+                    mpc_input.room_temp_c, mpc_input.flow_temp_c
+                ),
+            ),
+            hold_flow_temperature_c=hold_flow_c,
+            gated_hold_flow_temperature_c=(
+                0.0 if flow_gate_closed else (hold_flow_c or 0.0)
+            ),
+            recovery_flow_temperature_c=recovery_flow.flow_temperature_c,
+            recovery_flow_saturated=recovery_flow.saturated,
+            flow_gate_closed=flow_gate_closed,
+            estimated_room_temperature_c=estimate.room_temperature_c,
+            radiator_power_w=estimate.radiator_power_w,
+            # A radiator without a reported opening counts with the room's
+            # highest one.
+            measured_heating_power_w=(
+                self._emitter_model.calculate_measured_heating_power_w(
+                    mpc_input.room_temp_c,
+                    mpc_input.flow_temp_c,
+                    mpc_input.valve_positions_pct,
+                    _room_demand_pct(mpc_input),
+                )
             ),
         )
 
-        reported_openings_pct = [
-            opening for opening in mpc_input.valve_positions_pct if opening is not None
-        ]
-        room_demand_pct = max(reported_openings_pct, default=0.0)
-        # A radiator without a reported opening counts with the room's
-        # highest one.
-        measured_heating_power_w = (
-            self._emitter_model.calculate_measured_heating_power_w(
-                mpc_input.room_temp_c,
-                mpc_input.flow_temp_c,
-                mpc_input.valve_positions_pct,
-                room_demand_pct,
-            )
-        )
-        effective_opening_pct = (
-            sum(reported_openings_pct) / len(reported_openings_pct)
-            if reported_openings_pct
-            else 0.0
-        )
-
-        flow_gate = (
-            self._live_flow_gate if apply_side_effects else self._preview_flow_gate
-        )
+    def _update_flow_gate(
+        self, mpc_input: RoomMpcInput, flow_gate: _SurplusFlowGate
+    ) -> bool:
+        """Whether the surplus gate holds the hold flow back."""
         # A TRV that should report its opening and does not may well be open:
         # the gate stays as it is.
         demand_unknown = any(
@@ -380,50 +400,34 @@ class RoomMpcController:
                 strict=True,
             )
         )
-        flow_gate_closed = (
-            flow_gate.closed
-            if demand_unknown
-            else flow_gate.update(
-                surplus_c=mpc_input.room_temp_c - mpc_input.target_temp_c,
-                demand_pct=room_demand_pct,
-                now_ts=mpc_input.now_ts,
-            )
+        if demand_unknown:
+            return flow_gate.closed
+        return flow_gate.update(
+            surplus_c=mpc_input.room_temp_c - mpc_input.target_temp_c,
+            demand_pct=_room_demand_pct(mpc_input),
+            now_ts=mpc_input.now_ts,
         )
 
-        hold_flow_temperature_c = self._calculate_hold_flow_temperature_c(mpc_input)
-        recovery_flow = self._calculate_recovery_flow(mpc_input, estimate)
-        gated_hold_flow_c = (
-            0.0 if flow_gate_closed else (hold_flow_temperature_c or 0.0)
+    def _commit(
+        self,
+        mpc_input: RoomMpcInput,
+        estimate: ObserverEstimate,
+        measured_heating_power_w: float,
+    ) -> None:
+        """Hand the cycle to the observer and the learner."""
+        water_flowing = self._heat_available and not mpc_input.hot_water_charge
+        applied_heating_power_w = measured_heating_power_w if water_flowing else 0.0
+        self._observer.commit(
+            estimate,
+            mpc_input,
+            target_power_w=applied_heating_power_w,
+            demand_pct=_mean_opening_pct(mpc_input) if water_flowing else 0.0,
         )
-
-        if apply_side_effects:
-            water_flowing = self._heat_available and not mpc_input.hot_water_charge
-            applied_heating_power_w = measured_heating_power_w if water_flowing else 0.0
-            self._observer.commit(
-                estimate,
-                mpc_input,
-                target_power_w=applied_heating_power_w,
-                demand_pct=effective_opening_pct if water_flowing else 0.0,
-            )
-            self._learner.append_history(
-                mpc_input,
-                applied_heating_power_w,
-                radiator_power_w=estimate.radiator_power_w,
-            )
-
-        result = RoomMpcResult(
-            input=mpc_input,
-            available_heating_power_w=available_heating_power_w,
-            hold_flow_temperature_c=hold_flow_temperature_c,
-            gated_hold_flow_temperature_c=gated_hold_flow_c,
-            recovery_flow_temperature_c=recovery_flow.flow_temperature_c,
-            recovery_flow_saturated=recovery_flow.saturated,
-            flow_gate_closed=flow_gate_closed,
-            estimated_room_temperature_c=estimate.room_temperature_c,
+        self._learner.append_history(
+            mpc_input,
+            applied_heating_power_w,
             radiator_power_w=estimate.radiator_power_w,
-            measured_heating_power_w=measured_heating_power_w,
         )
-        return RoomMpcComputeResult(valid=True, result=result)
 
     def _calculate_hold_flow_temperature_c(
         self, mpc_input: RoomMpcInput
@@ -563,17 +567,22 @@ class RoomMpcController:
     ) -> None:
         self._learner.set_gain_context(profile_index_at, local_day_at, sun_source)
 
-    def consume_persisted_learning_factors(self) -> LearningFactors | None:
-        return self._learner.consume_persisted_learning_factors()
+    def take_factors_to_save(self) -> LearningFactors | None:
+        """Learned factors not saved yet; None if nothing new. Clears them."""
+        return self._learner.take_factors_to_save()
+
+    def take_gains_to_save(self) -> dict | None:
+        """The gain model's export if it changed since; None otherwise."""
+        return self._gain_model.export() if self._gain_model.take_changed() else None
+
+    def reset_gains(self) -> None:
+        self._gain_model.reset()
+
+    def restore_gains(self, data: dict) -> None:
+        self._gain_model.restore(data)
 
     def recalibrate_learning_factors(self, factors: LearningFactors) -> None:
         self._learner.recalibrate(factors)
-
-    def enable_learning(self) -> None:
-        self._learner.enable()
-
-    def disable_learning(self) -> None:
-        self._learner.disable()
 
     def suppress_learning_for_interval(
         self, ua_duration_s: float, capacity_duration_s: float
@@ -633,3 +642,17 @@ class RoomMpcController:
 
     def set_sun_condition(self, sun_condition: Callable[[float], bool]) -> None:
         self._learner.set_sun_condition(sun_condition)
+
+
+def _reported_openings_pct(mpc_input: RoomMpcInput) -> list[float]:
+    return [o for o in mpc_input.valve_positions_pct if o is not None]
+
+
+def _room_demand_pct(mpc_input: RoomMpcInput) -> float:
+    """The highest valve opening any TRV of the room reports."""
+    return max(_reported_openings_pct(mpc_input), default=0.0)
+
+
+def _mean_opening_pct(mpc_input: RoomMpcInput) -> float:
+    openings = _reported_openings_pct(mpc_input)
+    return sum(openings) / len(openings) if openings else 0.0

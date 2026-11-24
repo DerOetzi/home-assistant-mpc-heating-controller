@@ -47,14 +47,14 @@ def test_empty_model_reports_nothing():
     assert model.gain_sigma_w is None
     assert model.regression_ua_factor is None
     assert model.steady_gain_w == 0.0
-    assert not model.consume_changed()
+    assert not model.take_changed()
 
 
 def test_export_restore_round_trip():
     model = _model()
     for delta_c in (10.0, 14.0, 18.0):
         model.add_night_point(delta_c, 20.0 * delta_c - 50.0, 6.0, BASE_UA)
-    assert model.consume_changed()
+    assert model.take_changed()
     copy = _model()
     copy.restore(model.export())
     assert copy.learned_gain_w == model.learned_gain_w
@@ -73,7 +73,7 @@ def test_reset_forgets():
     model.add_night_point(14.0, 230.0, 6.0, BASE_UA)
     model.reset()
     assert model.night_points == 0
-    assert model.consume_changed()
+    assert model.take_changed()
 
 
 def _hours(model, profile: int, value_w: float, days: list[int], per_day: int = 3):

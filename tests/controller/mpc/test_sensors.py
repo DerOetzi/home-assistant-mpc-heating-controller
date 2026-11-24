@@ -1,5 +1,5 @@
 from heating_controller.const import RoomTemperatureStrategy
-from heating_controller.controller.mpc.results import RoomMpcErrorCode
+from heating_controller.controller.mpc.results import RoomMpcError, RoomMpcErrorCode
 from heating_controller.controller.mpc.sensors import (
     ROOM_SENSOR_MAX_AGE_S,
     VALVE_POSITION_MAX_AGE_S,
@@ -19,7 +19,7 @@ def test_uses_room_sensor_when_fresh():
     sensors.set_trv_temperature(0, 19.0)
 
     result = sensors.get_room_temperature(now_ts=1000)
-    assert result.valid is True
+    assert not isinstance(result, RoomMpcError)
     assert result.temperature_c == 21.0
     assert result.used_strategy == RoomTemperatureStrategy.ROOM_SENSOR
 
@@ -30,7 +30,7 @@ def test_falls_back_to_trv_average_when_no_room_sensor():
     sensors.set_trv_temperature(1, 22.0)
 
     result = sensors.get_room_temperature()
-    assert result.valid is True
+    assert not isinstance(result, RoomMpcError)
     assert result.temperature_c == 21.0
     assert result.used_strategy == RoomTemperatureStrategy.TRV_AVERAGE
 
@@ -38,8 +38,8 @@ def test_falls_back_to_trv_average_when_no_room_sensor():
 def test_missing_room_temperature_when_nothing_configured():
     sensors = make_sensors()
     result = sensors.get_room_temperature()
-    assert result.valid is False
-    assert result.error.code == RoomMpcErrorCode.MISSING_ROOM_TEMPERATURE
+    assert isinstance(result, RoomMpcError)
+    assert result.code == RoomMpcErrorCode.MISSING_ROOM_TEMPERATURE
 
 
 def test_stale_value_outside_max_age_is_not_fresh():
@@ -49,7 +49,7 @@ def test_stale_value_outside_max_age_is_not_fresh():
     import time
 
     result = sensors.get_room_temperature(now_ts=time.time() + 999999)
-    assert result.valid is False
+    assert isinstance(result, RoomMpcError)
 
 
 def test_create_input_requires_outdoor_temperature():
@@ -57,8 +57,8 @@ def test_create_input_requires_outdoor_temperature():
     sensors.set_room_sensor_temperature(21.0)
 
     result = sensors.create_input(target_temp_c=22.0)
-    assert result.valid is False
-    assert result.error.code == "missing_outdoor_temperature"
+    assert isinstance(result, RoomMpcError)
+    assert result.code == "missing_outdoor_temperature"
 
 
 def test_create_input_valid_with_all_sensors():
@@ -68,10 +68,10 @@ def test_create_input_valid_with_all_sensors():
     sensors.set_flow_temperature(42.0)
 
     result = sensors.create_input(target_temp_c=22.0)
-    assert result.valid is True
-    assert result.input.room_temp_c == 21.0
-    assert result.input.outdoor_temp_c == -3.0
-    assert result.input.flow_temp_c == 42.0
+    assert not isinstance(result, RoomMpcError)
+    assert result.room_temp_c == 21.0
+    assert result.outdoor_temp_c == -3.0
+    assert result.flow_temp_c == 42.0
 
 
 def test_outlier_is_ignored_unless_it_repeats_as_drift():
@@ -100,7 +100,7 @@ def test_flow_temperature_follows_jumps_without_outlier_filter():
     for value in (27.0, 29.0, 29.0, 29.0, 29.0, 41.0, 58.0, 36.0, 35.0):
         sensors.set_flow_temperature(value, now_ts)
         result = sensors.create_input(target_temp_c=21.0, now_ts=now_ts)
-        assert result.input.flow_temp_c == value
+        assert result.flow_temp_c == value
         now_ts += 300.5
 
 
@@ -111,7 +111,7 @@ def test_flow_temperature_still_expires_after_max_age():
     sensors.set_flow_temperature(35.0, 1_000_000.0)
 
     result = sensors.create_input(target_temp_c=21.0, now_ts=1_000_000.0 + 1801)
-    assert result.input.flow_temp_c is None
+    assert result.flow_temp_c is None
 
 
 def test_outlier_drift_is_confirmed_on_poll_cadence_with_jitter():
@@ -152,7 +152,7 @@ def test_trv_average_is_a_fallback_only_with_a_configured_room_sensor():
     without.set_trv_temperature(0, 19.0, now_ts=1000)
 
     assert configured.get_room_temperature(now_ts=1000).room_sensor_fallback is True
-    assert configured.create_input(21.0, now_ts=1000).input.room_sensor_fallback is True
+    assert configured.create_input(21.0, now_ts=1000).room_sensor_fallback is True
     assert without.get_room_temperature(now_ts=1000).room_sensor_fallback is False
 
 
@@ -175,7 +175,7 @@ def _valve_input(trvs, positions, now_ts=1000.0):
         sensors.set_valve_position(index, position, now_ts)
     sensors.set_outdoor_temperature(5.0, now_ts)
     sensors.set_flow_temperature(40.0, now_ts)
-    return sensors.create_input(21.0, now_ts).input
+    return sensors.create_input(21.0, now_ts)
 
 
 def test_a_room_without_any_valve_entity_counts_as_valve_position_missing():
@@ -203,10 +203,10 @@ def test_a_valve_opening_reported_half_an_hour_ago_is_unknown():
     sensors.set_outdoor_temperature(5.0, 5000.0)
     sensors.set_flow_temperature(40.0, 5000.0)
     sensors.set_valve_position(0, 100.0, 5000.0 - VALVE_POSITION_MAX_AGE_S)
-    assert sensors.create_input(21.0, 5000.0).input.valve_positions_pct == [100.0]
+    assert sensors.create_input(21.0, 5000.0).valve_positions_pct == [100.0]
 
     sensors.set_valve_position(0, 100.0, 5000.0 - VALVE_POSITION_MAX_AGE_S - 60)
-    result = sensors.create_input(21.0, 5000.0).input
+    result = sensors.create_input(21.0, 5000.0)
     assert result.valve_positions_pct == [None]
     assert result.valve_position_missing is True
 
@@ -219,6 +219,8 @@ def test_room_sensor_age_runs_from_its_last_report():
     sensors.set_room_sensor_temperature(21.0, now_ts=1000.0)
 
     fresh = sensors.get_room_temperature(now_ts=1000.0 + ROOM_SENSOR_MAX_AGE_S)
+    # The TRV keeps reporting, so the room falls back to it.
+    sensors.set_trv_temperature(0, 20.0, now_ts=1001.0 + ROOM_SENSOR_MAX_AGE_S)
     stale = sensors.get_room_temperature(now_ts=1001.0 + ROOM_SENSOR_MAX_AGE_S)
 
     assert fresh.room_sensor_temp_c == 21.0

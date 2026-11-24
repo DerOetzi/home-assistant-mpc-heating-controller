@@ -87,11 +87,12 @@ from .controller.mpc.controller import (
 from .controller.mpc.learner import JUMP_MIN_TARGET_STEP_C
 from .controller.mpc.math_helper import clamp, round_to_step
 from .controller.mpc.models.gains import GainBreakdown, profile_index
-from .controller.mpc.results import RoomMpcResult
+from .controller.mpc.results import RoomMpcError, RoomMpcResult
 from .controller.mpc.sensors import VALVE_POSITION_MAX_AGE_S
 from .controller.mpc.types import (
     FlowGateState,
     LearningFactors,
+    RoomContext,
     RoomThermalConfig,
     TrvConfig,
 )
@@ -405,7 +406,7 @@ class HeatingRoomCoordinator:
 
         gains = await self.gain_store.async_load()
         if gains is not None:
-            self.mpc.gain_model.restore(gains)
+            self.mpc.restore_gains(gains)
 
         flow_gate_state = await self.flow_gate_store.async_load()
         if flow_gate_state is not None:
@@ -860,11 +861,12 @@ class HeatingRoomCoordinator:
         self._notify_listeners()
 
     async def _async_persist_learning_factors(self) -> None:
-        persisted_factors = self.mpc.consume_persisted_learning_factors()
-        if persisted_factors is not None:
-            await self.store.async_save(persisted_factors)
-        if self.mpc.gain_model.consume_changed():
-            await self.gain_store.async_save(self.mpc.gain_model.export())
+        factors = self.mpc.take_factors_to_save()
+        if factors is not None:
+            await self.store.async_save(factors)
+        gains = self.mpc.take_gains_to_save()
+        if gains is not None:
+            await self.gain_store.async_save(gains)
 
     async def async_recalibrate(
         self,
@@ -874,9 +876,10 @@ class HeatingRoomCoordinator:
     ) -> None:
         """Set the factors; one left out keeps its learned value."""
         if reset_gains:
-            self.mpc.gain_model.reset()
-            await self.gain_store.async_save(self.mpc.gain_model.export())
-            self.mpc.gain_model.consume_changed()
+            self.mpc.reset_gains()
+            gains = self.mpc.take_gains_to_save()
+            if gains is not None:
+                await self.gain_store.async_save(gains)
             _LOGGER.info("Reset learned gains for room %s", self.room_name)
         if ua_factor is None and capacity_factor is None:
             self._notify_listeners()
@@ -934,27 +937,14 @@ class HeatingRoomCoordinator:
     async def _async_recompute_locked(self) -> None:
         if not self.running:
             return
-        self.mpc.set_flow_threshold_c(self.flow_threshold_c)
-        if self.hot_water_charge_provider is not None:
-            self.mpc.set_external_hot_water_charge(*self.hot_water_charge_provider())
-        desired_mode = self.state.desired_automatic_heat_mode(self.blocked)
-        self.state.set_active_heat_mode(desired_mode)
-
+        self.state.set_active_heat_mode(
+            self.state.desired_automatic_heat_mode(self.blocked)
+        )
         now_ts = time.time()
         self._update_learning_paused(now_ts)
-        self.mpc.set_trv_adapting(
-            any(
-                self._adaptation_running(trv, now_ts) or self._trv_uncalibrated(trv)
-                for trv in self._trvs
-            )
-        )
         self.trv_active = self._compute_trv_active(now_ts)
         self.state.set_trv_active(self.trv_active)
-        self.mpc.set_heat_available(self.trv_active)
-        if self.trv_active:
-            self.mpc.enable_learning()
-        else:
-            self.mpc.disable_learning()
+        self.mpc.apply_context(self._room_context(now_ts))
 
         display_mode = self.state.resolve_display_mode(self.blocked)
         mode_target = self.state.effective_target_temperature(
@@ -964,44 +954,56 @@ class HeatingRoomCoordinator:
         normal_target = self.state.effective_target_temperature(
             self.state.determine_base_target_temperature(self.state.current_heat_mode)
         )
-        if normal_target != self._settled_target_c:
-            previous_c = self._settled_target_c
-            self._settled_target_c = normal_target
-            if (
-                previous_c is not None
-                and normal_target - previous_c >= JUMP_MIN_TARGET_STEP_C
-            ):
-                self._flow_boost_since_ts = now_ts
-            elif previous_c is not None and normal_target < previous_c:
-                self._flow_boost_since_ts = None
-        self._update_flow_boost_end(normal_target, now_ts)
+        self._track_setpoint_jump(normal_target, now_ts)
         await self._async_write_setpoints(mode_target)
         await self._async_write_external_temperatures(now_ts)
 
         self.normal_heat_mode = self.state.current_heat_mode
         self.normal_target_temperature_c = normal_target
-        normal_compute = self.mpc.compute(normal_target, apply_side_effects=False)
-        self.normal_result = normal_compute.result if normal_compute.valid else None
+        normal = self.mpc.preview(normal_target)
+        self.normal_result = normal if isinstance(normal, RoomMpcResult) else None
 
         # Frost protection for an open window is no mode change for the
         # learner.
-        actual_compute = self.mpc.compute(
-            mode_target,
-            mode_target_temperature_c=normal_target,
-        )
-        if actual_compute.valid:
-            self.last_result = actual_compute.result
+        actual = self.mpc.compute(mode_target, mode_target_temperature_c=normal_target)
+        if isinstance(actual, RoomMpcResult):
+            self.last_result = actual
         else:
-            _LOGGER.debug(
-                "MPC compute failed for room %s: %s",
-                self.room_name,
-                actual_compute.error,
-            )
+            _LOGGER.debug("MPC compute failed for room %s: %s", self.room_name, actual)
 
         await self._async_apply_trv_active_switches(self.trv_active)
         await self._async_persist_learning_factors()
         await self._async_persist_flow_gate_state()
         self._notify_listeners()
+
+    def _room_context(self, now_ts: float) -> RoomContext:
+        charging, decisive = (
+            self.hot_water_charge_provider()
+            if self.hot_water_charge_provider is not None
+            else (False, False)
+        )
+        return RoomContext(
+            now_ts=now_ts,
+            flow_threshold_c=self.flow_threshold_c,
+            heat_available=self.trv_active,
+            trv_adapting=any(
+                self._adaptation_running(trv, now_ts) or self._trv_uncalibrated(trv)
+                for trv in self._trvs
+            ),
+            external_hot_water_charge=charging,
+            external_hot_water_decisive=decisive,
+        )
+
+    def _track_setpoint_jump(self, target_c: float, now_ts: float) -> None:
+        """Start the flow boost on a raised setpoint, end it when done."""
+        previous_c = self._settled_target_c
+        self._settled_target_c = target_c
+        if previous_c is not None and target_c != previous_c:
+            if target_c - previous_c >= JUMP_MIN_TARGET_STEP_C:
+                self._flow_boost_since_ts = now_ts
+            elif target_c < previous_c:
+                self._flow_boost_since_ts = None
+        self._update_flow_boost_end(target_c, now_ts)
 
     async def _async_persist_flow_gate_state(self) -> None:
         flow_gate_state = self.mpc.flow_gate_state
@@ -1116,8 +1118,8 @@ class HeatingRoomCoordinator:
 
     def _room_sensor_temperature_c(self) -> float | None:
         """The room sensor's reading; None without one or while it is stale."""
-        room = self.mpc.get_room_temperature_result()
-        if not room.valid or room.room_sensor_fallback:
+        room = self.mpc.get_room_temperature()
+        if isinstance(room, RoomMpcError) or room.room_sensor_fallback:
             return None
         return room.room_sensor_temp_c
 

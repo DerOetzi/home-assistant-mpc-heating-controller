@@ -19,14 +19,13 @@ class RoomMpcError:
 
 
 @dataclass
-class RoomTemperatureResult:
-    valid: bool
-    temperature_c: float | None = None
-    used_strategy: RoomTemperatureStrategy | None = None
-    trv_temperatures: list[float | None] | None = None
+class RoomTemperature:
+    temperature_c: float
+    used_strategy: RoomTemperatureStrategy
+    trv_temperatures: list[float | None]
     room_sensor_temp_c: float | None = None
+    # A room sensor is configured but stale or missing, so the TRVs stand in.
     room_sensor_fallback: bool = False
-    error: RoomMpcError | None = None
 
 
 @dataclass
@@ -65,13 +64,6 @@ class RoomMpcInput:
 
 
 @dataclass
-class RoomMpcInputResult:
-    valid: bool
-    input: RoomMpcInput | None = None
-    error: RoomMpcError | None = None
-
-
-@dataclass
 class RoomMpcResult:
     input: RoomMpcInput
     available_heating_power_w: float
@@ -81,7 +73,7 @@ class RoomMpcResult:
     recovery_flow_saturated: bool = False
     flow_gate_closed: bool = False
     # Heat at the reported valve openings, before the radiator lag.
-    measured_heating_power_w: float | None = None
+    measured_heating_power_w: float = 0.0
     # Observer state the flow requirements were computed from.
     estimated_room_temperature_c: float | None = None
     radiator_power_w: float | None = None

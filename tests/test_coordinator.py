@@ -13,6 +13,7 @@ from heating_controller.const import (
     RoomSupply,
     SupplyReason,
 )
+from heating_controller.controller.mpc.results import RoomTemperature
 from heating_controller.coordinator import (
     FLOW_DIP_TOLERANCE_S,
     FLOW_TEMPERATURE_MAX_GAP_S,
@@ -237,14 +238,14 @@ async def test_periodic_sensor_poll_keeps_room_temperature_fresh(
     await coordinator.async_setup()
     await coordinator.async_start()
 
-    assert coordinator.mpc.get_room_temperature_result().valid is True
+    assert isinstance(coordinator.mpc.get_room_temperature(), RoomTemperature)
 
     for _ in range(7):
         freezer.tick(timedelta(minutes=5))
         async_fire_time_changed(hass)
         await hass.async_block_till_done()
 
-    assert coordinator.mpc.get_room_temperature_result().valid is True
+    assert isinstance(coordinator.mpc.get_room_temperature(), RoomTemperature)
 
     coordinator.async_unload()
 
@@ -1795,13 +1796,13 @@ async def test_a_room_sensor_that_stopped_reporting_goes_stale(
     await coordinator.async_setup()
     await coordinator.async_start()
     await hass.async_block_till_done()
-    assert coordinator.mpc.get_room_temperature_result().room_sensor_temp_c == 18.5
+    assert coordinator.mpc.get_room_temperature().room_sensor_temp_c == 18.5
 
     # The sensor stays available with its last value; the poll reads it again.
     freezer.tick(timedelta(seconds=ROOM_SENSOR_MAX_AGE_S + 60))
     coordinator._refresh_temperature_inputs()
 
-    room = coordinator.mpc.get_room_temperature_result()
+    room = coordinator.mpc.get_room_temperature()
     assert room.room_sensor_fallback
     assert room.room_sensor_temp_c is None
 
@@ -1809,6 +1810,6 @@ async def test_a_room_sensor_that_stopped_reporting_goes_stale(
     hass.states.async_set("sensor.wohnzimmer_temperatur", "18.5")
     coordinator._refresh_temperature_inputs()
 
-    assert coordinator.mpc.get_room_temperature_result().room_sensor_temp_c == 18.5
+    assert coordinator.mpc.get_room_temperature().room_sensor_temp_c == 18.5
 
     coordinator.async_unload()

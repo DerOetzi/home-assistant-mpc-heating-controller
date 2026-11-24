@@ -1430,7 +1430,7 @@ class RoomMpcModelLearner:
         )
         self._learning_state = self._create_learning_state(self._learning_state.status)
 
-    def consume_persisted_learning_factors(self) -> LearningFactors | None:
+    def take_factors_to_save(self) -> LearningFactors | None:
         factors = self._pending_persisted_factors
         self._pending_persisted_factors = None
         return factors

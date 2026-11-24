@@ -107,7 +107,7 @@ def test_heat_balance_moves_ua_towards_the_power_that_held_the_room():
 
     assert learner.get_learning_state().status == LearningStatus.LEARNED
     assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5))
-    assert learner.consume_persisted_learning_factors() is not None
+    assert learner.take_factors_to_save() is not None
 
 
 def test_heat_balance_learns_a_low_target_above_the_lower_limit():
@@ -517,7 +517,7 @@ def test_stretch_before_heating_stayed_off_is_balanced_while_disabled():
 
     assert learner.get_learning_state().status == LearningStatus.DISABLED
     assert loss_model.learned_ua_factor == pytest.approx(_expected_factor(0.5, hours=5))
-    assert learner.consume_persisted_learning_factors() is not None
+    assert learner.take_factors_to_save() is not None
 
 
 def test_recalibrate_discards_the_running_window():
@@ -661,7 +661,7 @@ def test_heat_balance_discards_a_target_above_the_limit():
     assert info.last_target_factor == pytest.approx(target_factor)
     assert info.last_drift_c == pytest.approx(0.0)
     assert info.last_learned_ts is None
-    assert learner.consume_persisted_learning_factors() is None
+    assert learner.take_factors_to_save() is None
 
 
 @pytest.mark.parametrize(
@@ -686,7 +686,7 @@ def test_heat_balance_learns_a_low_target_only_down_to_the_limit(
     )
     assert info.last_target_factor == pytest.approx(target_factor)
     assert info.last_learned_ts is not None
-    assert learner.consume_persisted_learning_factors() is not None
+    assert learner.take_factors_to_save() is not None
 
 
 def test_drift_is_reported_without_a_target():
@@ -1354,10 +1354,10 @@ def test_a_heat_up_stretch_learns_the_capacity():
         1.0 + CAPACITY_JUMP_WEIGHT * (info.estimate_factor - 1.0)
     )
     assert learner.get_learning_state().status == LearningStatus.LEARNED
-    assert learner.consume_persisted_learning_factors().capacity_factor == (
+    assert learner.take_factors_to_save().capacity_factor == (
         capacity_model.learned_capacity_factor
     )
-    assert learner.consume_persisted_learning_factors() is None
+    assert learner.take_factors_to_save() is None
 
 
 def test_repeated_stretches_converge_on_the_true_capacity():
@@ -1756,7 +1756,7 @@ def test_an_airing_learns_the_vent_capacity_after_the_rebound():
     # Neither the airing nor the frost protection makes a mass stretch.
     assert learner.get_capacity_outcome() == CapacityOutcome.WAITING
     assert capacity_model.learned_capacity_factor == AIRING_MASS_FACTOR
-    assert learner.consume_persisted_learning_factors().vent_capacity_factor == (
+    assert learner.take_factors_to_save().vent_capacity_factor == (
         learner.learned_vent_capacity_factor
     )
 

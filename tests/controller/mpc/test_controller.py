@@ -1,3 +1,4 @@
+import time
 from dataclasses import replace
 
 import pytest
@@ -13,14 +14,30 @@ from heating_controller.controller.mpc.controller import (
     RoomMpcController,
 )
 from heating_controller.controller.mpc.observer import ObserverEstimate
-from heating_controller.controller.mpc.results import RoomMpcErrorCode, RoomMpcInput
+from heating_controller.controller.mpc.results import (
+    RoomMpcError,
+    RoomMpcErrorCode,
+    RoomMpcInput,
+)
 from heating_controller.controller.mpc.types import (
     FlowGateState,
     LearningFactors,
+    RoomContext,
     RoomThermalConfig,
     TrvConfig,
 )
 from learner_helpers import feed_night
+
+
+def set_heat_available(controller, available):
+    """The house's context as the coordinator hands it over."""
+    controller.apply_context(
+        RoomContext(
+            now_ts=time.time(),
+            flow_threshold_c=RoomThermalConfig.flow_threshold_c,
+            heat_available=available,
+        )
+    )
 
 
 def make_controller(flow_gate_config=None):
@@ -95,8 +112,8 @@ def _feed(controller, room_temp_c, outdoor_temp_c=5.0, flow_temp_c=50.0, opening
 def test_compute_fails_without_sensor_data():
     controller = make_controller()
     result = controller.compute(target_temperature_c=21.0)
-    assert result.valid is False
-    assert result.error.code == RoomMpcErrorCode.MISSING_ROOM_TEMPERATURE
+    assert isinstance(result, RoomMpcError)
+    assert result.code == RoomMpcErrorCode.MISSING_ROOM_TEMPERATURE
 
 
 def test_measured_power_follows_the_highest_reported_opening():
@@ -109,7 +126,7 @@ def test_measured_power_follows_the_highest_reported_opening():
     _feed(controller, 20.0, flow_temp_c=40.0)
     controller.set_valve_position(0, 60.0)
 
-    result = controller.compute(target_temperature_c=21.0).result
+    result = controller.compute(target_temperature_c=21.0)
     emitter = controller._emitter_model
 
     assert result.measured_heating_power_w == pytest.approx(
@@ -125,9 +142,9 @@ def test_compute_returns_zero_result_instead_of_error_when_no_heating_power_avai
 
     result = controller.compute(target_temperature_c=8.0)
 
-    assert result.valid is True
-    assert result.result.measured_heating_power_w == 0
-    assert result.result.gated_hold_flow_temperature_c == 0
+    assert not isinstance(result, RoomMpcError)
+    assert result.measured_heating_power_w == 0
+    assert result.gated_hold_flow_temperature_c == 0
 
 
 def test_hold_flow_floored_at_heat_loss_when_current_flow_too_cold():
@@ -138,9 +155,9 @@ def test_hold_flow_floored_at_heat_loss_when_current_flow_too_cold():
 
     result = controller.compute(target_temperature_c=22.0)
 
-    assert result.valid
-    assert result.result.available_heating_power_w == 0
-    assert result.result.gated_hold_flow_temperature_c > 22.0
+    assert not isinstance(result, RoomMpcError)
+    assert result.available_heating_power_w == 0
+    assert result.gated_hold_flow_temperature_c > 22.0
 
 
 def test_recovery_flow_rises_with_the_room_deficit():
@@ -150,7 +167,7 @@ def test_recovery_flow_rises_with_the_room_deficit():
         controller.set_room_sensor_temperature(room_temp_c)
         controller.set_outdoor_temperature(10.0)
         controller.set_flow_temperature(35.0)
-        result = controller.compute(target_temperature_c=21.0).result
+        result = controller.compute(target_temperature_c=21.0)
         flows.append(result.recovery_flow_temperature_c)
 
     assert flows == sorted(flows)
@@ -163,7 +180,7 @@ def test_no_recovery_flow_within_the_recovery_tolerance():
     controller.set_outdoor_temperature(10.0)
     controller.set_flow_temperature(35.0)
 
-    result = controller.compute(target_temperature_c=21.0).result
+    result = controller.compute(target_temperature_c=21.0)
 
     assert result.recovery_flow_temperature_c == 0
     assert result.hold_flow_temperature_c > 0
@@ -205,7 +222,7 @@ def test_hold_flow_is_where_the_available_power_meets_the_loss():
     controller = _esszimmer_controller()
     controller.set_room_sensor_temperature(21.0)
 
-    result = controller.compute(target_temperature_c=21.0).result
+    result = controller.compute(target_temperature_c=21.0)
     emitter = controller._emitter_model
     loss_w = controller._loss_model.calculate_heat_loss_w(21.0, 8.8)
 
@@ -220,7 +237,7 @@ def test_recovery_flow_needs_more_than_the_hold_flow():
     controller = _esszimmer_controller()
     controller.set_room_sensor_temperature(20.5)
 
-    result = controller.compute(target_temperature_c=21.0).result
+    result = controller.compute(target_temperature_c=21.0)
 
     assert result.recovery_flow_temperature_c > result.hold_flow_temperature_c
 
@@ -235,7 +252,7 @@ def test_flow_requirements_are_independent_of_the_measured_flow_temperature():
         controller.set_outdoor_temperature(10.4)
         if flow_temp_c is not None:
             controller.set_flow_temperature(flow_temp_c)
-        results.append(controller.compute(target_temperature_c=21.0).result)
+        results.append(controller.compute(target_temperature_c=21.0))
 
     requirements = {
         (r.hold_flow_temperature_c, r.recovery_flow_temperature_c) for r in results
@@ -253,8 +270,8 @@ def test_hold_flow_zero_when_ambient_alone_holds_target():
 
     result = controller.compute(target_temperature_c=22.0)
 
-    assert result.valid
-    assert result.result.gated_hold_flow_temperature_c == 0
+    assert not isinstance(result, RoomMpcError)
+    assert result.gated_hold_flow_temperature_c == 0
 
 
 def test_hold_flow_reported_while_room_coasts_above_target_and_outdoor():
@@ -263,9 +280,9 @@ def test_hold_flow_reported_while_room_coasts_above_target_and_outdoor():
 
     result = controller.compute(target_temperature_c=23.0)
 
-    assert result.valid
-    assert result.result.flow_gate_closed is False
-    assert result.result.gated_hold_flow_temperature_c > 0
+    assert not isinstance(result, RoomMpcError)
+    assert result.flow_gate_closed is False
+    assert result.gated_hold_flow_temperature_c > 0
 
 
 def test_hold_flow_unchanged_when_room_drops_to_target():
@@ -281,10 +298,11 @@ def test_hold_flow_unchanged_when_room_drops_to_target():
     settled.set_flow_temperature(26.0)
     settled_result = settled.compute(target_temperature_c=23.0)
 
-    assert coasting_result.valid and settled_result.valid
+    assert not isinstance(coasting_result, RoomMpcError)
+    assert not isinstance(settled_result, RoomMpcError)
     assert (
-        coasting_result.result.gated_hold_flow_temperature_c
-        == settled_result.result.gated_hold_flow_temperature_c
+        coasting_result.gated_hold_flow_temperature_c
+        == settled_result.gated_hold_flow_temperature_c
     )
 
 
@@ -301,7 +319,7 @@ def test_recovery_flow_saturates_at_the_design_flow_temperature():
     controller.set_outdoor_temperature(-5.0)
     controller.set_flow_temperature(35.0)
 
-    result = controller.compute(target_temperature_c=22.0).result
+    result = controller.compute(target_temperature_c=22.0)
 
     assert result.recovery_flow_saturated is True
     assert result.recovery_flow_temperature_c == 45.0
@@ -320,7 +338,7 @@ def test_flow_search_starts_below_the_flow_threshold():
         controller.set_room_sensor_temperature(21.0)
         controller.set_outdoor_temperature(20.0)
         controller.set_flow_temperature(35.0)
-        result = controller.compute(target_temperature_c=21.0).result
+        result = controller.compute(target_temperature_c=21.0)
         return result.hold_flow_temperature_c
 
     assert hold_flow(30.0) < 30.0
@@ -333,7 +351,7 @@ def test_no_recovery_flow_when_outdoor_is_above_target():
     controller.set_outdoor_temperature(25.0)
     controller.set_flow_temperature(35.0)
 
-    result = controller.compute(target_temperature_c=21.0).result
+    result = controller.compute(target_temperature_c=21.0)
 
     assert result.recovery_flow_temperature_c == 0
     assert result.gated_hold_flow_temperature_c == 0
@@ -345,10 +363,10 @@ def test_surplus_gate_zeroes_the_requirement_while_the_room_coasts():
 
     result = controller.compute(target_temperature_c=23.0)
 
-    assert result.valid
-    assert result.result.flow_gate_closed is True
-    assert result.result.gated_hold_flow_temperature_c == 0
-    assert result.result.hold_flow_temperature_c > 0
+    assert not isinstance(result, RoomMpcError)
+    assert result.flow_gate_closed is True
+    assert result.gated_hold_flow_temperature_c == 0
+    assert result.hold_flow_temperature_c > 0
 
 
 def test_surplus_gate_stays_open_while_a_trv_reports_an_open_valve():
@@ -358,10 +376,10 @@ def test_surplus_gate_stays_open_while_a_trv_reports_an_open_valve():
 
     result = controller.compute(target_temperature_c=23.0)
 
-    assert result.result.flow_gate_closed is False
+    assert result.flow_gate_closed is False
 
     controller.set_valve_position(0, 0.0)
-    assert controller.compute(target_temperature_c=23.0).result.flow_gate_closed
+    assert controller.compute(target_temperature_c=23.0).flow_gate_closed
 
 
 def test_surplus_gate_stays_as_it_is_while_a_trv_is_silent():
@@ -369,12 +387,12 @@ def test_surplus_gate_stays_as_it_is_while_a_trv_is_silent():
     feed_coasting_room(controller)
 
     # No opening reported yet: the valve may well be open.
-    assert not controller.compute(target_temperature_c=23.0).result.flow_gate_closed
+    assert not controller.compute(target_temperature_c=23.0).flow_gate_closed
 
     controller.set_valve_position(0, 0.0)
-    assert controller.compute(target_temperature_c=23.0).result.flow_gate_closed
+    assert controller.compute(target_temperature_c=23.0).flow_gate_closed
     controller.set_valve_position(0, None)
-    assert controller.compute(target_temperature_c=23.0).result.flow_gate_closed
+    assert controller.compute(target_temperature_c=23.0).flow_gate_closed
 
 
 def test_surplus_gate_stays_open_for_a_room_sitting_at_its_setpoint():
@@ -385,9 +403,9 @@ def test_surplus_gate_stays_open_for_a_room_sitting_at_its_setpoint():
 
     result = controller.compute(target_temperature_c=23.0)
 
-    assert result.valid
-    assert result.result.flow_gate_closed is False
-    assert result.result.gated_hold_flow_temperature_c > 0
+    assert not isinstance(result, RoomMpcError)
+    assert result.flow_gate_closed is False
+    assert result.gated_hold_flow_temperature_c > 0
 
 
 def test_surplus_gate_does_not_close_within_the_deadband():
@@ -398,42 +416,38 @@ def test_surplus_gate_does_not_close_within_the_deadband():
 
     result = controller.compute(target_temperature_c=23.0)
 
-    assert result.result.flow_gate_closed is False
-    assert result.result.gated_hold_flow_temperature_c > 0
+    assert result.flow_gate_closed is False
+    assert result.gated_hold_flow_temperature_c > 0
 
 
 def test_surplus_gate_reopens_immediately_once_the_surplus_is_used_up():
     controller = make_gated_controller(hold_time_s=0.0, open_surplus_c=0.2)
     feed_coasting_room(controller)
     closed = controller.compute(target_temperature_c=23.0)
-    assert closed.result.flow_gate_closed is True
+    assert closed.flow_gate_closed is True
 
     controller.set_room_sensor_temperature(23.1)
     reopened = controller.compute(target_temperature_c=23.0)
 
-    assert reopened.result.flow_gate_closed is False
-    assert reopened.result.gated_hold_flow_temperature_c > 0
+    assert reopened.flow_gate_closed is False
+    assert reopened.gated_hold_flow_temperature_c > 0
 
 
 def test_surplus_gate_keeps_hysteresis_between_close_and_open_thresholds():
     controller = make_gated_controller(close_surplus_c=0.5, open_surplus_c=0.2)
     feed_coasting_room(controller)
-    assert controller.compute(target_temperature_c=23.0).result.flow_gate_closed
+    assert controller.compute(target_temperature_c=23.0).flow_gate_closed
 
     controller.set_room_sensor_temperature(23.3)
-    assert controller.compute(target_temperature_c=23.0).result.flow_gate_closed
+    assert controller.compute(target_temperature_c=23.0).flow_gate_closed
 
 
 def test_surplus_gate_waits_out_the_hold_time_before_closing():
     controller = make_controller(flow_gate_config=FlowGateConfig(hold_time_s=900.0))
     feed_coasting_room(controller)
 
-    assert (
-        controller.compute(target_temperature_c=23.0).result.flow_gate_closed is False
-    )
-    assert (
-        controller.compute(target_temperature_c=23.0).result.flow_gate_closed is False
-    )
+    assert controller.compute(target_temperature_c=23.0).flow_gate_closed is False
+    assert controller.compute(target_temperature_c=23.0).flow_gate_closed is False
 
 
 def test_surplus_gate_state_is_separate_per_compute_path():
@@ -443,12 +457,12 @@ def test_surplus_gate_state_is_separate_per_compute_path():
     controller.set_flow_temperature(35.0)
 
     frost = controller.compute(target_temperature_c=8.0)
-    normal = controller.compute(target_temperature_c=21.0, apply_side_effects=False)
+    normal = controller.preview(target_temperature_c=21.0)
 
-    assert frost.result.flow_gate_closed is True
-    assert frost.result.gated_hold_flow_temperature_c == 0
-    assert normal.result.flow_gate_closed is False
-    assert normal.result.gated_hold_flow_temperature_c > 0
+    assert frost.flow_gate_closed is True
+    assert frost.gated_hold_flow_temperature_c == 0
+    assert normal.flow_gate_closed is False
+    assert normal.gated_hold_flow_temperature_c > 0
 
 
 def test_hold_flow_temperature_is_reported_regardless_of_the_gate():
@@ -462,24 +476,24 @@ def test_hold_flow_temperature_is_reported_regardless_of_the_gate():
     settled.set_flow_temperature(26.0)
     settled_result = settled.compute(target_temperature_c=23.0)
 
-    assert coasting_result.result.flow_gate_closed is True
-    assert settled_result.result.flow_gate_closed is False
+    assert coasting_result.flow_gate_closed is True
+    assert settled_result.flow_gate_closed is False
     assert (
-        coasting_result.result.hold_flow_temperature_c
-        == settled_result.result.hold_flow_temperature_c
+        coasting_result.hold_flow_temperature_c
+        == settled_result.hold_flow_temperature_c
     )
 
 
-def test_enable_learning_and_run_learning_cycle_does_not_raise():
+def test_learning_with_heat_and_run_learning_cycle_does_not_raise():
     controller = make_controller()
-    controller.enable_learning()
+    set_heat_available(controller, True)
     controller.set_room_sensor_temperature(19.0)
     controller.set_outdoor_temperature(-5.0)
     controller.set_flow_temperature(45.0)
     controller.compute(target_temperature_c=21.0)
 
     controller.run_learning_cycle()
-    controller.disable_learning()
+    set_heat_available(controller, False)
 
 
 def test_restored_closed_gate_stays_closed_within_the_hysteresis_band():
@@ -496,10 +510,10 @@ def test_restored_closed_gate_stays_closed_within_the_hysteresis_band():
     controller.set_flow_temperature(26.0)
 
     live = controller.compute(target_temperature_c=23.0)
-    preview = controller.compute(target_temperature_c=23.0, apply_side_effects=False)
+    preview = controller.preview(target_temperature_c=23.0)
 
-    assert live.result.flow_gate_closed is True
-    assert preview.result.flow_gate_closed is True
+    assert live.flow_gate_closed is True
+    assert preview.flow_gate_closed is True
     assert controller.flow_gate_state == FlowGateState(
         live_closed=True, preview_closed=True
     )
@@ -514,7 +528,7 @@ def test_restored_closed_gate_reopens_once_the_surplus_is_gone():
 
     result = controller.compute(target_temperature_c=23.0)
 
-    assert result.result.flow_gate_closed is False
+    assert result.flow_gate_closed is False
     assert controller.flow_gate_state.live_closed is False
 
 
@@ -522,7 +536,7 @@ def test_gated_hold_flow_is_zero_while_the_room_coasts():
     controller = make_gated_controller()
     feed_coasting_room(controller)
 
-    result = controller.compute(target_temperature_c=23.0).result
+    result = controller.compute(target_temperature_c=23.0)
 
     assert result.flow_gate_closed is True
     assert result.hold_flow_temperature_c > 0
@@ -535,7 +549,7 @@ def test_gated_hold_flow_ignores_the_recovery_part():
     controller.set_outdoor_temperature(10.0)
     controller.set_flow_temperature(35.0)
 
-    result = controller.compute(target_temperature_c=21.0).result
+    result = controller.compute(target_temperature_c=21.0)
 
     assert result.flow_gate_closed is False
     assert result.gated_hold_flow_temperature_c == result.hold_flow_temperature_c
@@ -553,40 +567,40 @@ def test_the_observer_follows_the_reported_valve(monkeypatch):
 
     # The TRV holds its valve 90 % open: the radiator gives off what the
     # valve lets through.
-    assert first.result.measured_heating_power_w > 0
-    assert later.result.radiator_power_w > 0.5 * first.result.measured_heating_power_w
+    assert first.measured_heating_power_w > 0
+    assert later.radiator_power_w > 0.5 * first.measured_heating_power_w
 
 
 def test_radiators_stay_cold_while_heat_is_unavailable(monkeypatch):
     clock = _Clock(monkeypatch)
     controller = _valve_controller()
-    controller.set_heat_available(False)
+    set_heat_available(controller, False)
     _feed(controller, 15.0, opening=100.0)
     controller.compute(target_temperature_c=21.0)
     clock.advance(600)
     _feed(controller, 15.0, opening=100.0)
     result = controller.compute(target_temperature_c=21.0)
 
-    assert result.result.measured_heating_power_w > 0
-    assert result.result.radiator_power_w == 0
+    assert result.measured_heating_power_w > 0
+    assert result.radiator_power_w == 0
 
 
 def test_preview_compute_leaves_the_observer_alone(monkeypatch):
     clock = _Clock(monkeypatch)
     controller = _valve_controller()
     _feed(controller, 15.0, opening=100.0)
-    controller.compute(target_temperature_c=21.0, apply_side_effects=False)
+    controller.preview(target_temperature_c=21.0)
     clock.advance(600)
     _feed(controller, 15.0, opening=100.0)
     result = controller.compute(target_temperature_c=21.0)
 
     # Nothing was committed by the preview: no heat in the radiators yet.
-    assert result.result.radiator_power_w == 0
+    assert result.radiator_power_w == 0
 
 
 def test_balance_does_not_move_anything_but_the_factor():
     controller = make_controller()
-    controller.enable_learning()
+    set_heat_available(controller, True)
     # Outdoor at room temperature and the radiators cold: the room stays put
     # and loses nothing whatever the factor, so only a hand-over of heat
     # could move the observer's estimate.
@@ -643,8 +657,8 @@ def test_a_hot_water_charge_keeps_the_heating_flow(monkeypatch):
     controller = _valve_controller()
     charged = _charge(controller, clock, [35.0, 35.0, 35.0, 56.0])
 
-    assert charged.result.input.hot_water_charge is True
-    assert charged.result.input.flow_temp_c == 35.0
+    assert charged.input.hot_water_charge is True
+    assert charged.input.flow_temp_c == 35.0
 
 
 def test_radiators_get_no_heat_during_a_hot_water_charge(monkeypatch):
@@ -658,22 +672,22 @@ def test_radiators_get_no_heat_during_a_hot_water_charge(monkeypatch):
     steady = _charge(heating, clock, [35.0] * 6, room_temp_c=19.0)
 
     # The radiators cool down with their own lag.
-    assert before.result.radiator_power_w > 0
-    assert during.result.radiator_power_w < before.result.radiator_power_w
-    assert during.result.radiator_power_w < 0.75 * steady.result.radiator_power_w
+    assert before.radiator_power_w > 0
+    assert during.radiator_power_w < before.radiator_power_w
+    assert during.radiator_power_w < 0.75 * steady.radiator_power_w
 
 
 def test_missing_outdoor_temperature_pauses_learning():
     controller = make_controller()
-    controller.enable_learning()
+    set_heat_available(controller, True)
     controller.set_room_sensor_temperature(20.0)
     controller.set_flow_temperature(40.0)
 
     result = controller.compute(target_temperature_c=21.0)
     controller.run_learning_cycle()
 
-    assert result.valid is False
-    assert result.error.code == RoomMpcErrorCode.MISSING_OUTDOOR_TEMPERATURE
+    assert isinstance(result, RoomMpcError)
+    assert result.code == RoomMpcErrorCode.MISSING_OUTDOOR_TEMPERATURE
     assert controller.outdoor_temperature_missing is True
     assert controller.get_ua_balance_info().outcome == (
         UaBalanceOutcome.OUTDOOR_TEMPERATURE_MISSING
@@ -682,7 +696,7 @@ def test_missing_outdoor_temperature_pauses_learning():
 
 def test_learning_resumes_once_the_outdoor_temperature_is_back():
     controller = make_controller()
-    controller.enable_learning()
+    set_heat_available(controller, True)
     controller.set_room_sensor_temperature(20.0)
     controller.set_flow_temperature(40.0)
     controller.compute(target_temperature_c=21.0)
@@ -691,7 +705,7 @@ def test_learning_resumes_once_the_outdoor_temperature_is_back():
     result = controller.compute(target_temperature_c=21.0)
     controller.run_learning_cycle()
 
-    assert result.valid is True
+    assert not isinstance(result, RoomMpcError)
     assert controller.outdoor_temperature_missing is False
     assert controller.get_ua_balance_info().outcome != (
         UaBalanceOutcome.OUTDOOR_TEMPERATURE_MISSING
@@ -702,7 +716,7 @@ def test_a_preview_compute_leaves_the_outdoor_state_alone():
     controller = make_controller()
     controller.set_room_sensor_temperature(20.0)
 
-    controller.compute(target_temperature_c=21.0, apply_side_effects=False)
+    controller.preview(target_temperature_c=21.0)
 
     assert controller.outdoor_temperature_missing is False
 
@@ -711,7 +725,7 @@ def test_hold_flow_at_other_outdoor_values_follows_the_same_calculation():
     """The curve end points ask the same question at other outdoor values."""
     controller = _esszimmer_controller()
     controller.set_room_sensor_temperature(21.0)
-    result = controller.compute(target_temperature_c=21.0).result
+    result = controller.compute(target_temperature_c=21.0)
 
     assert (
         controller.calculate_hold_flow_temperature_c(21.0, 8.8)
