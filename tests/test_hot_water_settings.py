@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from heating_controller.config_flow import (
+from heating_controller.config_flows.hot_water import (
     _hw_circulation_schema,
     _hw_legionella_schema,
     _hw_modes_schema,
