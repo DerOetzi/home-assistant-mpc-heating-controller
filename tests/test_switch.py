@@ -115,5 +115,5 @@ async def test_a_reload_starts_with_the_restored_switches(hass: HomeAssistant) -
     assert room.current_heat_mode == HeatMode.ECO
     eco_c = room.base_temperature_c
     assert written and set(written) == {eco_c}
-    targets = {entry.target_temperature_c for entry in room.mpc._learner._history}
+    targets = {entry.target_temperature_c for entry in room.mpc._learner._ctx.history}
     assert targets == {eco_c}

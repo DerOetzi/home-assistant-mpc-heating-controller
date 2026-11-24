@@ -152,13 +152,13 @@ def test_learned_capacity_factor_does_not_move_the_profile():
 
     def run(capacity_factor):
         learner, loss_model, gains = _setup(window_surfaces=())
-        learner._capacity_model.learned_capacity_factor = capacity_factor
+        learner._ctx.capacity_model.learned_capacity_factor = capacity_factor
         learner.set_gain_context(
             lambda ts: profile_index(int((ts % DAY_S) // 3600), True),
             lambda ts: int(ts // DAY_S),
             lambda: None,
         )
-        base_c = learner._capacity_model.base_capacity_j_per_k
+        base_c = learner._ctx.capacity_model.base_capacity_j_per_k
         ua = loss_model.effective_ua_w_per_k
         for index in range(int(7 * DAY_S / STEP_S)):
             ts = START_TS + index * STEP_S

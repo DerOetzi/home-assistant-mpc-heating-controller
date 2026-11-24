@@ -136,7 +136,7 @@ def test_ua_learning_status_sensor_rounds_the_means() -> None:
     from types import SimpleNamespace
 
     from heating_controller.controller.mpc.types import UaBalanceInfo
-    from heating_controller.sensor import UaLearningStatusSensor
+    from heating_controller.sensor_entities.room import UaLearningStatusSensor
 
     info = UaBalanceInfo(
         last_mean_outdoor_c=5.04567,

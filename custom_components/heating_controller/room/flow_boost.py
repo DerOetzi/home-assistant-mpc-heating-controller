@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..controller.mpc.controller import FLOW_RECOVERY_HORIZON_S
-from ..controller.mpc.learner import JUMP_MIN_TARGET_STEP_C
+from ..controller.mpc.learning.capacity_jump import JUMP_MIN_TARGET_STEP_C
 
 # A room recovers with a raised flow (boost) only after its mode's setpoint
 # went up by a jump, until it is this close to the new setpoint or the

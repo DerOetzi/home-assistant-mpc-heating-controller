@@ -81,15 +81,15 @@ Offen: Vor Neustart A stieg die Nacht-Heizleistung kaum mit der Temperaturdiffer
 
 Vorher `MPC/models/gains.py` absichern:
 - `gain_determined` nur, wenn Regressions-UA (`_night.theta[0]`) nicht an `MIN_UA_FACTOR`/`MAX_UA_FACTOR · base_ua` steht. An der Grenze fängt G den Fehler der Steigung auf.
-- Stunden-Ebene (`learner.py`, `unexplained_w`) zieht `steady_gain_w` nur mit dieser Prüfung ab; sonst 0.
+- Stunden-Ebene (`learning/gain_hour.py`, `unexplained_w`) zieht `steady_gain_w` nur mit dieser Prüfung ab; sonst 0.
 - Sonnenterm für Nord-Fenster (`window_north`) und Nord-Wand: diffuses Licht auf Nord folgt fast nur der Tageszeit und ist vom Profil nicht trennbar. Weglassen oder nur Direktanteil nutzen — Nutzer entscheidet.
 - Tests (`tests/controller/mpc/models/test_gains.py`, `test_gain_hours.py`): Regressions-UA an Untergrenze → `gain_determined` False, `steady_gain_w` 0; Stunden-Rest ohne G in dem Fall.
 
-`MPC/learner.py`:
+`MPC/learner.py` + `MPC/learning/`:
 - UA-Ziel in `_balance_stretch` nach `stored_heat_j`: `gain_j = steady_gain_w · window_duration_s` (0 ohne Gewinn-Modell), `target_ua = (heat_j − stored_heat_j + gain_j) / temperature_difference_ks`. `STORAGE_DOMINATED`-Prüfung und `add_night_point(...)` weiter **ohne** Gewinn. Grenzen 0,15/2 bleiben.
-- Sprung- und Lüften-Strecken: `_gain_w_at(ts)` (`breakdown(...).total_w` mit Lerner-eigenem `_profile_index_at`, `_sun_source`), in Wärmebilanz `+ gain · dt`.
+- Sprung- und Lüften-Strecken (`learning/capacity_jump.py` `estimate_stretch`): `gain_w_at(ts)` in `LearningContext` (`breakdown(...).total_w` mit `profile_index_at`, `sun_source`), in Wärmebilanz `+ gain · dt`.
 - Abkühlstrecken lernen wie Aufheizstrecken (Ausgang `learned`) **nur wenn `gain_determined`**; sonst weiter `estimated`.
-- `_jump_sun_free`: sind alle Sonnen-Terme bestimmt und `sun` nicht `None` → `True`.
+- `LearningContext.sun_free`: sind alle Sonnen-Terme bestimmt und `sun` nicht `None` → `True`.
 
 Tests (`test_learner.py`): UA-Ziel mit G = 50 W, Bilanz 300 W, ΔT 15 K, Drift 0 → `last_target_factor == (350/15)/base_ua`; Abkühlstrecke mit Gewinn 100 W bestimmt → C ±20 %, `learned`; Gewinn unbestimmt → `estimated`; Sonnen-Terme bestimmt + 200 W/m² → Strecke zugelassen.
 

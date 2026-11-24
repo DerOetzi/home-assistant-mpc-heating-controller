@@ -10,8 +10,6 @@ from heating_controller.const import (
 )
 from heating_controller.controller.mpc import learner as learner_module
 from heating_controller.controller.mpc.learner import (
-    CAPACITY_JUMP_WEIGHT,
-    LEARNER_SETPOINT_TOLERANCE_C,
     UA_BALANCE_MAX_DRIFT_C,
     UA_BALANCE_MAX_INTERRUPTION_S,
     UA_BALANCE_MAX_WINDOW_S,
@@ -20,6 +18,12 @@ from heating_controller.controller.mpc.learner import (
     UA_BALANCE_WEIGHT,
     RoomMpcModelLearner,
     ua_balance_weight,
+)
+from heating_controller.controller.mpc.learning.capacity_jump import (
+    CAPACITY_JUMP_WEIGHT,
+)
+from heating_controller.controller.mpc.learning.history import (
+    LEARNER_SETPOINT_TOLERANCE_C,
 )
 from heating_controller.controller.mpc.models.capacity import (
     MIN_LEARNED_CAPACITY_FACTOR,
@@ -1046,7 +1050,7 @@ def test_drift_weights_samples_by_the_time_they_stand_for():
     )
     learner.run_learning_cycle()
 
-    window = learner._history
+    window = learner._ctx.history
     times = [entry.timestamp for entry in window]
     temps = [entry.room_temperature_c for entry in window]
     mean_t = sum(times) / len(times)
