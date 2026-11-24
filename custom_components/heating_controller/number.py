@@ -31,7 +31,8 @@ from .entity import (
     async_add_room_entities,
 )
 from .flow_device import FlowDevice
-from .hot_water_device import HOT_WATER_NUMBER_DEFAULTS, HotWaterDevice
+from .hot_water_device import HotWaterDevice
+from .hot_water_settings import HOT_WATER_NUMBER_DEFAULTS, HotWaterNumber
 from .hub import HeatingHub
 
 
@@ -79,7 +80,7 @@ async def async_setup_entry(
         lambda hot_water: [
             HotWaterTemperatureNumber(hot_water, key)
             for key in HOT_WATER_NUMBER_DEFAULTS
-            if key != "legionella" or hot_water.legionella_enabled
+            if key is not HotWaterNumber.LEGIONELLA or hot_water.legionella_enabled
         ],
     )
 
@@ -119,7 +120,7 @@ class HotWaterTemperatureNumber(HotWaterEntity, _RestoredNumber):
     _attr_native_step = 1.0
     _attr_mode = NumberMode.BOX
 
-    def __init__(self, hot_water: HotWaterDevice, key: str) -> None:
+    def __init__(self, hot_water: HotWaterDevice, key: HotWaterNumber) -> None:
         super().__init__(hot_water, f"hot_water_{key}")
         self._key = key
         self._attr_translation_key = f"hot_water_{key}"

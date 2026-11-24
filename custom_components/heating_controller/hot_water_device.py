@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-import time as time_mod
+import time
 from collections.abc import Callable
-from datetime import time, timedelta
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigSubentry
@@ -34,14 +34,12 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .control.circulation import (
-    CirculationConfig,
     CirculationController,
     CirculationDecision,
     CirculationInputs,
 )
 from .control.hot_water import (
     ChargeDetector,
-    HotWaterConfig,
     HotWaterController,
     HotWaterDecision,
     HotWaterInputs,
@@ -49,12 +47,17 @@ from .control.hot_water import (
     ManualMode,
 )
 from .control.legionella import (
-    LegionellaConfig,
     LegionellaController,
     LegionellaInputs,
     LegionellaState,
 )
 from .control.write_budget import WritePriority
+from .hot_water_settings import (
+    HOT_WATER_NUMBER_DEFAULTS,
+    HotWaterKey,
+    HotWaterNumber,
+    HotWaterSettings,
+)
 from .listeners import Observable
 from .state_reader import attribute_float, entity_float
 
@@ -63,87 +66,12 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+K = HotWaterKey
+
 CIRCULATION_TICK = timedelta(seconds=15)
 # A cloud shows a written target only with its next poll; the same value is
 # not written again before this.
 WRITE_REPEAT_S = 15 * 60
-WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-
-# Temperatures as numbers on the device, everything else in the subentry.
-HOT_WATER_NUMBER_DEFAULTS: dict[str, float] = {
-    "normal": 46.0,
-    "surplus": 57.0,
-    "boost": 60.0,
-    "night": 38.0,
-    "window": 53.0,
-    "heating_night": 44.0,
-    "heating_window": 50.0,
-    "legionella": 60.0,
-}
-
-# Subentry settings and their starting values.
-HOT_WATER_DEFAULTS: dict[str, Any] = {
-    "grid_lower_w": 3000.0,
-    "grid_upper_w": 5000.0,
-    "grid_release_w": 1000.0,
-    "grid_stable_min": 5.0,
-    "battery_soc_min": 50.0,
-    "discharge_max_w": 300.0,
-    "discharge_stable_min": 2.0,
-    "outdoor_lower_c": 12.0,
-    "outdoor_upper_c": 24.0,
-    "tank_gate_c": 40.0,
-    "min_hold_min": 15.0,
-    "manual_hold_min": 60.0,
-    "boost_max_h": 6.0,
-    "night_enabled": True,
-    "night_start": "21:00:00",
-    "night_end": "05:00:00",
-    "window_enabled": True,
-    "window_start": "13:00:00",
-    "window_end": "16:00:00",
-    "heating_night_end": "13:00:00",
-    "forced_charge": True,
-    "reheat_hysteresis_k": 5.0,
-    "max_setpoint_c": 60.0,
-    "legionella_enabled": False,
-    "legionella_weekdays": ["tue"],
-    "legionella_start": "13:00:00",
-    "legionella_fallback": "15:00:00",
-    "legionella_retry_min": 120.0,
-    "forecast_above": True,
-    "forecast_threshold": 0.0,
-    "outlet_threshold_c": 60.0,
-    "return_threshold_c": 58.0,
-    "legionella_hold_min": 30.0,
-    "legionella_timeout_min": 240.0,
-    "circulation_enabled": False,
-    "blocked_states": ["off"],
-    "peak1_start": "06:00:00",
-    "peak1_end": "09:30:00",
-    "peak2_start": "17:00:00",
-    "peak2_end": "22:00:00",
-    "peak_start_below_c": 40.0,
-    "offpeak_start_below_c": 35.0,
-    "stop_delta_k": 4.0,
-    "stop_temperature_c": 44.0,
-    "max_run_min": 3.0,
-    "min_pause_min": 5.0,
-    "fallback_on_min": 2.0,
-    "fallback_off_min": 15.0,
-    "draw_overrides_gates": False,
-    "release_enabled": True,
-    "release_temperature_c": 58.0,
-    "release_min": 30.0,
-}
-
-
-def _time(value: str) -> time:
-    return time.fromisoformat(value)
-
-
-def _optional_time(value: str | None) -> time | None:
-    return _time(value) if value else None
 
 
 class HotWaterDevice(Observable):
@@ -155,21 +83,17 @@ class HotWaterDevice(Observable):
         self.hub = hub
         self.subentry_id = subentry.subentry_id
         self.title = subentry.title
-        self.data: dict[str, Any] = {**HOT_WATER_DEFAULTS, **subentry.data}
-        # Optional, so not taken from the defaults when cleared.
-        self._fallback = subentry.data.get("legionella_fallback")
-        d = self.data
-        self.water_heater: str = d["water_heater_entity"]
-        self.tank_entity: str | None = d.get("tank_temperature_entity")
-        self.legionella_enabled = bool(d["legionella_enabled"])
-        self.circulation_enabled = bool(d["circulation_enabled"]) and bool(
-            d.get("pump_entity")
-        )
-        self.numbers: dict[str, float] = dict(HOT_WATER_NUMBER_DEFAULTS)
-        self.controller = HotWaterController(self._config())
-        self.detector = ChargeDetector(float(d["reheat_hysteresis_k"]))
-        self.legionella = LegionellaController(self._legionella_config())
-        self.circulation = CirculationController(self._circulation_config())
+        settings = HotWaterSettings.from_data(subentry.data)
+        self.settings = settings
+        self.water_heater = settings.water_heater
+        self.tank_entity = settings.entity(K.TANK_TEMPERATURE_ENTITY)
+        self.legionella_enabled = settings.legionella_enabled
+        self.circulation_enabled = settings.circulation_enabled
+        self.numbers: dict[HotWaterNumber, float] = dict(HOT_WATER_NUMBER_DEFAULTS)
+        self.controller = HotWaterController(settings.hot_water_config(self.numbers))
+        self.detector = ChargeDetector(settings.reheat_hysteresis_k)
+        self.legionella = LegionellaController(settings.legionella_config())
+        self.circulation = CirculationController(settings.circulation_config())
         self.boost_on = False
         self.continuous_request = False
         self.circulation_main = True
@@ -186,91 +110,9 @@ class HotWaterDevice(Observable):
 
     # --- Configuration -----------------------------------------------------
 
-    def _config(self) -> HotWaterConfig:
-        d, n = self.data, self.numbers
-
-        def gate(entity_key: str, value_key: str) -> float | None:
-            return float(d[value_key]) if d.get(entity_key) else None
-
-        return HotWaterConfig(
-            normal_c=n["normal"],
-            surplus_c=n["surplus"],
-            boost_c=n["boost"],
-            legionella_c=n["legionella"],
-            night_c=n["night"],
-            window_c=n["window"],
-            heating_window_c=n["heating_window"],
-            heating_night_c=n["heating_night"],
-            heating_night_end=_time(d["heating_night_end"]),
-            boost_max_s=float(d["boost_max_h"]) * 3600,
-            night_enabled=bool(d["night_enabled"]),
-            night_start=_time(d["night_start"]),
-            night_end=_time(d["night_end"]),
-            window_enabled=bool(d["window_enabled"]),
-            window_start=_time(d["window_start"]),
-            window_end=_time(d["window_end"]),
-            forced_charge=bool(d["forced_charge"]),
-            reheat_hysteresis_k=float(d["reheat_hysteresis_k"]),
-            max_setpoint_c=float(d["max_setpoint_c"]),
-            grid_lower_w=float(d["grid_lower_w"]),
-            grid_upper_w=float(d["grid_upper_w"]),
-            grid_release_w=float(d["grid_release_w"]),
-            grid_stable_s=float(d["grid_stable_min"]) * 60,
-            battery_soc_min=gate("battery_soc_entity", "battery_soc_min"),
-            discharge_max_w=gate("battery_discharge_entity", "discharge_max_w"),
-            discharge_stable_s=float(d["discharge_stable_min"]) * 60,
-            outdoor_lower_c=float(d["outdoor_lower_c"]),
-            outdoor_upper_c=float(d["outdoor_upper_c"]),
-            tank_gate_c=(
-                float(d["tank_gate_c"]) if d.get("tank_gate_c") is not None else None
-            ),
-            min_hold_s=float(d["min_hold_min"]) * 60,
-            manual_hold_s=float(d["manual_hold_min"]) * 60,
-        )
-
-    def _legionella_config(self) -> LegionellaConfig:
-        d = self.data
-        return LegionellaConfig(
-            weekdays=frozenset(WEEKDAYS.index(day) for day in d["legionella_weekdays"]),
-            start=_time(d["legionella_start"]),
-            fallback=_optional_time(self._fallback),
-            retry_window_min=float(d["legionella_retry_min"]),
-            forecast_above=bool(d["forecast_above"]),
-            forecast_threshold=float(d["forecast_threshold"]),
-            outlet_threshold_c=float(d["outlet_threshold_c"]),
-            return_threshold_c=(
-                float(d["return_threshold_c"]) if d.get("return_entity") else None
-            ),
-            hold_min=float(d["legionella_hold_min"]),
-            verify_timeout_min=float(d["legionella_timeout_min"]),
-        )
-
-    def _circulation_config(self) -> CirculationConfig:
-        d = self.data
-        return CirculationConfig(
-            peak1_start=_time(d["peak1_start"]),
-            peak1_end=_time(d["peak1_end"]),
-            peak2_start=_time(d["peak2_start"]),
-            peak2_end=_time(d["peak2_end"]),
-            peak_start_below_c=float(d["peak_start_below_c"]),
-            offpeak_start_below_c=float(d["offpeak_start_below_c"]),
-            stop_delta_k=float(d["stop_delta_k"]),
-            stop_temperature_c=float(d["stop_temperature_c"]),
-            max_run_min=float(d["max_run_min"]),
-            min_pause_min=float(d["min_pause_min"]),
-            fallback_on_min=float(d["fallback_on_min"]),
-            fallback_off_min=float(d["fallback_off_min"]),
-            draw_overrides_gates=bool(d["draw_overrides_gates"]),
-            release_enabled=bool(d["release_enabled"]),
-            release_temperature_c=float(d["release_temperature_c"]),
-            release_min=float(d["release_min"]),
-        )
-
-    def set_number(self, key: str, value: float) -> None:
-        if key not in HOT_WATER_NUMBER_DEFAULTS:
-            raise ValueError(f"Unknown hot water number {key}")
-        self.numbers[key] = float(value)
-        self.controller.config = self._config()
+    def set_number(self, key: HotWaterNumber, value: float) -> None:
+        self.numbers[HotWaterNumber(key)] = float(value)
+        self.controller.config = self.settings.hot_water_config(self.numbers)
         self._schedule_evaluate()
 
     # --- Setup -------------------------------------------------------------
@@ -283,18 +125,18 @@ class HotWaterDevice(Observable):
         self.continuous_request = bool(stored.get("continuous_request", False))
         self.circulation_main = bool(stored.get("circulation_main", True))
         if self.circulation_enabled:
-            d = self.data
+            settings = self.settings
             tracked = [
                 entity
                 for entity in [
-                    d.get("pump_entity"),
-                    d.get("circ_return_entity"),
-                    d.get("circ_outlet_entity"),
-                    d.get("presence_entity"),
-                    d.get("daymode_entity"),
+                    settings.entity(K.PUMP_ENTITY),
+                    settings.entity(K.CIRC_RETURN_ENTITY),
+                    settings.entity(K.CIRC_OUTLET_ENTITY),
+                    settings.entity(K.PRESENCE_ENTITY),
+                    settings.entity(K.DAYMODE_ENTITY),
                     self.water_heater,
-                    *(d.get("continuous_entities") or []),
-                    *(d.get("draw_entities") or []),
+                    *settings.entities(K.CONTINUOUS_ENTITIES),
+                    *settings.entities(K.DRAW_ENTITIES),
                 ]
                 if entity
             ]
@@ -336,6 +178,10 @@ class HotWaterDevice(Observable):
             return None
         return state
 
+    def _reading(self, key: HotWaterKey) -> float | None:
+        """A configured sensor's number; None if unset or without one."""
+        return entity_float(self.hass, self.settings.entity(key))
+
     @property
     def current_target_c(self) -> float | None:
         return attribute_float(self._state(self.water_heater), "temperature")
@@ -362,7 +208,7 @@ class HotWaterDevice(Observable):
         self._schedule_evaluate()
 
     def set_manual(self, manual: ManualMode) -> None:
-        self.controller.set_manual(manual, time_mod.time())
+        self.controller.set_manual(manual, time.time())
         self._schedule_evaluate()
 
     def set_continuous_request(self, on: bool) -> None:
@@ -399,13 +245,13 @@ class HotWaterDevice(Observable):
                 LegionellaInputs(
                     now=now,
                     outlet_c=(
-                        entity_float(self.hass, self.data.get("outlet_entity"))
-                        if self.data.get("outlet_entity")
+                        entity_float(self.hass, outlet)
+                        if (outlet := self.settings.entity(K.OUTLET_ENTITY))
                         else self.tank_c
                     ),
-                    return_c=entity_float(self.hass, self.data.get("return_entity")),
+                    return_c=self._reading(K.RETURN_ENTITY),
                     heater_off=self.heater_off,
-                    forecast=entity_float(self.hass, self.data.get("forecast_entity")),
+                    forecast=self._reading(K.FORECAST_ENTITY),
                     target_c=self.current_target_c,
                 )
             )
@@ -421,15 +267,9 @@ class HotWaterDevice(Observable):
         decision = self.controller.decide(
             HotWaterInputs(
                 now=now,
-                grid_export_w=entity_float(
-                    self.hass, self.data.get("grid_export_entity")
-                ),
-                battery_soc=entity_float(
-                    self.hass, self.data.get("battery_soc_entity")
-                ),
-                battery_discharge_w=entity_float(
-                    self.hass, self.data.get("battery_discharge_entity")
-                ),
+                grid_export_w=self._reading(K.GRID_EXPORT_ENTITY),
+                battery_soc=self._reading(K.BATTERY_SOC_ENTITY),
+                battery_discharge_w=self._reading(K.BATTERY_DISCHARGE_ENTITY),
                 outdoor_c=self.hub.outdoor_temperature_c,
                 tank_c=self.tank_c,
                 current_target_c=self.current_target_c,
@@ -494,7 +334,7 @@ class HotWaterDevice(Observable):
         new = event.data["new_state"]
         old = event.data["old_state"]
         draw = (
-            event.data["entity_id"] in (self.data.get("draw_entities") or [])
+            event.data["entity_id"] in self.settings.entities(K.DRAW_ENTITIES)
             and new is not None
             and new.state == STATE_ON
             and (old is None or old.state != STATE_ON)
@@ -514,29 +354,33 @@ class HotWaterDevice(Observable):
         external = any(
             (state := self.hass.states.get(entity)) is not None
             and state.state == STATE_ON
-            for entity in self.data.get("continuous_entities") or []
+            for entity in self.settings.entities(K.CONTINUOUS_ENTITIES)
         )
         return self.continuous_request or external or self.legionella.wants_circulation
 
     async def async_evaluate_circulation(self, draw: bool = False) -> None:
         if not self.hub.started:
             return
-        d = self.data
-        pump = self.hass.states.get(d["pump_entity"])
+        settings = self.settings
+        pump_entity = settings.entity(K.PUMP_ENTITY)
+        pump = self.hass.states.get(pump_entity) if pump_entity else None
         if pump is None or pump.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return
         now = dt_util.now()
         pump_on = pump.state == STATE_ON
         heater = self.hass.states.get(self.water_heater)
         heater_ok = heater is not None and heater.state not in [
-            *d["blocked_states"],
+            *settings.blocked_states,
             STATE_UNAVAILABLE,
             STATE_UNKNOWN,
         ]
         gates = all(
             (state := self.hass.states.get(entity)) is not None
             and state.state == STATE_ON
-            for entity in (d.get("presence_entity"), d.get("daymode_entity"))
+            for entity in (
+                settings.entity(K.PRESENCE_ENTITY),
+                settings.entity(K.DAYMODE_ENTITY),
+            )
             if entity
         )
         decision = self.circulation.decide(
@@ -545,8 +389,8 @@ class HotWaterDevice(Observable):
                 enabled=self.circulation_main,
                 pump_on=pump_on,
                 pump_minutes=(now - pump.last_changed).total_seconds() / 60,
-                return_c=entity_float(self.hass, d.get("circ_return_entity")),
-                outlet_c=entity_float(self.hass, d.get("circ_outlet_entity")),
+                return_c=self._reading(K.CIRC_RETURN_ENTITY),
+                outlet_c=self._reading(K.CIRC_OUTLET_ENTITY),
                 continuous=self.continuous,
                 heater_ok=heater_ok,
                 people_gates_open=gates,
@@ -560,7 +404,7 @@ class HotWaterDevice(Observable):
             self.continuous_request = False
             on = [
                 entity
-                for entity in d.get("continuous_entities") or []
+                for entity in settings.entities(K.CONTINUOUS_ENTITIES)
                 if (state := self.hass.states.get(entity)) is not None
                 and state.state == STATE_ON
             ]

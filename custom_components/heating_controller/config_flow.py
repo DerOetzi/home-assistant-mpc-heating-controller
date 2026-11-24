@@ -96,7 +96,7 @@ from .const import (
     Surface,
 )
 from .control.flow import ActuatorMode
-from .hot_water_device import HOT_WATER_DEFAULTS, WEEKDAYS
+from .hot_water_settings import HOT_WATER_DEFAULTS, WEEKDAYS, HotWaterKey
 from .profiles import (
     DeviceProfile,
     TrvResolveError,
@@ -115,16 +115,17 @@ _FLOW_THRESHOLD_DOMAINS = ["input_number", "number", "sensor"]
 def _marker(
     key: type[vol.Required] | type[vol.Optional], name: str, defaults: dict[str, Any]
 ) -> vol.Marker:
+    # Voluptuous takes plain strings only, not an enum member.
     if name in defaults and defaults[name] is not None:
-        return key(name, default=defaults[name])
-    return key(name)
+        return key(str(name), default=defaults[name])
+    return key(str(name))
 
 
 def _optional(name: str, defaults: dict[str, Any]) -> vol.Optional:
     """An optional field that can be cleared again: suggested, not defaulted."""
     if defaults.get(name):
-        return vol.Optional(name, description={"suggested_value": defaults[name]})
-    return vol.Optional(name)
+        return vol.Optional(str(name), description={"suggested_value": defaults[name]})
+    return vol.Optional(str(name))
 
 
 def _merge(
@@ -816,6 +817,8 @@ class FlowSubentryFlow(ConfigSubentryFlow):
 
 # --- Hot water ---------------------------------------------------------------
 
+K = HotWaterKey
+
 
 def _hw_number(key: str, defaults: dict[str, Any]) -> tuple[vol.Required, Any]:
     box = selector.NumberSelector(
@@ -823,15 +826,17 @@ def _hw_number(key: str, defaults: dict[str, Any]) -> tuple[vol.Required, Any]:
             min=-10000, max=100000, step="any", mode=selector.NumberSelectorMode.BOX
         )
     )
-    return vol.Required(key, default=defaults[key]), vol.All(box, vol.Coerce(float))
+    return vol.Required(str(key), default=defaults[key]), vol.All(
+        box, vol.Coerce(float)
+    )
 
 
 def _hw_time(key: str, defaults: dict[str, Any]) -> tuple[vol.Required, Any]:
-    return vol.Required(key, default=defaults[key]), selector.TimeSelector()
+    return vol.Required(str(key), default=defaults[key]), selector.TimeSelector()
 
 
 def _hw_bool(key: str, defaults: dict[str, Any]) -> tuple[vol.Required, Any]:
-    return vol.Required(key, default=defaults[key]), selector.BooleanSelector()
+    return vol.Required(str(key), default=defaults[key]), selector.BooleanSelector()
 
 
 def _hw_entity(
@@ -846,7 +851,9 @@ def _hw_entity(
 def _hw_entities(
     key: str, defaults: dict[str, Any], domain: str | list[str]
 ) -> tuple[vol.Optional, Any]:
-    return vol.Optional(key, default=defaults.get(key) or []), selector.EntitySelector(
+    return vol.Optional(
+        str(key), default=defaults.get(key) or []
+    ), selector.EntitySelector(
         selector.EntitySelectorConfig(domain=domain, multiple=True)
     )
 
@@ -857,51 +864,51 @@ def _schema(*fields: tuple[vol.Marker, Any]) -> vol.Schema:
 
 def _hw_sources_schema(d: dict[str, Any]) -> vol.Schema:
     return _schema(
-        _hw_entity("water_heater_entity", d, "water_heater", required=True),
-        _hw_entity("tank_temperature_entity", d, "sensor"),
-        _hw_entity("grid_export_entity", d, "sensor"),
-        _hw_entity("battery_soc_entity", d, "sensor"),
-        _hw_entity("battery_discharge_entity", d, "sensor"),
-        _hw_bool("legionella_enabled", d),
-        _hw_bool("circulation_enabled", d),
+        _hw_entity(K.WATER_HEATER_ENTITY, d, "water_heater", required=True),
+        _hw_entity(K.TANK_TEMPERATURE_ENTITY, d, "sensor"),
+        _hw_entity(K.GRID_EXPORT_ENTITY, d, "sensor"),
+        _hw_entity(K.BATTERY_SOC_ENTITY, d, "sensor"),
+        _hw_entity(K.BATTERY_DISCHARGE_ENTITY, d, "sensor"),
+        _hw_bool(K.LEGIONELLA_ENABLED, d),
+        _hw_bool(K.CIRCULATION_ENABLED, d),
     )
 
 
 def _hw_modes_schema(d: dict[str, Any]) -> vol.Schema:
     numbers = (
-        "grid_lower_w",
-        "grid_upper_w",
-        "grid_release_w",
-        "grid_stable_min",
-        "battery_soc_min",
-        "discharge_max_w",
-        "discharge_stable_min",
-        "outdoor_lower_c",
-        "outdoor_upper_c",
-        "tank_gate_c",
-        "min_hold_min",
-        "manual_hold_min",
-        "boost_max_h",
-        "reheat_hysteresis_k",
-        "max_setpoint_c",
+        K.GRID_LOWER_W,
+        K.GRID_UPPER_W,
+        K.GRID_RELEASE_W,
+        K.GRID_STABLE_MIN,
+        K.BATTERY_SOC_MIN,
+        K.DISCHARGE_MAX_W,
+        K.DISCHARGE_STABLE_MIN,
+        K.OUTDOOR_LOWER_C,
+        K.OUTDOOR_UPPER_C,
+        K.TANK_GATE_C,
+        K.MIN_HOLD_MIN,
+        K.MANUAL_HOLD_MIN,
+        K.BOOST_MAX_H,
+        K.REHEAT_HYSTERESIS_K,
+        K.MAX_SETPOINT_C,
     )
     return _schema(
         *(_hw_number(key, d) for key in numbers),
-        _hw_bool("night_enabled", d),
-        _hw_time("night_start", d),
-        _hw_time("night_end", d),
-        _hw_time("heating_night_end", d),
-        _hw_bool("window_enabled", d),
-        _hw_time("window_start", d),
-        _hw_time("window_end", d),
-        _hw_bool("forced_charge", d),
+        _hw_bool(K.NIGHT_ENABLED, d),
+        _hw_time(K.NIGHT_START, d),
+        _hw_time(K.NIGHT_END, d),
+        _hw_time(K.HEATING_NIGHT_END, d),
+        _hw_bool(K.WINDOW_ENABLED, d),
+        _hw_time(K.WINDOW_START, d),
+        _hw_time(K.WINDOW_END, d),
+        _hw_bool(K.FORCED_CHARGE, d),
     )
 
 
 def _hw_legionella_schema(d: dict[str, Any]) -> vol.Schema:
     return _schema(
         (
-            vol.Required("legionella_weekdays", default=d["legionella_weekdays"]),
+            vol.Required(str(K.LEGIONELLA_WEEKDAYS), default=d[K.LEGIONELLA_WEEKDAYS]),
             selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=list(WEEKDAYS),
@@ -910,45 +917,45 @@ def _hw_legionella_schema(d: dict[str, Any]) -> vol.Schema:
                 )
             ),
         ),
-        _hw_time("legionella_start", d),
+        _hw_time(K.LEGIONELLA_START, d),
         (
-            _optional("legionella_fallback", d),
+            _optional(K.LEGIONELLA_FALLBACK, d),
             selector.TimeSelector(),
         ),
-        _hw_number("legionella_retry_min", d),
-        _hw_entity("forecast_entity", d, "sensor"),
-        _hw_bool("forecast_above", d),
-        _hw_number("forecast_threshold", d),
-        _hw_entity("outlet_entity", d, "sensor"),
-        _hw_number("outlet_threshold_c", d),
-        _hw_entity("return_entity", d, "sensor"),
-        _hw_number("return_threshold_c", d),
-        _hw_number("legionella_hold_min", d),
-        _hw_number("legionella_timeout_min", d),
+        _hw_number(K.LEGIONELLA_RETRY_MIN, d),
+        _hw_entity(K.FORECAST_ENTITY, d, "sensor"),
+        _hw_bool(K.FORECAST_ABOVE, d),
+        _hw_number(K.FORECAST_THRESHOLD, d),
+        _hw_entity(K.OUTLET_ENTITY, d, "sensor"),
+        _hw_number(K.OUTLET_THRESHOLD_C, d),
+        _hw_entity(K.RETURN_ENTITY, d, "sensor"),
+        _hw_number(K.RETURN_THRESHOLD_C, d),
+        _hw_number(K.LEGIONELLA_HOLD_MIN, d),
+        _hw_number(K.LEGIONELLA_TIMEOUT_MIN, d),
     )
 
 
 def _hw_circulation_schema(d: dict[str, Any]) -> vol.Schema:
     numbers = (
-        "peak_start_below_c",
-        "offpeak_start_below_c",
-        "stop_delta_k",
-        "stop_temperature_c",
-        "max_run_min",
-        "min_pause_min",
-        "fallback_on_min",
-        "fallback_off_min",
-        "release_temperature_c",
-        "release_min",
+        K.PEAK_START_BELOW_C,
+        K.OFFPEAK_START_BELOW_C,
+        K.STOP_DELTA_K,
+        K.STOP_TEMPERATURE_C,
+        K.MAX_RUN_MIN,
+        K.MIN_PAUSE_MIN,
+        K.FALLBACK_ON_MIN,
+        K.FALLBACK_OFF_MIN,
+        K.RELEASE_TEMPERATURE_C,
+        K.RELEASE_MIN,
     )
     return _schema(
-        _hw_entity("pump_entity", d, "switch", required=True),
-        _hw_entity("circ_return_entity", d, "sensor", required=True),
-        _hw_entity("circ_outlet_entity", d, "sensor"),
-        _hw_entities("draw_entities", d, "binary_sensor"),
-        _hw_entities("continuous_entities", d, ["input_boolean", "switch"]),
+        _hw_entity(K.PUMP_ENTITY, d, "switch", required=True),
+        _hw_entity(K.CIRC_RETURN_ENTITY, d, "sensor", required=True),
+        _hw_entity(K.CIRC_OUTLET_ENTITY, d, "sensor"),
+        _hw_entities(K.DRAW_ENTITIES, d, "binary_sensor"),
+        _hw_entities(K.CONTINUOUS_ENTITIES, d, ["input_boolean", "switch"]),
         (
-            vol.Required("blocked_states", default=d["blocked_states"]),
+            vol.Required(str(K.BLOCKED_STATES), default=d[K.BLOCKED_STATES]),
             selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=["off", "eco", "heat_pump", "performance"],
@@ -957,15 +964,15 @@ def _hw_circulation_schema(d: dict[str, Any]) -> vol.Schema:
                 )
             ),
         ),
-        _hw_entity("presence_entity", d, _BOOLEAN_SIGNAL_DOMAINS),
-        _hw_entity("daymode_entity", d, _BOOLEAN_SIGNAL_DOMAINS),
-        _hw_time("peak1_start", d),
-        _hw_time("peak1_end", d),
-        _hw_time("peak2_start", d),
-        _hw_time("peak2_end", d),
+        _hw_entity(K.PRESENCE_ENTITY, d, _BOOLEAN_SIGNAL_DOMAINS),
+        _hw_entity(K.DAYMODE_ENTITY, d, _BOOLEAN_SIGNAL_DOMAINS),
+        _hw_time(K.PEAK1_START, d),
+        _hw_time(K.PEAK1_END, d),
+        _hw_time(K.PEAK2_START, d),
+        _hw_time(K.PEAK2_END, d),
         *(_hw_number(key, d) for key in numbers),
-        _hw_bool("draw_overrides_gates", d),
-        _hw_bool("release_enabled", d),
+        _hw_bool(K.DRAW_OVERRIDES_GATES, d),
+        _hw_bool(K.RELEASE_ENABLED, d),
     )
 
 
@@ -1026,7 +1033,7 @@ class HotWaterSubentryFlow(ConfigSubentryFlow):
         )
 
     async def _after_modes(self) -> SubentryFlowResult:
-        if self._data.get("legionella_enabled"):
+        if self._data.get(K.LEGIONELLA_ENABLED):
             return await self.async_step_legionella()
         return await self._after_legionella()
 
@@ -1041,7 +1048,7 @@ class HotWaterSubentryFlow(ConfigSubentryFlow):
         )
 
     async def _after_legionella(self) -> SubentryFlowResult:
-        if self._data.get("circulation_enabled"):
+        if self._data.get(K.CIRCULATION_ENABLED):
             return await self.async_step_circulation()
         return self._finish()
 
