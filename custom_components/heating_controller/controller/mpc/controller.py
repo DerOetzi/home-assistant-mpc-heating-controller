@@ -5,9 +5,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from math import ceil
 
-from ...const import CapacityOutcome
 from .hot_water import HotWaterChargeDetector
-from .learner import RoomMpcModelLearner
+from .learner import LearningReport, RoomMpcModelLearner
 from .math_helper import clamp
 from .models.capacity import ThermalCapacityModel
 from .models.emitter import HeatEmitterModel
@@ -23,14 +22,11 @@ from .results import (
 )
 from .sensors import RoomMpcSensors
 from .types import (
-    CapacityStretchInfo,
     FlowGateState,
     LearningFactors,
     RoomContext,
-    RoomModelLearningState,
     RoomThermalConfig,
     TrvConfig,
-    UaBalanceInfo,
 )
 
 # How quickly the boost flow asks to bring a room back to its
@@ -225,29 +221,10 @@ class RoomMpcController:
     def get_room_temperature(self) -> RoomTemperature | RoomMpcError:
         return self._sensors.get_room_temperature()
 
-    def get_learning_state(self) -> RoomModelLearningState:
-        return self._learner.get_learning_state()
-
-    def get_ua_balance_info(self) -> UaBalanceInfo:
-        return self._learner.get_ua_balance_info()
-
-    def get_capacity_outcome(self) -> CapacityOutcome:
-        return self._learner.get_capacity_outcome()
-
-    def get_capacity_info(self) -> CapacityStretchInfo:
-        return self._learner.get_capacity_info()
-
     @property
-    def vent_capacity_factor(self) -> float:
-        return self._learner.vent_capacity_factor
-
-    @property
-    def learned_vent_capacity_factor(self) -> float | None:
-        """None until an airing stretch learned it."""
-        return self._learner.learned_vent_capacity_factor
-
-    def get_vent_info(self) -> CapacityStretchInfo:
-        return self._learner.get_vent_info()
+    def learning(self) -> LearningReport:
+        """The learner's state and its last stretches, read only."""
+        return self._learner
 
     @property
     def effective_capacity_j_per_k(self) -> float:

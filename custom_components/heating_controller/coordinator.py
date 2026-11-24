@@ -701,7 +701,7 @@ class HeatingRoomCoordinator(Observable):
             ),
             # A new mass capacity starts the airing one afresh from it.
             vent_capacity_factor=(
-                self.mpc.learned_vent_capacity_factor
+                self.mpc.learning.learned_vent_capacity_factor
                 if capacity_factor is None
                 else None
             ),
@@ -848,9 +848,10 @@ class HeatingRoomCoordinator(Observable):
     @property
     def flow_boost_temperature_c(self) -> float | None:
         """The recovery flow while the room recovers; None otherwise."""
-        if not self.flow_boost_active:
+        result = self.normal_result
+        if not self.flow_boost_active or result is None:
             return None
-        return self.normal_recovery_flow_temperature_c
+        return result.recovery_flow_temperature_c
 
     @property
     def feedback_sample(self) -> DemandSample | None:
@@ -1054,20 +1055,5 @@ class HeatingRoomCoordinator(Observable):
         return result.gated_hold_flow_temperature_c if result else None
 
     @property
-    def normal_recovery_flow_temperature_c(self) -> float | None:
-        result = self.normal_result
-        return result.recovery_flow_temperature_c if result else None
-
-    @property
     def design_flow_temperature_c(self) -> float:
         return self.mpc.design_flow_temperature_c
-
-    @property
-    def normal_recovery_flow_saturated(self) -> bool | None:
-        result = self.normal_result
-        return result.recovery_flow_saturated if result else None
-
-    @property
-    def normal_flow_gate_closed(self) -> bool | None:
-        result = self.normal_result
-        return result.flow_gate_closed if result else None

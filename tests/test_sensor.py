@@ -151,7 +151,10 @@ def test_ua_learning_status_sensor_rounds_the_means() -> None:
     for delta_c in (10.0, 14.0, 18.0):
         gains.add_night_point(delta_c, 20.0 * delta_c - 50.0, 6.0, 31.25)
     sensor._coordinator = SimpleNamespace(
-        mpc=SimpleNamespace(get_ua_balance_info=lambda: info, gain_model=gains)
+        mpc=SimpleNamespace(
+            learning=SimpleNamespace(get_ua_balance_info=lambda: info),
+            gain_model=gains,
+        )
     )
 
     attributes = sensor.extra_state_attributes

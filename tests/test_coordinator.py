@@ -516,7 +516,7 @@ async def test_flow_gate_closes_while_the_room_coasts_above_target(
     await coordinator.async_setup()
     await coordinator.async_start()
 
-    assert coordinator.normal_flow_gate_closed is True
+    assert coordinator.normal_result.flow_gate_closed is True
     assert coordinator.normal_gated_hold_flow_temperature_c == 0
     assert coordinator.normal_hold_flow_temperature_c > 0
 
@@ -537,7 +537,7 @@ async def test_entries_without_flow_gate_settings_fall_back_to_defaults(
     await coordinator.async_setup()
     await coordinator.async_start()
 
-    assert coordinator.normal_flow_gate_closed is False
+    assert coordinator.normal_result.flow_gate_closed is False
     assert coordinator.normal_gated_hold_flow_temperature_c > 0
 
     coordinator.async_unload()
@@ -786,7 +786,7 @@ async def test_closed_flow_gate_survives_a_restart(hass: HomeAssistant) -> None:
     before_restart = _coordinator(hass, closing_entry, _trvs())
     await before_restart.async_setup()
     await before_restart.async_start()
-    assert before_restart.normal_flow_gate_closed is True
+    assert before_restart.normal_result.flow_gate_closed is True
     before_restart.async_unload()
 
     hass.states.async_set("sensor.wohnzimmer_temperatur", "22.4")
@@ -800,7 +800,7 @@ async def test_closed_flow_gate_survives_a_restart(hass: HomeAssistant) -> None:
     await after_restart.async_setup()
     await after_restart.async_start()
 
-    assert after_restart.normal_flow_gate_closed is True
+    assert after_restart.normal_result.flow_gate_closed is True
     assert after_restart.normal_gated_hold_flow_temperature_c == 0
     after_restart.async_unload()
 
@@ -810,7 +810,7 @@ async def test_closed_flow_gate_survives_a_restart(hass: HomeAssistant) -> None:
     await without_stored_state.async_setup()
     await without_stored_state.async_start()
 
-    assert without_stored_state.normal_flow_gate_closed is False
+    assert without_stored_state.normal_result.flow_gate_closed is False
     without_stored_state.async_unload()
 
 
@@ -1619,7 +1619,7 @@ async def test_flow_boost_after_a_mode_jump_until_the_room_is_close(
     await coordinator.async_set_manual_heat_mode(HeatMode.COMFORT)
     await _poll(hass, freezer, 1)
     assert coordinator.flow_boost_active is True
-    recovery_c = coordinator.normal_recovery_flow_temperature_c
+    recovery_c = coordinator.normal_result.recovery_flow_temperature_c
     assert recovery_c > 0
     assert coordinator.flow_boost_temperature_c == recovery_c
     # A recovering room says nothing about the flow.

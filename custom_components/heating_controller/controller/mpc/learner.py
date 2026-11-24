@@ -8,6 +8,7 @@ from bisect import bisect_left
 from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import pairwise
+from typing import Protocol
 
 from ...const import (
     SENSOR_POLL_INTERVAL_MINUTES,
@@ -145,6 +146,20 @@ class _StretchIntegral:
         info.last_mean_room_c = self.room_ks / self.duration_s
         info.last_mean_flow_c = self.flow_ks / self.flow_s if self.flow_s > 0 else None
         info.last_mean_heating_w = self.heat_j / self.duration_s
+
+
+class LearningReport(Protocol):
+    """What the learner tells about its learning, read only."""
+
+    def get_learning_state(self) -> RoomModelLearningState: ...
+    def get_ua_balance_info(self) -> UaBalanceInfo: ...
+    def get_capacity_outcome(self) -> CapacityOutcome: ...
+    def get_capacity_info(self) -> CapacityStretchInfo: ...
+    def get_vent_info(self) -> CapacityStretchInfo: ...
+    @property
+    def vent_capacity_factor(self) -> float: ...
+    @property
+    def learned_vent_capacity_factor(self) -> float | None: ...
 
 
 class RoomMpcModelLearner:

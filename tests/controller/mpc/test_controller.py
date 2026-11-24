@@ -630,7 +630,7 @@ def test_balance_does_not_move_anything_but_the_factor():
     feed_night(controller._learner)
     controller.run_learning_cycle()
 
-    assert controller.get_ua_balance_info().outcome in (
+    assert controller.learning.get_ua_balance_info().outcome in (
         UaBalanceOutcome.LEARNED,
         UaBalanceOutcome.LEARNED_AT_LIMIT,
     )
@@ -689,7 +689,7 @@ def test_missing_outdoor_temperature_pauses_learning():
     assert isinstance(result, RoomMpcError)
     assert result.code == RoomMpcErrorCode.MISSING_OUTDOOR_TEMPERATURE
     assert controller.outdoor_temperature_missing is True
-    assert controller.get_ua_balance_info().outcome == (
+    assert controller.learning.get_ua_balance_info().outcome == (
         UaBalanceOutcome.OUTDOOR_TEMPERATURE_MISSING
     )
 
@@ -707,7 +707,7 @@ def test_learning_resumes_once_the_outdoor_temperature_is_back():
 
     assert not isinstance(result, RoomMpcError)
     assert controller.outdoor_temperature_missing is False
-    assert controller.get_ua_balance_info().outcome != (
+    assert controller.learning.get_ua_balance_info().outcome != (
         UaBalanceOutcome.OUTDOOR_TEMPERATURE_MISSING
     )
 

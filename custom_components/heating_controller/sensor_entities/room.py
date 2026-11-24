@@ -123,13 +123,14 @@ class BoostFlowTemperatureSensor(_DiagnosticSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        result = self._coordinator.normal_result
         return {
             "boost_active": self._coordinator.flow_boost_active,
             "recovery_flow_temperature_c": (
-                self._coordinator.normal_recovery_flow_temperature_c
+                result.recovery_flow_temperature_c if result else None
             ),
             "recovery_flow_saturated": (
-                self._coordinator.normal_recovery_flow_saturated
+                result.recovery_flow_saturated if result else None
             ),
         }
 
@@ -159,7 +160,7 @@ class HoldFlowTemperatureSensor(_DiagnosticSensor):
     def extra_state_attributes(self) -> dict[str, Any]:
         result = self._coordinator.normal_result
         return {
-            "flow_gate_closed": self._coordinator.normal_flow_gate_closed,
+            "flow_gate_closed": result.flow_gate_closed if result else None,
             "calculation_heat_mode": (
                 self._coordinator.normal_heat_mode.value
                 if self._coordinator.normal_heat_mode is not None
@@ -199,8 +200,9 @@ class GatedHoldFlowTemperatureSensor(_DiagnosticSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        result = self._coordinator.normal_result
         return {
-            "flow_gate_closed": self._coordinator.normal_flow_gate_closed,
+            "flow_gate_closed": result.flow_gate_closed if result else None,
             "hold_flow_temperature_c": (
                 self._coordinator.normal_hold_flow_temperature_c
             ),
@@ -237,7 +239,7 @@ class CurveHoldFlowTemperatureSensor(_DiagnosticSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        info = self._coordinator.mpc.get_ua_balance_info()
+        info = self._coordinator.mpc.learning.get_ua_balance_info()
         return {
             "outdoor_temperature_c": self._coordinator.curve_outdoor_c(self._end),
             "target_temperature_c": self._coordinator.comfort_temperature_c,
@@ -472,12 +474,12 @@ class UaLearningStatusSensor(_DiagnosticSensor):
 
     @property
     def native_value(self) -> str | None:
-        outcome = self._coordinator.mpc.get_ua_balance_info().outcome
+        outcome = self._coordinator.mpc.learning.get_ua_balance_info().outcome
         return outcome.value if outcome else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        info = self._coordinator.mpc.get_ua_balance_info()
+        info = self._coordinator.mpc.learning.get_ua_balance_info()
         gains = self._coordinator.mpc.gain_model
         since_ts = info.collecting_since_ts
         return {
@@ -518,13 +520,13 @@ class CapacityLearningStatusSensor(_DiagnosticSensor):
 
     @property
     def native_value(self) -> str:
-        return self._coordinator.mpc.get_capacity_outcome().value
+        return self._coordinator.mpc.learning.get_capacity_outcome().value
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         mpc = self._coordinator.mpc
-        info = mpc.get_capacity_info()
-        vent = mpc.get_vent_info()
+        info = mpc.learning.get_capacity_info()
+        vent = mpc.learning.get_vent_info()
         return {
             "capacity_j_per_k": round(mpc.effective_capacity_j_per_k),
             "last_stretch_kind": info.kind,
@@ -535,8 +537,8 @@ class CapacityLearningStatusSensor(_DiagnosticSensor):
             "last_stretch_saturated_share": rounded(info.saturated_share, 2),
             "last_learned": iso(info.last_learned_ts),
             # Airing capacity after a window closed: observed only.
-            "vent_capacity_factor": rounded(mpc.vent_capacity_factor, 4),
-            "vent_learned": mpc.learned_vent_capacity_factor is not None,
+            "vent_capacity_factor": rounded(mpc.learning.vent_capacity_factor, 4),
+            "vent_learned": mpc.learning.learned_vent_capacity_factor is not None,
             "vent_outcome": vent.outcome.value,
             "vent_stretch_start": iso(vent.start_ts),
             "vent_stretch_end": iso(vent.end_ts),
