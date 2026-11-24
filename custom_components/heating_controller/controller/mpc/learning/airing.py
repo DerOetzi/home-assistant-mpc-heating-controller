@@ -87,7 +87,7 @@ class AiringLearner:
             if history and history[-1].timestamp - closed_ts >= JUMP_MAX_S:
                 # The room kept warming faster than its model the whole time.
                 return self._end_airing(closed_ts, None, CapacityOutcome.IMPLAUSIBLE)
-            self._reset_vent_info(closed_ts, None)
+            self.info.begin(VENT, closed_ts, None)
             info.outcome = CapacityOutcome.RUNNING
             return None
         if start < 0:
@@ -109,7 +109,7 @@ class AiringLearner:
 
         end = self._recovery_end_index(start)
         if end is None:
-            self._reset_vent_info(history[start].timestamp, None)
+            self.info.begin(VENT, history[start].timestamp, None)
             info.outcome = CapacityOutcome.RUNNING
             return None
         return self._learn_from_airing(history[start : end + 1], history[start])
@@ -142,8 +142,8 @@ class AiringLearner:
         self, stretch: list[LearnerHistoryEntry], first: LearnerHistoryEntry
     ) -> CapacityOutcome:
         info = self.info
-        self._reset_vent_info(
-            first.timestamp, stretch[-1].timestamp if stretch else None
+        self.info.begin(
+            VENT, first.timestamp, stretch[-1].timestamp if stretch else None
         )
         rejection = estimate_stretch(self._ctx, VENT, stretch, info)
         if rejection is not None:
@@ -210,15 +210,6 @@ class AiringLearner:
     def _end_airing(
         self, start_ts: float, end_ts: float | None, outcome: CapacityOutcome
     ) -> CapacityOutcome:
-        self._reset_vent_info(start_ts, end_ts)
+        self.info.begin(VENT, start_ts, end_ts)
         self.info.outcome = outcome
         return outcome
-
-    def _reset_vent_info(self, start_ts: float, end_ts: float | None) -> None:
-        info = self.info
-        info.kind = VENT
-        info.start_ts = start_ts
-        info.end_ts = end_ts
-        info.room_delta_c = None
-        info.estimate_factor = None
-        info.saturated_share = None

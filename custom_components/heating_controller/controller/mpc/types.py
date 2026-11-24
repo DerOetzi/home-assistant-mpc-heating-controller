@@ -94,10 +94,10 @@ class UaBalanceInfo:
 
 @dataclass
 class CapacityStretchInfo:
-    """The last jump stretch the capacity was judged on, for diagnostics."""
+    """The last stretch a capacity was judged on, for diagnostics."""
 
     outcome: CapacityOutcome = CapacityOutcome.WAITING
-    # "heat_up" or "cool_down"
+    # "heat_up", "cool_down" or "vent"
     kind: str | None = None
     start_ts: float | None = None
     end_ts: float | None = None
@@ -105,6 +105,15 @@ class CapacityStretchInfo:
     estimate_factor: float | None = None
     saturated_share: float | None = None
     last_learned_ts: float | None = None
+
+    def begin(self, kind: str, start_ts: float, end_ts: float | None) -> None:
+        """Start describing a new stretch; its figures are not known yet."""
+        self.kind = kind
+        self.start_ts = start_ts
+        self.end_ts = end_ts
+        self.room_delta_c = None
+        self.estimate_factor = None
+        self.saturated_share = None
 
 
 @dataclass(frozen=True)

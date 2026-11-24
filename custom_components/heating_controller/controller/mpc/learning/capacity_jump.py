@@ -88,17 +88,6 @@ def estimate_stretch(
     return None
 
 
-def reset_stretch_info(
-    info: CapacityStretchInfo, kind: str, start_ts: float, end_ts: float | None
-) -> None:
-    info.kind = kind
-    info.start_ts = start_ts
-    info.end_ts = end_ts
-    info.room_delta_c = None
-    info.estimate_factor = None
-    info.saturated_share = None
-
-
 class JumpLearner:
     def __init__(self, ctx: LearningContext) -> None:
         self._ctx = ctx
@@ -166,7 +155,7 @@ class JumpLearner:
             if flag_outcome is not None:
                 if index == start:
                     self.done_ts = jump.timestamp
-                    self._reset_stretch_info(kind, entry.timestamp, None)
+                    self.info.begin(kind, entry.timestamp, None)
                     info.outcome = flag_outcome
                     return flag_outcome
                 end = index - 1
@@ -198,7 +187,7 @@ class JumpLearner:
 
         self.done_ts = jump.timestamp
         stretch = history[start : end + 1]
-        self._reset_stretch_info(
+        self.info.begin(
             kind,
             history[start].timestamp,
             stretch[-1].timestamp if stretch else None,
@@ -207,19 +196,8 @@ class JumpLearner:
         return info.outcome
 
     def _set_running(self, kind: str, start_ts: float) -> None:
-        self._reset_stretch_info(kind, start_ts, None)
+        self.info.begin(kind, start_ts, None)
         self.info.outcome = CapacityOutcome.RUNNING
-
-    def _reset_stretch_info(
-        self, kind: str, start_ts: float, end_ts: float | None
-    ) -> None:
-        info = self.info
-        info.kind = kind
-        info.start_ts = start_ts
-        info.end_ts = end_ts
-        info.room_delta_c = None
-        info.estimate_factor = None
-        info.saturated_share = None
 
     def _judge_stretch(
         self, kind: str, stretch: list[LearnerHistoryEntry]
