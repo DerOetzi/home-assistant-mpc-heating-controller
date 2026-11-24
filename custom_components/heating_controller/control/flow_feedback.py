@@ -3,9 +3,10 @@
 The feedforward (hold flow from the learned room model) says what the rooms
 should need; the valves say what they do need. One count adds up what they
 say: a room near fully open and clearly below its target counts it down,
-the faster the further it is short; a room well below open and not above its
-target counts it up; a room that holds the flow brings it back towards
-zero. A room above its target (cooking, sun) counts neither way. Half an
+the faster the further it is short; a room well below open and at its target
+(at most a tenth above, less than a tenth below) counts it up; a room that holds the flow
+brings it back towards zero. A room above its target (cooking, sun) or short
+of it with a shut valve counts neither way. Half an
 hour down means too little flow: one step up; an hour up (at night an hour
 and a half) means the flow can drop: one step down. The radiators and rooms
 answer a step only over hours: for a lock after a step the count does not
@@ -50,11 +51,15 @@ UP_AFTER_S = 30 * 60
 # once and at most UP_RATE_MAX times as fast.
 UP_RATE_DEFICIT_C = 0.2
 UP_RATE_MAX = 3.0
-# Down: no lead room holds the flow and one is below this and not above its
-# target; the count goes up, a step at DOWN_AFTER_S (at night
+# Down: no lead room holds the flow and one is below this and at its target;
+# the count goes up, a step at DOWN_AFTER_S (at night
 # NIGHT_DOWN_AFTER_S). A room this far open holds it: the count goes back to
 # zero.
 DEMAND_DOWN_PCT = 80.0
+# A room this far short of its target or further does not count down, however
+# far its valve is shut: a TRV on its own reading can close while the room
+# is still short.
+DOWN_BLOCK_DEFICIT_C = 0.1
 DOWN_AFTER_S = 3600
 NIGHT_DOWN_AFTER_S = 90 * 60
 # After a step the count stays at zero on that step's side this long, by
@@ -349,7 +354,7 @@ def _advance(
     """One tick of the count.
 
     Down at up_rate while a room wants more, to zero while one holds, up
-    while one is low and not above its target, else it stays.
+    while one is low and at its target, else it stays.
     """
     if up_rate > 0.0:
         return count - dt * up_rate
@@ -396,9 +401,20 @@ def _not_above_target(sample: DemandSample) -> bool:
     )
 
 
+def _not_short(sample: DemandSample) -> bool:
+    return (
+        sample.deficit_c is None
+        or rounded_deficit_c(sample.deficit_c) < DOWN_BLOCK_DEFICIT_C
+    )
+
+
 def lowers(sample: DemandSample) -> bool:
-    """Well below open and not above its target: the flow can drop."""
-    return sample.demand_pct < DEMAND_DOWN_PCT and _not_above_target(sample)
+    """Well below open and at its target: the flow can drop."""
+    return (
+        sample.demand_pct < DEMAND_DOWN_PCT
+        and _not_above_target(sample)
+        and _not_short(sample)
+    )
 
 
 def holds(sample: DemandSample) -> bool:

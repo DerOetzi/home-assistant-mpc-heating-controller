@@ -119,18 +119,18 @@ def test_each_step_up_needs_its_own_up_time_after_the_lock() -> None:
 
 def test_low_demand_for_the_down_time_steps_down() -> None:
     feedback = FlowFeedback()
-    _run(feedback, [_sample(60)], T0, DOWN_AFTER_S - 60)
+    _run(feedback, [_sample(60, deficit=0.0)], T0, DOWN_AFTER_S - 60)
     assert feedback.feedback_k == 0.0
     assert feedback.count_s == DOWN_AFTER_S - 60
 
-    _run(feedback, [_sample(60)], T0 + DOWN_AFTER_S, 0)
+    _run(feedback, [_sample(60, deficit=0.0)], T0 + DOWN_AFTER_S, 0)
     assert feedback.feedback_k == -1.0
     assert feedback.count_s == 0.0
 
 
 def test_wanting_after_a_surplus_first_works_it_off() -> None:
     feedback = FlowFeedback()
-    end = _run(feedback, [_sample(60)], T0, 1740)
+    end = _run(feedback, [_sample(60, deficit=0.0)], T0, 1740)
     assert feedback.count_s == 1740
 
     end = _run(feedback, [_sample(99)], end + 60, 1740 + UP_AFTER_S - 120)
@@ -142,20 +142,20 @@ def test_wanting_after_a_surplus_first_works_it_off() -> None:
 
 def test_a_short_want_takes_back_but_keeps_the_rest() -> None:
     feedback = FlowFeedback()
-    end = _run(feedback, [_sample(60)], T0, DOWN_AFTER_S - 600)
+    end = _run(feedback, [_sample(60, deficit=0.0)], T0, DOWN_AFTER_S - 600)
     end = _run(feedback, [_sample(99)], end + 60, 240)
     assert feedback.count_s == DOWN_AFTER_S - 900
 
-    end = _run(feedback, [_sample(60)], end + 60, 780)
+    end = _run(feedback, [_sample(60, deficit=0.0)], end + 60, 780)
     assert feedback.feedback_k == 0.0
-    _run(feedback, [_sample(60)], end + 60, 0)
+    _run(feedback, [_sample(60, deficit=0.0)], end + 60, 0)
     assert feedback.feedback_k == -1.0
 
 
 def test_a_holding_room_brings_the_count_back_to_zero() -> None:
-    for demand in (60, 99):
+    for demand, deficit in ((60, 0.0), (99, 0.2)):
         feedback = FlowFeedback()
-        end = _run(feedback, [_sample(demand)], T0, 600)
+        end = _run(feedback, [_sample(demand, deficit=deficit)], T0, 600)
         assert feedback.count_s != 0.0
 
         _run(feedback, [_sample(85, deficit=0.0)], end + 60, 3600)
@@ -173,7 +173,12 @@ def test_a_holding_room_short_of_its_target_does_not_step_up() -> None:
 
 def test_down_uses_the_highest_room() -> None:
     feedback = _ready()
-    _run(feedback, [_sample(60), _sample(85, room="B")], T0, DOWN_AFTER_S + 60)
+    _run(
+        feedback,
+        [_sample(60, deficit=0.0), _sample(85, room="B")],
+        T0,
+        DOWN_AFTER_S + 60,
+    )
 
     assert feedback.feedback_k == 0.0
     assert feedback.lead.room == "B"
@@ -183,7 +188,7 @@ def test_open_valve_above_target_does_not_hold_the_flow() -> None:
     feedback = FlowFeedback()
     _run(
         feedback,
-        [_sample(60), _sample(91, deficit=-0.5, room="B")],
+        [_sample(60, deficit=0.0), _sample(91, deficit=-0.5, room="B")],
         T0,
         DOWN_AFTER_S,
     )
@@ -202,7 +207,10 @@ def test_open_valve_up_to_a_tenth_above_target_holds_the_flow() -> None:
 def test_open_valve_rounded_beyond_a_tenth_above_target_does_not_hold() -> None:
     feedback = FlowFeedback()
     _run(
-        feedback, [_sample(96, deficit=-0.15), _sample(60, room="B")], T0, DOWN_AFTER_S
+        feedback,
+        [_sample(96, deficit=-0.15), _sample(60, deficit=0.0, room="B")],
+        T0,
+        DOWN_AFTER_S,
     )
 
     assert feedback.feedback_k == -1.0
@@ -233,7 +241,9 @@ def test_no_step_against_a_target_limit() -> None:
     _run(feedback, [_sample(99)], T0, 3 * UP_AFTER_S, at_upper_limit=True)
     assert feedback.feedback_k == 0.0
 
-    _run(feedback, [_sample(60)], T0, DOWN_AFTER_S + 60, at_lower_limit=True)
+    _run(
+        feedback, [_sample(60, deficit=0.0)], T0, DOWN_AFTER_S + 60, at_lower_limit=True
+    )
     assert feedback.feedback_k == 0.0
 
 
@@ -249,8 +259,14 @@ def test_a_freeze_drops_the_count_towards_up() -> None:
 
 def test_a_freeze_keeps_the_count_towards_down() -> None:
     feedback = FlowFeedback()
-    end = _run(feedback, [_sample(60)], T0, 1200)
-    _run(feedback, [_sample(60)], end + 60, 600, frozen=FeedbackFreeze.HOT_WATER)
+    end = _run(feedback, [_sample(60, deficit=0.0)], T0, 1200)
+    _run(
+        feedback,
+        [_sample(60, deficit=0.0)],
+        end + 60,
+        600,
+        frozen=FeedbackFreeze.HOT_WATER,
+    )
 
     assert feedback.count_s == 1200
 
@@ -264,8 +280,8 @@ def test_frozen_neither_steps_nor_counts() -> None:
 
         # Low demand while frozen does not count towards a step down.
         feedback = _ready()
-        end = _run(feedback, [_sample(60)], T0, 3 * 3600, frozen=reason)
-        _run(feedback, [_sample(60)], end + 60, DOWN_AFTER_S - 120)
+        end = _run(feedback, [_sample(60, deficit=0.0)], T0, 3 * 3600, frozen=reason)
+        _run(feedback, [_sample(60, deficit=0.0)], end + 60, DOWN_AFTER_S - 120)
         assert feedback.feedback_k == 0.0
 
 
@@ -279,11 +295,11 @@ def test_no_samples_does_nothing() -> None:
 
 def test_no_samples_pauses_the_count() -> None:
     feedback = _ready()
-    end = _run(feedback, [_sample(60)], T0, DOWN_AFTER_S - 660)
+    end = _run(feedback, [_sample(60, deficit=0.0)], T0, DOWN_AFTER_S - 660)
     end = _run(feedback, [], end + 60, 3 * 3600)
     assert feedback.count_s == DOWN_AFTER_S - 600
 
-    _run(feedback, [_sample(60)], end + 60, 540)
+    _run(feedback, [_sample(60, deficit=0.0)], end + 60, 540)
     assert feedback.feedback_k == -1.0
 
 
@@ -461,10 +477,16 @@ def test_short_rooms_do_not_count_up_while_catching_up() -> None:
 
 def test_catching_up_still_brings_a_surplus_back_to_zero() -> None:
     feedback = FlowFeedback()
-    end = _run(feedback, [_sample(60)], T0, 600)
+    end = _run(feedback, [_sample(60, deficit=0.0)], T0, 600)
     assert feedback.count_s == 600
     after = (
-        _run(feedback, [_sample(60)], end + 60, 1200, frozen=FeedbackFreeze.HOT_WATER)
+        _run(
+            feedback,
+            [_sample(60, deficit=0.0)],
+            end + 60,
+            1200,
+            frozen=FeedbackFreeze.HOT_WATER,
+        )
         + 60
     )
     end = _run(feedback, [_sample(99)], after, 900)
@@ -514,9 +536,22 @@ def test_a_room_above_its_target_counts_neither_way() -> None:
     assert feedback.count_s == 0.0
 
 
+@pytest.mark.parametrize(
+    ("deficit", "counts"), [(0.0, True), (0.04, True), (0.05, False), (0.13, False)]
+)
+def test_a_shut_valve_short_of_target_does_not_count_down(
+    deficit: float, counts: bool
+) -> None:
+    feedback = FlowFeedback()
+    _run(feedback, [_sample(30, deficit=deficit)], T0, 600)
+
+    assert (feedback.count_s > 0.0) is counts
+    assert feedback.feedback_k == 0.0
+
+
 def test_neutral_keeps_the_count() -> None:
     feedback = FlowFeedback()
-    end = _run(feedback, [_sample(60)], T0, 600)
+    end = _run(feedback, [_sample(60, deficit=0.0)], T0, 600)
     _run(feedback, [_sample(30, deficit=-0.5)], end + 60, 3600)
 
     assert feedback.count_s == 600
@@ -539,18 +574,18 @@ def test_the_lock_leaves_the_other_direction_open() -> None:
     end = _run(feedback, [_sample(99)], T0, UP_AFTER_S)
     assert feedback.feedback_k == 1.0
 
-    _run(feedback, [_sample(60)], end + 60, DOWN_AFTER_S)
+    _run(feedback, [_sample(60, deficit=0.0)], end + 60, DOWN_AFTER_S)
     assert feedback.feedback_k == 0.0
 
 
 def test_the_lock_after_a_step_down_holds_down() -> None:
     feedback = FlowFeedback()
-    end = _run(feedback, [_sample(60)], T0, DOWN_AFTER_S)
+    end = _run(feedback, [_sample(60, deficit=0.0)], T0, DOWN_AFTER_S)
     assert feedback.feedback_k == -1.0
 
-    end = _run(feedback, [_sample(60)], end + 60, STEP_LOCK_DOWN_S - 60)
+    end = _run(feedback, [_sample(60, deficit=0.0)], end + 60, STEP_LOCK_DOWN_S - 60)
     assert feedback.feedback_k == -1.0
-    _run(feedback, [_sample(60)], end + 60, DOWN_AFTER_S)
+    _run(feedback, [_sample(60, deficit=0.0)], end + 60, DOWN_AFTER_S)
     assert feedback.feedback_k == -2.0
 
 
@@ -578,7 +613,7 @@ def test_the_lock_down_is_longer_at_night() -> None:
     ):
         feedback = FlowFeedback()
         down_after = NIGHT_DOWN_AFTER_S if night else DOWN_AFTER_S
-        end = _run(feedback, [_sample(60)], T0, down_after, night=night)
+        end = _run(feedback, [_sample(60, deficit=0.0)], T0, down_after, night=night)
         assert feedback.feedback_k == -1.0
         assert feedback.locked_sign(end + lock_down - 60) == -1
         assert feedback.locked_sign(end + lock_down) == 0
@@ -586,17 +621,22 @@ def test_the_lock_down_is_longer_at_night() -> None:
 
 def test_at_night_a_step_down_takes_longer() -> None:
     feedback = FlowFeedback()
-    end = _run(feedback, [_sample(60)], T0, DOWN_AFTER_S, night=True)
+    end = _run(feedback, [_sample(60, deficit=0.0)], T0, DOWN_AFTER_S, night=True)
     assert feedback.feedback_k == 0.0
     assert feedback.count_s == DOWN_AFTER_S
 
-    _run(feedback, [_sample(60)], end + 60, NIGHT_DOWN_AFTER_S - DOWN_AFTER_S - 60)
+    _run(
+        feedback,
+        [_sample(60, deficit=0.0)],
+        end + 60,
+        NIGHT_DOWN_AFTER_S - DOWN_AFTER_S - 60,
+    )
     assert feedback.feedback_k == -1.0
 
 
 def test_at_night_a_step_up_is_not_held_back_by_a_day_step_down() -> None:
     feedback = FlowFeedback()
-    end = _run(feedback, [_sample(60)], T0, DOWN_AFTER_S)
+    end = _run(feedback, [_sample(60, deficit=0.0)], T0, DOWN_AFTER_S)
     assert feedback.feedback_k == -1.0
 
     _run(feedback, [_sample(99)], end + 60, UP_AFTER_S, night=True)

@@ -678,8 +678,12 @@ works out:
     - else a room **holds** the flow (80 % or more open, rounded at most 0.1 K above its
       target): back towards 0. A room rounded 0.2 K or more above its target does not hold: its
       valve is open on the TRV's own, colder reading, more flow would not help it.
-    - else a room below 80 % open and not above its target (as for holding): up.
-    - else (only rooms above their target: cooking, sun): the count stays.
+    - else a room below 80 % open and at its target (rounded at most 0.1 K above
+      it and less than 0.1 K below): up. A room 0.1 K or more short with its valve shut does not count
+      down: an exposed TRV on its own, warmer reading closes while the room is
+      still short.
+    - else (only rooms above their target: cooking, sun; or short with the valve
+      shut): the count stays.
     - A room that wants more counts the faster the further it is short: its rounded
       deficit over 0.2 K, at least 1× and at most 3× (0.4 K short: twice as fast).
     - At −30 minutes one actuator step **up**, at +60 minutes (at night +90) one step
