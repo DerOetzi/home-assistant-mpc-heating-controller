@@ -338,7 +338,7 @@ async def test_removing_a_room_drops_its_stores_and_keeps_the_hub(
 
     assert entry.state is ConfigEntryState.LOADED
     assert entry.entry_id not in hass.data[DOMAIN]
-    assert hass.states.get("select.wohnzimmer_heating_mode") is None
+    assert _not_running(hass, "select.wohnzimmer_heating_mode")
     leftover = LearningFactorsStore(hass, ENTRY_DATA["room_name"], entry.entry_id)
     assert await leftover.async_load() is None
 
@@ -360,15 +360,20 @@ async def test_a_room_whose_trv_is_gone_stays_out(hass: HomeAssistant) -> None:
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+def _not_running(hass: HomeAssistant, entity_id: str) -> bool:
+    """No entity behind the id: no state, or only the registry's placeholder."""
+    state = hass.states.get(entity_id)
+    return state is None or bool(state.attributes.get("restored"))
+
+
 async def _set_room_device_disabled(
     hass: HomeAssistant, entry: MockConfigEntry, disabled: bool
 ) -> None:
     registry = dr.async_get(hass)
-    device = next(
-        device
-        for device in registry.devices.values()
-        if (DOMAIN, entry.entry_id) in device.identifiers
+    device = registry.async_get_device_by_identifier(
+        (DOMAIN, entry.entry_id), entry.entry_id
     )
+    assert device is not None
     registry.async_update_device(
         device.id, disabled_by=dr.DeviceEntryDisabler.USER if disabled else None
     )
@@ -389,7 +394,7 @@ async def test_disabling_a_room_device_takes_the_room_out_and_keeps_its_data(
     assert entry.state is ConfigEntryState.LOADED
     assert entry.entry_id not in hass.data[DOMAIN]
     assert entry.runtime_data.rooms == {}
-    assert hass.states.get("select.wohnzimmer_heating_mode") is None
+    assert _not_running(hass, "select.wohnzimmer_heating_mode")
     kept = LearningFactorsStore(hass, ENTRY_DATA["room_name"], entry.entry_id)
     assert await kept.async_load() is not None
 

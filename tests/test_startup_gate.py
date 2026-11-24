@@ -71,6 +71,7 @@ async def test_an_entity_dropping_out_again_holds_it(
     await _wait(hass, freezer, STARTUP_QUIET_S)
 
     assert not gate.is_open
+    gate.async_stop()
 
 
 async def test_opens_on_timeout_without_an_entity(
