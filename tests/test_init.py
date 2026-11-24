@@ -76,10 +76,10 @@ async def test_remove_entry_deletes_learning_factors_store(hass: HomeAssistant) 
     coordinator = hass.data[DOMAIN][entry.entry_id]
     from heating_controller.controller.mpc.types import LearningFactors
 
-    await coordinator.store.async_save(
+    await coordinator.persistence.factors.async_save(
         LearningFactors(ua_factor=1.1, capacity_factor=1.2)
     )
-    assert await coordinator.store.async_load() is not None
+    assert await coordinator.persistence.factors.async_load() is not None
 
     assert await hass.config_entries.async_remove(entry.entry_id)
 
@@ -133,7 +133,7 @@ async def test_recalibrate_sets_both_factors_and_persists_them(
 
     assert coordinator.mpc.learned_ua_factor == 1.2
     assert coordinator.mpc.learned_capacity_factor == 0.8
-    persisted = await coordinator.store.async_load()
+    persisted = await coordinator.persistence.factors.async_load()
     assert (persisted.ua_factor, persisted.capacity_factor) == (1.2, 0.8)
 
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -184,7 +184,7 @@ async def test_recalibrate_resets_gains_and_keeps_the_factors(
     assert gains.night_points == 0
     assert coordinator.mpc.learned_ua_factor == 0.9
     assert coordinator.mpc.learned_capacity_factor == 1.3
-    persisted = await coordinator.gain_store.async_load()
+    persisted = await coordinator.persistence.gains.async_load()
     assert persisted["night"] is None
 
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -329,7 +329,7 @@ async def test_removing_a_room_drops_its_stores_and_keeps_the_hub(
 ) -> None:
     entry = await _setup_room(hass)
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    await coordinator.store.async_save(
+    await coordinator.persistence.factors.async_save(
         LearningFactors(ua_factor=0.8, capacity_factor=1.0)
     )
 
@@ -385,7 +385,7 @@ async def test_disabling_a_room_device_takes_the_room_out_and_keeps_its_data(
 ) -> None:
     entry = await _setup_room(hass)
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    await coordinator.store.async_save(
+    await coordinator.persistence.factors.async_save(
         LearningFactors(ua_factor=0.8, capacity_factor=1.0)
     )
 
@@ -453,7 +453,7 @@ async def test_a_disabled_room_stays_out_after_a_restart(hass: HomeAssistant) ->
 async def test_removing_a_disabled_room_drops_its_stores(hass: HomeAssistant) -> None:
     entry = await _setup_room(hass)
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    await coordinator.store.async_save(
+    await coordinator.persistence.factors.async_save(
         LearningFactors(ua_factor=0.8, capacity_factor=1.0)
     )
     await _set_room_device_disabled(hass, entry, True)

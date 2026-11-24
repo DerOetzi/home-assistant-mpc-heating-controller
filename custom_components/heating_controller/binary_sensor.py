@@ -81,7 +81,7 @@ class LeadHeatingDemandBinarySensor(HeatingHubEntity, BinarySensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        lead = self._hub.lead_hold_flow
+        lead = self._hub.leads.hold_flow
         return {
             "hold_flow_temperature_c": lead.value_c,
             "flow_threshold_c": self._hub.flow_threshold_c,
@@ -159,18 +159,18 @@ class _HeatingSeasonBinarySensor(HeatingHubEntity, BinarySensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        last_ts = self._hub.season.last_demand_ts
+        last_ts = self._hub.season.demand.last_demand_ts
         return {
-            "demand_hours_24h": self._hub.demand_hours_24h,
-            "on_threshold_h": self._hub.season_on_threshold_h,
-            "hold_threshold_h": self._hub.season_hold_threshold_h,
-            "off_after_h": self._hub.season_off_after_h,
+            "demand_hours_24h": self._hub.season.demand_hours_24h,
+            "on_threshold_h": self._hub.season.on_threshold_h,
+            "hold_threshold_h": self._hub.season.hold_threshold_h,
+            "off_after_h": self._hub.season.off_after_h,
             "last_demand": None
             if last_ts is None
             else dt_util.as_local(dt_util.utc_from_timestamp(last_ts)).isoformat(),
-            "heating_on": self._hub.heating_on,
-            "heat_source_entity": self._hub.heat_source_entity,
-            "automatic": self._hub.season_auto_on,
+            "heating_on": self._hub.season.heating_on,
+            "heat_source_entity": self._hub.season.heat_source_entity,
+            "automatic": self._hub.season.auto_on,
         }
 
 
@@ -185,7 +185,7 @@ class HeatingSeasonSwitchOnBinarySensor(_HeatingSeasonBinarySensor):
 
     @property
     def is_on(self) -> bool:
-        return self._hub.season_switch_on_recommended
+        return self._hub.season.switch_on_recommended
 
 
 class HeatingSeasonSwitchOffBinarySensor(_HeatingSeasonBinarySensor):
@@ -199,7 +199,7 @@ class HeatingSeasonSwitchOffBinarySensor(_HeatingSeasonBinarySensor):
 
     @property
     def is_on(self) -> bool:
-        return self._hub.season_switch_off_recommended
+        return self._hub.season.switch_off_recommended
 
 
 class HeatingAutomationBinarySensor(HeatingControllerEntity, BinarySensorEntity):

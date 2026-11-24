@@ -15,12 +15,12 @@ from heating_controller.const import (
 )
 from heating_controller.controller.mpc.results import RoomTemperature
 from heating_controller.coordinator import (
-    FLOW_TEMPERATURE_MAX_GAP_S,
     HeatingRoomCoordinator,
 )
 from heating_controller.profiles import StatusMatch, TrvBinding
 from heating_controller.room.heat_availability import FLOW_DIP_TOLERANCE_S
 from heating_controller.room.house import DetachedHouse
+from heating_controller.room.learning_inputs import FLOW_TEMPERATURE_MAX_GAP_S
 from homeassistant.const import (
     SUN_EVENT_SUNRISE,
     SUN_EVENT_SUNSET,

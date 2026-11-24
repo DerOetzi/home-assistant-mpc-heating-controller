@@ -249,7 +249,7 @@ class HotWaterDevice(Observable):
                 current_target_c=self.current_target_c,
                 boost_on=self.boost_on,
                 legionella_active=self.legionella.active,
-                heating_season=self.hub.heating_on is True,
+                heating_season=self.hub.season.heating_on is True,
             )
         )
         self.decision = decision

@@ -182,7 +182,7 @@ class FlowDevice(Observable):
         limit = _target_limit(inputs, bounds)
         freeze = self._freeze_reason(inputs, bounds is None)
         feedback.update(
-            hub.feedback_samples(),
+            hub.leads.feedback_samples(),
             self._step,
             freeze,
             now_ts,
@@ -219,14 +219,14 @@ class FlowDevice(Observable):
         hub = self.hub
         return FlowInputs(
             outdoor_c=hub.outdoor_temperature_c,
-            feedforward_flow_c=hub.lead_feedforward_flow.value_c,
+            feedforward_flow_c=hub.leads.feedforward_flow.value_c,
             charge_flow_c=hub.charge_flow_c,
             actual=actual,
-            heating_on=hub.heating_on,
+            heating_on=hub.season.heating_on,
             reachable=hub.heat_source_reachable,
             feedback_k=hub.flow_feedback.feedback_k,
-            boost_flow_c=hub.lead_boost_flow.value_c,
-            design_flow_c=hub.design_flow_c,
+            boost_flow_c=hub.leads.boost_flow.value_c,
+            design_flow_c=hub.leads.design_flow_c,
             correction_k=hub.flow_correction.correction_k
             if self.mode is ActuatorMode.OFFSET
             else 0.0,

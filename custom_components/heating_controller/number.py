@@ -207,7 +207,7 @@ class HeatingSeasonNumber(HeatingHubEntity, _RestoredNumber):
 
     @property
     def native_value(self) -> float:
-        return getattr(self._hub, f"season_{self._name}")
+        return self._hub.season.threshold(self._name)
 
     async def _async_apply(self, value: float) -> None:
         self._hub.set_season_threshold(self._name, value)

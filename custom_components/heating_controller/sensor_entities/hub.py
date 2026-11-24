@@ -25,7 +25,8 @@ from ..const import (
 from ..entity import (
     HeatingHubEntity,
 )
-from ..hub import HeatingHub, LeadValue
+from ..hub import HeatingHub
+from ..lead_rooms import LeadValue
 from .format import iso, rounded
 
 
@@ -57,7 +58,7 @@ class LeadHoldFlowTemperatureSensor(_LeadFlowSensor):
         super().__init__(hub, "lead_hold_flow_temperature")
 
     def _lead(self) -> LeadValue:
-        return self._hub.lead_hold_flow
+        return self._hub.leads.hold_flow
 
 
 class HeatingDemandHoursSensor(HeatingHubEntity, SensorEntity):
@@ -74,7 +75,7 @@ class HeatingDemandHoursSensor(HeatingHubEntity, SensorEntity):
 
     @property
     def native_value(self) -> float:
-        return self._hub.demand_hours_24h
+        return self._hub.season.demand_hours_24h
 
 
 class HeatingSeasonLastDemandSensor(HeatingHubEntity, SensorEntity):
@@ -88,7 +89,7 @@ class HeatingSeasonLastDemandSensor(HeatingHubEntity, SensorEntity):
 
     @property
     def native_value(self) -> datetime | None:
-        last_ts = self._hub.season.last_demand_ts
+        last_ts = self._hub.season.demand.last_demand_ts
         return None if last_ts is None else dt_util.utc_from_timestamp(last_ts)
 
 

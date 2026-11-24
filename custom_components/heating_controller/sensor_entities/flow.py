@@ -27,7 +27,7 @@ from ..entity import (
     FlowEntity,
 )
 from ..flow_device import FlowDevice
-from ..hub import LeadValue
+from ..lead_rooms import LeadValue
 from .format import iso
 
 
@@ -94,8 +94,8 @@ class FlowTargetSensor(_FlowTemperatureSensor):
     def extra_state_attributes(self) -> dict[str, Any]:
         decision = self._flow.decision
         hub = self._flow.hub
-        lead = hub.lead_feedforward_flow
-        boost = hub.lead_boost_flow
+        lead = hub.leads.feedforward_flow
+        boost = hub.leads.boost_flow
         return {
             "source": None
             if decision is None or decision.source is None
@@ -139,7 +139,7 @@ class FlowFeedbackSensor(FlowEntity, SensorEntity):
             "lead_demand_pct": None if lead is None else lead.demand_pct,
             "lead_room": None if lead is None else lead.room,
             "lead_deficit_c": None if lead is None else lead.deficit_c,
-            "feedforward_flow_c": self._flow.hub.lead_feedforward_flow.value_c,
+            "feedforward_flow_c": self._flow.hub.leads.feedforward_flow.value_c,
             "frozen": feedback.frozen is not None,
             "frozen_reason": None if feedback.frozen is None else str(feedback.frozen),
             "flow_timer_min": round(feedback.count_s / 60),
@@ -175,7 +175,7 @@ class FlowCurveRecommendationSensor(_FlowTemperatureSensor):
         self._attr_translation_key = f"flow_curve_recommendation_{end}"
 
     def _lead(self) -> LeadValue:
-        return self._flow.hub.lead_curve_hold_flow(self._end)
+        return self._flow.hub.leads.curve_hold_flow(self._end)
 
     @property
     def available(self) -> bool:
@@ -252,7 +252,7 @@ class FlowHoldCurvesSensor(_FlowTemperatureSensor):
             "lead_demand_pct": None if lead is None else lead.demand_pct,
             "lead_room": None if lead is None else lead.room,
             "outdoor_c": outdoor_values,
-            "rooms": self._flow.hub.hold_flow_curves(outdoor_values),
+            "rooms": self._flow.hub.leads.hold_flow_curves(outdoor_values),
         }
 
 

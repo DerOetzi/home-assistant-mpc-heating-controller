@@ -10,13 +10,11 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
@@ -29,8 +27,6 @@ from .const import (
     CONF_FLOW_THRESHOLD,
     CONF_FLOW_THRESHOLD_ENTITY,
     CONF_HEAT_SOURCE_CLIMATE_ENTITY,
-    CONF_LEAD_FLOW,
-    CONF_LEAD_HEATING_LIMIT,
     CONF_MAX_FLOW_GAP_MIN,
     CONF_MAX_WRITES_PER_DAY,
     CONF_OPAQUE_SURFACES,
@@ -46,49 +42,27 @@ from .const import (
     DEFAULT_MAX_WRITES_PER_DAY,
     DEFAULT_RATE_LIMIT_RESERVE,
     DEFAULT_ROOF_TILT_DEG,
-    DEFAULT_SEASON_HOLD_THRESHOLD_H,
-    DEFAULT_SEASON_OFF_AFTER_H,
-    DEFAULT_SEASON_ON_THRESHOLD_H,
-    HEAT_SOURCE_ACTIVE_STATE,
-    CurveEnd,
     RoofOrientation,
 )
 from .control.flow_correction import FlowCorrection
-from .control.flow_feedback import DemandSample, FlowFeedback
-from .control.heating_season import (
-    HEAT_MODE,
-    OFF_MODE,
-    HeatingSeason,
-    SeasonSwitcher,
-)
+from .control.flow_feedback import FlowFeedback
 from .control.hot_water import FlowChargeDetector
 from .control.write_budget import WriteBudget, WritePriority
 from .coordinator import HeatingRoomCoordinator
 from .flow_device import FlowDevice
 from .hot_water_device import HotWaterDevice
 from .irradiance import IrradianceProvider, SurfaceGeometry, building_surfaces
+from .lead_rooms import LEAD_ROUND_DIGITS, LeadRooms, LeadValue
 from .listeners import Observable
+from .season_control import SeasonControl
 from .startup_gate import StartupGate
-from .state_reader import available_state, entity_float
+from .state_reader import entity_float
 from .store import HubStore
 
 _LOGGER = logging.getLogger(__name__)
 
 HUB_TICK = timedelta(minutes=1)
 HUB_SAVE_DELAY_S = 300
-SEASON_THRESHOLDS = ("on_threshold_h", "hold_threshold_h", "off_after_h")
-
-# Like the min/max helpers the lead figures replace.
-LEAD_ROUND_DIGITS = 1
-
-
-@dataclass(frozen=True)
-class LeadValue:
-    """The highest value among the lead rooms and the room it comes from."""
-
-    value_c: float | None
-    room: str | None
-    rooms: list[str]
 
 
 class HeatingHub(Observable):
@@ -97,6 +71,7 @@ class HeatingHub(Observable):
         self.hass = hass
         self.entry = entry
         self.rooms: dict[str, HeatingRoomCoordinator] = {}
+        self.leads = LeadRooms(self.rooms)
         # Room id to name of rooms left out because their device is disabled.
         self.disabled_rooms: dict[str, str] = {}
         self._flow_threshold_entity: str | None = entry.data.get(
@@ -128,18 +103,17 @@ class HeatingHub(Observable):
         )
         # A start counts as a fresh value; the gap runs from here.
         self.flow_seen_ts = time.time()
-        self.season = HeatingSeason()
-        self.season_switcher = SeasonSwitcher()
-        # Switch the heat source by the season criterion; off after a hand switch.
-        self.season_auto_on = True
+        self.season = SeasonControl(
+            hass,
+            self._heat_source_entity,
+            lambda: self.started and self.heat_source_reachable,
+            self.request_write,
+        )
         self.flow_feedback = FlowFeedback()
         self.flow_correction = FlowCorrection()
         self.charge_detector = FlowChargeDetector()
         # Nothing computes or writes before the inputs are there.
         self.startup_gate = StartupGate(hass, self._async_start)
-        self.season_on_threshold_h = DEFAULT_SEASON_ON_THRESHOLD_H
-        self.season_hold_threshold_h = DEFAULT_SEASON_HOLD_THRESHOLD_H
-        self.season_off_after_h = DEFAULT_SEASON_OFF_AFTER_H
         self._store = HubStore(hass, entry.entry_id)
         self._outdoor_entity: str | None = entry.data.get(
             CONF_OUTDOOR_TEMPERATURE_ENTITY
@@ -179,7 +153,7 @@ class HeatingHub(Observable):
     async def async_setup(self) -> None:
         stored = await self._store.async_load()
         self.write_budget.restore(stored.get("write_budget", {}))
-        self.season.restore(stored.get("heating_season", {}))
+        self.season.demand.restore(stored.get("heating_season", {}))
         self.flow_feedback.restore(stored.get("flow_feedback", {}))
         self.flow_correction.restore(stored.get("flow_correction", {}))
         surfaces = self.used_surfaces()
@@ -250,7 +224,7 @@ class HeatingHub(Observable):
     def _export(self) -> dict[str, Any]:
         return {
             "write_budget": self.write_budget.export(),
-            "heating_season": self.season.export(),
+            "heating_season": self.season.demand.export(),
             "flow_feedback": self.flow_feedback.export(),
             "flow_correction": self.flow_correction.export(),
         }
@@ -269,8 +243,7 @@ class HeatingHub(Observable):
         ):
             self.flow_seen_ts = now_ts
         self.update_charge()
-        self.season.update(self.heating_demand, now_ts, self.season_hold_threshold_h)
-        self._switch_season(now_ts)
+        self.season.update(self.heating_demand, now_ts)
         self._store.async_delay_save(self._export, HUB_SAVE_DELAY_S)
         if self.hot_water is not None:
             self.hass.async_create_task(self.hot_water.async_evaluate())
@@ -365,96 +338,10 @@ class HeatingHub(Observable):
 
     # --- Heating season ----------------------------------------------------
 
-    @property
-    def heat_source_entity(self) -> str | None:
-        """The heat source's climate entity, switched heat/off by the hub."""
-        return self._heat_source_entity
-
     async def async_set_season_auto(self, value: bool) -> None:
         """Switch the automatic heat/off of the heat source."""
-        self.season_auto_on = value
-        if value:
-            self._switch_season(time.time())
+        self.season.set_auto(value)
         self._notify_listeners()
-
-    def _switch_season(self, now_ts: float) -> None:
-        """Command the heat source to the mode the season criterion asks for."""
-        if (
-            not self.season_auto_on
-            or not self.started
-            or not self._heat_source_entity
-            or self.heating_on is None
-            or not self.heat_source_reachable
-        ):
-            return
-        mode = SeasonSwitcher.wanted(
-            self.season_switch_on_recommended, self.season_switch_off_recommended
-        )
-        if mode is None or not self.season_switcher.due(mode, now_ts):
-            return
-        self.season_switcher.sent(mode, now_ts)
-        self.request_write(WritePriority.REQUIRED)
-        self.hass.async_create_task(self._async_command_heat_source(mode))
-
-    async def _async_command_heat_source(self, mode: str) -> None:
-        try:
-            await self.hass.services.async_call(
-                "climate",
-                "set_hvac_mode",
-                {"entity_id": self._heat_source_entity, "hvac_mode": mode},
-                blocking=True,
-            )
-        except HomeAssistantError as err:
-            _LOGGER.warning(
-                "Switching %s to %s failed: %s", self._heat_source_entity, mode, err
-            )
-
-    @callback
-    def _heat_source_changed(self, event: Event[EventStateChangedData]) -> None:
-        """A change between heat and off not commanded by the hub is by hand."""
-        old = event.data["old_state"]
-        new = event.data["new_state"]
-        modes = (HEAT_MODE, OFF_MODE)
-        if (
-            old is None
-            or new is None
-            or old.state not in modes
-            or new.state not in modes
-            or old.state == new.state
-        ):
-            return
-        if not self.season_switcher.take_change(new.state, time.time()):
-            if self.season_auto_on:
-                _LOGGER.info(
-                    "%s switched to %s by hand; automatic heating season off",
-                    self._heat_source_entity,
-                    new.state,
-                )
-            self.season_auto_on = False
-
-    @property
-    def heating_on(self) -> bool | None:
-        """Whether the heat source heats; None without or with an empty entity."""
-        state = available_state(self.hass, self._heat_source_entity)
-        if state is None:
-            return None
-        return state.state == HEAT_SOURCE_ACTIVE_STATE
-
-    @property
-    def demand_hours_24h(self) -> float:
-        return round(self.season.hours(time.time()), 2)
-
-    @property
-    def season_switch_on_recommended(self) -> bool:
-        return self.season.switch_on_recommended(
-            time.time(), self.season_on_threshold_h, self.heating_on
-        )
-
-    @property
-    def season_switch_off_recommended(self) -> bool:
-        return self.season.switch_off_recommended(
-            time.time(), self.season_off_after_h, self.heating_on
-        )
 
     async def async_set_comfort(self, value: bool) -> None:
         """Switch house-wide comfort; rooms that follow it recompute."""
@@ -472,66 +359,14 @@ class HeatingHub(Observable):
 
     def set_season_threshold(self, name: str, value: float) -> None:
         """Set one of the season numbers by its short name."""
-        if name not in SEASON_THRESHOLDS:
-            raise ValueError(f"Unknown heating season threshold {name}")
-        setattr(self, f"season_{name}", float(value))
+        self.season.set_threshold(name, value)
         self._notify_listeners()
 
     @callback
     def _async_handle_state_change(self, event: Event[EventStateChangedData]) -> None:
         if event.data["entity_id"] == self._heat_source_entity:
-            self._heat_source_changed(event)
+            self.season.heat_source_changed(event)
         self._notify_listeners()
-
-    def _lead(
-        self, flag: str, value: Callable[[HeatingRoomCoordinator], float | None]
-    ) -> LeadValue:
-        leads = [room for room in self.rooms.values() if room.data.get(flag)]
-        best: tuple[float, str] | None = None
-        for room in leads:
-            room_value = value(room)
-            if room_value is not None and (best is None or room_value > best[0]):
-                best = (room_value, room.room_name)
-        names = [room.room_name for room in leads]
-        if best is None:
-            return LeadValue(None, None, names)
-        return LeadValue(round(best[0], LEAD_ROUND_DIGITS), best[1], names)
-
-    @property
-    def lead_hold_flow(self) -> LeadValue:
-        """Flow the heating-limit lead rooms need to hold their setpoint."""
-        return self._lead(
-            CONF_LEAD_HEATING_LIMIT,
-            lambda room: room.normal_gated_hold_flow_temperature_c,
-        )
-
-    @property
-    def lead_feedforward_flow(self) -> LeadValue:
-        """Hold flow of the flow lead rooms, ungated: the feedforward."""
-        return self._lead(
-            CONF_LEAD_FLOW, lambda room: room.normal_hold_flow_temperature_c
-        )
-
-    @property
-    def lead_boost_flow(self) -> LeadValue:
-        """Recovery flow of the flow lead rooms that recover after a mode change."""
-        return self._lead(CONF_LEAD_FLOW, lambda room: room.flow_boost_temperature_c)
-
-    @property
-    def design_flow_c(self) -> float | None:
-        """Highest design flow of the flow lead rooms' radiators."""
-        return self._lead(
-            CONF_LEAD_FLOW, lambda room: room.design_flow_temperature_c
-        ).value_c
-
-    def feedback_samples(self) -> list[DemandSample]:
-        """Valve demand of the flow lead rooms the feedback may use."""
-        return [
-            sample
-            for room in self.rooms.values()
-            if room.data.get(CONF_LEAD_FLOW)
-            and (sample := room.feedback_sample) is not None
-        ]
 
     @property
     def measured_flow_c(self) -> float | None:
@@ -550,32 +385,6 @@ class HeatingHub(Observable):
             return True
         return any(room.mpc.hot_water_charging for room in self.rooms.values())
 
-    def lead_curve_hold_flow(self, end: CurveEnd) -> LeadValue:
-        """Flow the flow lead rooms need at one end of the curve, at comfort."""
-        return self._lead(
-            CONF_LEAD_FLOW, lambda room: room.hold_flow_at_curve_end_c(end)
-        )
-
-    def hold_flow_curves(self, outdoor_values: list[float]) -> list[dict[str, Any]]:
-        """Each room's comfort hold flow over the outdoor values, for the card.
-
-        Not stepped up to the control's grid, so the curves come out smooth.
-        """
-        return [
-            {
-                "name": room.room_name,
-                "lead": bool(room.data.get(CONF_LEAD_FLOW)),
-                "flow_c": [
-                    None
-                    if (flow_c := room.comfort_hold_flow_c(value, round_up=False))
-                    is None
-                    else round(flow_c, 1)
-                    for value in outdoor_values
-                ],
-            }
-            for room in self.rooms.values()
-        ]
-
     @property
     def flow_threshold_c(self) -> float | None:
         """The threshold the demand compares to; None while its entity is empty."""
@@ -588,7 +397,7 @@ class HeatingHub(Observable):
     @property
     def heating_demand(self) -> bool | None:
         """The lead rooms need more than the heat pump's lowest useful flow."""
-        hold_c = self.lead_hold_flow.value_c
+        hold_c = self.leads.hold_flow.value_c
         threshold_c = self.flow_threshold_c
         if hold_c is None or threshold_c is None:
             return None
@@ -619,4 +428,4 @@ class HeatingHub(Observable):
 
     @property
     def hold_flow_reserve(self) -> float | None:
-        return self._reserve(self.lead_hold_flow)
+        return self._reserve(self.leads.hold_flow)

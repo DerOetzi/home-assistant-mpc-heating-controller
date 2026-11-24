@@ -158,7 +158,7 @@ class HeatingSeasonAutoSwitch(HeatingHubEntity, _RestoredToggleSwitch):
 
     @property
     def is_on(self) -> bool:
-        return self._hub.season_auto_on
+        return self._hub.season.auto_on
 
     async def _async_apply(self, on: bool) -> None:
         await self._hub.async_set_season_auto(on)
