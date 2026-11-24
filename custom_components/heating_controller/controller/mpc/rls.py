@@ -25,11 +25,12 @@ class RlsUpdateResult:
 
 
 class RecursiveLeastSquares:
-    def __init__(
+    def __init__(  # noqa: PLR0913 -- every tuning knob is keyword-only
         self,
         theta0: list[float],
         p0_diag: list[float],
         forgetting: float,
+        *,
         lower_bounds: list[float] | None = None,
         upper_bounds: list[float] | None = None,
         huber_k: float | None = 2.0,
@@ -86,30 +87,41 @@ class RecursiveLeastSquares:
             raise ValueError("weight must be positive")
         lam = self.forgetting
         residual = y - self.predict(x)
-        error = residual
         px = [sum(self.p[i][j] * x[j] for j in range(self._n)) for i in range(self._n)]
         denominator = lam / weight + sum(x[i] * px[i] for i in range(self._n))
-
-        clipped = False
-        if (
-            self.huber_k is not None
-            and self.noise_variance is not None
-            and self.samples >= MIN_SAMPLES_FOR_CLIPPING
-        ):
-            # The expected spread of the residual includes the parameter
-            # uncertainty: early on a large residual is the model's error,
-            # not an outlier.
-            variance = max(self.noise_variance, self.noise_floor_variance)
-            limit = self.huber_k * sqrt(variance * denominator * weight / lam)
-            if abs(error) > limit:
-                error = limit if error > 0 else -limit
-                clipped = True
+        error = self._clipped_error(residual, denominator * weight / lam)
         gain = [v / denominator for v in px]
         for i in range(self._n):
             self.theta[i] = min(
                 self.upper_bounds[i],
                 max(self.lower_bounds[i], self.theta[i] + gain[i] * error),
             )
+        self._update_covariance(gain, px)
+        # A priori times a posteriori residual estimates the noise variance
+        # without the parameter error of the first samples.
+        posterior_residual = error * (lam / weight) / denominator
+        self._update_noise(max(0.0, error * posterior_residual))
+        return RlsUpdateResult(residual=residual, clipped=error != residual)
+
+    def _clipped_error(self, residual: float, spread: float) -> float:
+        """The residual, clipped to huber_k times its expected spread."""
+        if (
+            self.huber_k is None
+            or self.noise_variance is None
+            or self.samples < MIN_SAMPLES_FOR_CLIPPING
+        ):
+            return residual
+        # The expected spread of the residual includes the parameter
+        # uncertainty: early on a large residual is the model's error,
+        # not an outlier.
+        variance = max(self.noise_variance, self.noise_floor_variance)
+        limit = self.huber_k * sqrt(variance * spread)
+        if abs(residual) <= limit:
+            return residual
+        return limit if residual > 0 else -limit
+
+    def _update_covariance(self, gain: list[float], px: list[float]) -> None:
+        lam = self.forgetting
         self.p = [
             [(self.p[i][j] - gain[i] * px[j]) / lam for j in range(self._n)]
             for i in range(self._n)
@@ -121,28 +133,31 @@ class RecursiveLeastSquares:
                 self.p[i][j] = mean
                 self.p[j][i] = mean
         if self.p_max_diag is not None:
-            # Forgetting inflates the variance of a parameter the data do not
-            # excite (a block of days that never come). Capped per parameter,
-            # by scaling its row and column, the others keep learning.
-            for i in range(self._n):
-                if self.p[i][i] > self.p_max_diag[i]:
-                    scale = sqrt(self.p_max_diag[i] / self.p[i][i])
-                    for j in range(self._n):
-                        self.p[i][j] *= scale
-                        self.p[j][i] *= scale
+            self._cap_variance(self.p_max_diag)
 
-        # A priori times a posteriori residual estimates the noise variance
-        # without the parameter error of the first samples.
-        posterior_residual = error * (lam / weight) / denominator
-        sample_variance = max(0.0, error * posterior_residual)
+    def _cap_variance(self, p_max_diag: list[float]) -> None:
+        """Cap each parameter's variance by scaling its row and column.
+
+        Forgetting inflates the variance of a parameter the data do not
+        excite (a block of days that never come); capped per parameter, the
+        others keep learning.
+        """
+        for i in range(self._n):
+            if self.p[i][i] > p_max_diag[i]:
+                scale = sqrt(p_max_diag[i] / self.p[i][i])
+                for j in range(self._n):
+                    self.p[i][j] *= scale
+                    self.p[j][i] *= scale
+
+    def _update_noise(self, sample_variance: float) -> None:
         self.samples += 1
         if self.noise_variance is None:
             self.noise_variance = sample_variance
-        else:
-            effective = 1 / (1 - lam) if lam < 1 else inf
-            count = min(self.samples, effective)
-            self.noise_variance += (sample_variance - self.noise_variance) / count
-        return RlsUpdateResult(residual=residual, clipped=clipped)
+            return
+        lam = self.forgetting
+        effective = 1 / (1 - lam) if lam < 1 else inf
+        count = min(self.samples, effective)
+        self.noise_variance += (sample_variance - self.noise_variance) / count
 
     def to_dict(self) -> dict:
         return {

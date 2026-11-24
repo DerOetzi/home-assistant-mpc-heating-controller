@@ -198,71 +198,53 @@ class FlowController:
     def decide(
         self, inputs: FlowInputs, curve: HeatingCurve, now_ts: float
     ) -> FlowDecision:
-        cfg = self.config
-        curve_flow = self._curve_flow(inputs, curve)
-
         if inputs.heating_on is False:
             return FlowDecision(None, None, None, reason="heating_off")
         if not inputs.reachable:
             return FlowDecision(None, None, None, reason="unreachable")
-
-        needs_curve = cfg.mode is ActuatorMode.OFFSET
+        curve_flow = self._curve_flow(inputs, curve)
+        needs_curve = self.config.mode is ActuatorMode.OFFSET
         bounds = self.bounds(inputs, curve)
         if (
             inputs.feedforward_flow_c is None
             or bounds is None
             or (needs_curve and curve_flow is None)
         ):
-            self._charge_active = False
-            target = (
-                None
-                if curve_flow is None
-                else curve_flow + (cfg.fallback if needs_curve else 0.0)
-            )
-            value = self._round(cfg.fallback)
-            if self._missing_since is None:
-                self._missing_since = now_ts
-            if (
-                not self._fallback_active
-                and now_ts - self._missing_since < FALLBACK_GRACE_S
-            ):
-                return FlowDecision(
-                    target, value, FlowSource.FALLBACK, reason="fallback_wait"
-                )
-            # Once written, sent again only after the hold time: the cloud
-            # shows the new value with its next poll.
-            already = self.last_written is not None and math.isclose(
-                self.last_written, value
-            )
-            write = (
-                None
-                if _same(inputs.actual, value)
-                or (self._fallback_active and already and self._held(now_ts))
-                else value
-            )
-            self._fallback_active = True
-            return FlowDecision(
-                target,
-                value,
-                FlowSource.FALLBACK,
-                write=write,
-                priority=WritePriority.REQUIRED,
-                reason="fallback",
-            )
-
+            return self._decide_fallback(inputs, curve_flow, now_ts)
         self._missing_since = None
-        lead = min(inputs.feedforward_flow_c + inputs.feedback_k, bounds.upper_c)
-        target, source = lead, FlowSource.LEAD
-        if inputs.boost_flow_c is not None and inputs.boost_flow_c > target:
-            target, source = inputs.boost_flow_c, FlowSource.BOOST
-        if inputs.charge_flow_c is not None and inputs.charge_flow_c > target:
-            target, source = inputs.charge_flow_c, FlowSource.CHARGE
-        if target < cfg.threshold_c:
-            target, source = cfg.threshold_c, FlowSource.THRESHOLD
+        target, source = self._lead_target(
+            inputs, inputs.feedforward_flow_c, bounds.upper_c
+        )
+        raw = target - curve_flow if needs_curve and curve_flow is not None else target
+        return self._decide_write(inputs, round(target, 1), source, raw, now_ts)
 
-        raw = target - curve_flow if curve_flow is not None and needs_curve else target
+    def _lead_target(
+        self, inputs: FlowInputs, feedforward_c: float, upper_c: float
+    ) -> tuple[float, FlowSource]:
+        """The highest flow asked for: lead, boost, charge, or the threshold."""
+        target = min(feedforward_c + inputs.feedback_k, upper_c)
+        source = FlowSource.LEAD
+        for flow_c, flow_source in (
+            (inputs.boost_flow_c, FlowSource.BOOST),
+            (inputs.charge_flow_c, FlowSource.CHARGE),
+        ):
+            if flow_c is not None and flow_c > target:
+                target, source = flow_c, flow_source
+        if target < self.config.threshold_c:
+            return self.config.threshold_c, FlowSource.THRESHOLD
+        return target, source
+
+    def _decide_write(
+        self,
+        inputs: FlowInputs,
+        target_c: float,
+        source: FlowSource,
+        raw: float,
+        now_ts: float,
+    ) -> FlowDecision:
+        """Write the value unless it is there, too close, or held back."""
+        cfg = self.config
         value = self._round(raw)
-
         charge_now = source is FlowSource.CHARGE
         # Entering or leaving a charge window, or leaving the fallback, is
         # not held back: the raise has to be there before the pause.
@@ -270,28 +252,66 @@ class FlowController:
         self._charge_active = charge_now
         self._fallback_active = False
 
-        decision = FlowDecision(round(target, 1), value, source)
         if _same(inputs.actual, value):
-            return decision
+            return FlowDecision(target_c, value, source)
         if inputs.actual is not None and not urgent:
             # Against the unrounded need: rounding up alone would turn every
             # tenth above the step into a write.
             needed = max(cfg.minimum, min(cfg.maximum, raw))
             if abs(needed - inputs.actual) < cfg.hysteresis_k:
-                return FlowDecision(
-                    decision.target_flow_c, value, source, reason="hysteresis"
-                )
+                return FlowDecision(target_c, value, source, reason="hysteresis")
             if self._held(now_ts):
-                return FlowDecision(
-                    decision.target_flow_c, value, source, reason="hold"
-                )
+                return FlowDecision(target_c, value, source, reason="hold")
         return FlowDecision(
-            decision.target_flow_c,
+            target_c,
             value,
             source,
             write=value,
             priority=WritePriority.REQUIRED if urgent else WritePriority.NORMAL,
             reason="charge" if urgent and charge_now else "",
+        )
+
+    def _decide_fallback(
+        self, inputs: FlowInputs, curve_flow: float | None, now_ts: float
+    ) -> FlowDecision:
+        """No feedforward: the fixed fallback value, after a grace time."""
+        cfg = self.config
+        self._charge_active = False
+        needs_curve = cfg.mode is ActuatorMode.OFFSET
+        target = (
+            None
+            if curve_flow is None
+            else curve_flow + (cfg.fallback if needs_curve else 0.0)
+        )
+        value = self._round(cfg.fallback)
+        if self._missing_since is None:
+            self._missing_since = now_ts
+        if (
+            not self._fallback_active
+            and now_ts - self._missing_since < FALLBACK_GRACE_S
+        ):
+            return FlowDecision(
+                target, value, FlowSource.FALLBACK, reason="fallback_wait"
+            )
+        # Once written, sent again only after the hold time: the cloud
+        # shows the new value with its next poll.
+        already = self.last_written is not None and math.isclose(
+            self.last_written, value
+        )
+        write = (
+            None
+            if _same(inputs.actual, value)
+            or (self._fallback_active and already and self._held(now_ts))
+            else value
+        )
+        self._fallback_active = True
+        return FlowDecision(
+            target,
+            value,
+            FlowSource.FALLBACK,
+            write=write,
+            priority=WritePriority.REQUIRED,
+            reason="fallback",
         )
 
 

@@ -205,9 +205,26 @@ class HotWaterController:
         return above and battery_ok and discharge_ok and tank_ok and season_ok
 
     def decide(self, inputs: HotWaterInputs) -> HotWaterDecision:
+        self._update_mode(inputs)
+        phase, base = self._phase(inputs)
+        current = inputs.current_target_c
+        target = self._target(inputs, phase, base)
+        write = None
+        if current is None or not math.isclose(current, target):
+            write = target
+        # Only the surplus switching may be dropped when the budget is low;
+        # schedule, boost and legionella targets have to arrive.
+        priority = (
+            WritePriority.NORMAL
+            if phase is HotWaterPhase.SURPLUS or self.mode is HotWaterMode.SURPLUS
+            else WritePriority.REQUIRED
+        )
+        return HotWaterDecision(self.mode, phase, target, write, priority)
+
+    def _update_mode(self, inputs: HotWaterInputs) -> None:
+        """Follow the manual mode, or the surplus after the minimum hold."""
         cfg = self.config
         now_ts = inputs.now.timestamp()
-
         if (
             self.manual is not ManualMode.AUTO
             and now_ts - self.manual_since_ts >= cfg.manual_hold_s
@@ -220,32 +237,39 @@ class HotWaterController:
                 now_ts - self.mode_changed_ts >= cfg.min_hold_s
             ):
                 self.mode, self.mode_changed_ts = new_mode, now_ts
-        else:
-            new_mode = HotWaterMode(self.manual.value)
-            if new_mode is not self.mode:
-                self.mode, self.mode_changed_ts = new_mode, now_ts
+            return
+        new_mode = HotWaterMode(self.manual.value)
+        if new_mode is not self.mode:
+            self.mode, self.mode_changed_ts = new_mode, now_ts
 
+    def _phase(self, inputs: HotWaterInputs) -> tuple[HotWaterPhase, float]:
+        """The charge phase now and its own target."""
+        cfg = self.config
         clock = inputs.now.time()
         season = inputs.heating_season
-        window_c = cfg.heating_window_c if season else cfg.window_c
-        night_c = cfg.heating_night_c if season else cfg.night_c
         night_end = cfg.heating_night_end if season else cfg.night_end
         if inputs.legionella_active:
-            phase, base = HotWaterPhase.LEGIONELLA, cfg.legionella_c
-        elif inputs.boost_on:
-            phase, base = HotWaterPhase.BOOST, cfg.boost_c
-        elif self.mode is HotWaterMode.SURPLUS:
-            phase, base = HotWaterPhase.SURPLUS, cfg.surplus_c
-        elif cfg.window_enabled and in_window(clock, cfg.window_start, cfg.window_end):
-            phase, base = HotWaterPhase.CHARGE_WINDOW, window_c
-        elif cfg.night_enabled and in_window(clock, cfg.night_start, night_end):
-            phase, base = HotWaterPhase.NIGHT, night_c
-        else:
-            phase, base = HotWaterPhase.NORMAL, cfg.normal_c
+            return HotWaterPhase.LEGIONELLA, cfg.legionella_c
+        if inputs.boost_on:
+            return HotWaterPhase.BOOST, cfg.boost_c
+        if self.mode is HotWaterMode.SURPLUS:
+            return HotWaterPhase.SURPLUS, cfg.surplus_c
+        if cfg.window_enabled and in_window(clock, cfg.window_start, cfg.window_end):
+            return (
+                HotWaterPhase.CHARGE_WINDOW,
+                cfg.heating_window_c if season else cfg.window_c,
+            )
+        if cfg.night_enabled and in_window(clock, cfg.night_start, night_end):
+            return HotWaterPhase.NIGHT, cfg.heating_night_c if season else cfg.night_c
+        return HotWaterPhase.NORMAL, cfg.normal_c
 
-        forced = cfg.forced_charge and phase in FORCED_PHASES
+    def _target(
+        self, inputs: HotWaterInputs, phase: HotWaterPhase, base: float
+    ) -> float:
+        """The phase's target, lifted above the tank for a forced charge."""
+        cfg = self.config
         current = inputs.current_target_c
-        if not forced:
+        if not (cfg.forced_charge and phase in FORCED_PHASES):
             target = base
         elif current is not None and current >= base:
             # Keep a target already at or above the phase's own, so it does
@@ -256,19 +280,7 @@ class HotWaterController:
             target = min(
                 max(base, tank + cfg.reheat_hysteresis_k + 1), cfg.max_setpoint_c
             )
-        target = float(round(target))
-
-        write = None
-        if current is None or not math.isclose(current, target):
-            write = target
-        # Only the surplus switching may be dropped when the budget is low;
-        # schedule, boost and legionella targets have to arrive.
-        priority = (
-            WritePriority.NORMAL
-            if phase is HotWaterPhase.SURPLUS or self.mode is HotWaterMode.SURPLUS
-            else WritePriority.REQUIRED
-        )
-        return HotWaterDecision(self.mode, phase, target, write, priority)
+        return float(round(target))
 
 
 # --- Charge detection ------------------------------------------------------

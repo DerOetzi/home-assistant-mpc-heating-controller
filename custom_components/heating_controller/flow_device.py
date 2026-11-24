@@ -29,7 +29,7 @@ from .control.flow import (
     HeatingCurve,
 )
 from .control.flow_correction import SETTLE_S, CorrectionFreeze
-from .control.flow_feedback import FeedbackFreeze
+from .control.flow_feedback import FeedbackFreeze, TargetLimit
 from .listeners import Observable
 from .night import NightWindow
 from .state_reader import attribute_float, state_float
@@ -195,19 +195,20 @@ class FlowDevice(Observable):
             else 0.0,
         )
         bounds = self.controller.bounds(inputs, self.curve)
-        at_lower_limit = at_upper_limit = False
+        limit: TargetLimit | None = None
         if bounds is not None and inputs.feedforward_flow_c is not None:
             lifted = inputs.feedforward_flow_c + inputs.feedback_k
-            at_lower_limit = lifted <= bounds.lower_c
-            at_upper_limit = lifted >= bounds.upper_c
+            if lifted <= bounds.lower_c:
+                limit = TargetLimit.LOWER
+            elif lifted >= bounds.upper_c:
+                limit = TargetLimit.UPPER
         freeze = self._freeze_reason(inputs, bounds is None)
         feedback.update(
             hub.feedback_samples(),
             self._step,
             freeze,
             now_ts,
-            at_lower_limit=at_lower_limit,
-            at_upper_limit=at_upper_limit,
+            limit=limit,
             night=self._night.is_night(now_ts),
         )
         if self.mode is ActuatorMode.OFFSET:

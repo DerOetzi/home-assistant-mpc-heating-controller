@@ -75,6 +75,13 @@ OVER_TARGET_C = 0.1
 MAX_TICK_S = 300.0
 
 
+class TargetLimit(StrEnum):
+    """The limit of the flow target the decided value already sits at."""
+
+    LOWER = "lower"
+    UPPER = "upper"
+
+
 class FeedbackFreeze(StrEnum):
     WRITE_OFF = "write_off"
     HEATING_OFF = "heating_off"
@@ -153,14 +160,14 @@ class FlowFeedback:
         self._pause_since_ts = None
         self._pause_reason = None
 
-    def update(
+    def update(  # noqa: PLR0913 -- the situation flags are keyword-only
         self,
         samples: list[DemandSample],
         step_k: float,
         frozen: FeedbackFreeze | None,
         now_ts: float,
-        at_lower_limit: bool = False,
-        at_upper_limit: bool = False,
+        *,
+        limit: TargetLimit | None = None,
         night: bool = False,
     ) -> None:
         """Advance the timers and take at most one step.
@@ -201,12 +208,12 @@ class FlowFeedback:
         if self._count_s <= -UP_AFTER_S:
             self._count_s = 0.0
             self._room_count_s.clear()
-            if not at_upper_limit:
+            if limit is not TargetLimit.UPPER:
                 self._step(step_k, now_ts)
         elif self._count_s >= self.down_after_s:
             self._count_s = 0.0
             self._room_count_s.clear()
-            if not at_lower_limit:
+            if limit is not TargetLimit.LOWER:
                 self._step(-step_k, now_ts)
 
     @property

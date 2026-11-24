@@ -46,6 +46,10 @@ ignore = ["E501"]
 [tool.ruff.lint.mccabe]
 max-complexity = 10
 
+[tool.ruff.lint.pylint]
+# Guard clauses that map a state to its outcome read best as one flat chain.
+max-returns = 9
+
 [tool.ruff.lint.per-file-ignores]
 # Test helpers build fixtures with many keyword arguments and import late on
 # purpose (after the HA test harness is patched); card texts use real dashes.

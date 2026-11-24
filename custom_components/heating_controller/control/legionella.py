@@ -106,87 +106,64 @@ class LegionellaController:
         ]
 
     def step(self, inputs: LegionellaInputs) -> None:
+        state = self.cycle.state
+        if state is LegionellaState.WAITING:
+            self._step_waiting(inputs)
+        elif state is LegionellaState.RUNNING:
+            self._step_running(inputs)
+        else:
+            self._step_idle(inputs)
+
+    def _step_idle(self, inputs: LegionellaInputs) -> None:
+        """Idle, done or failed: start a scheduled cycle, or miss it."""
         cfg = self.config
         cycle = self.cycle
         now = inputs.now
-        outlet = inputs.outlet_c
-        already_hot = (
-            outlet is not None
-            and outlet >= cfg.outlet_threshold_c - ALREADY_HOT_MARGIN_K
-        )
         started_today = (
             cycle.last_start is not None and cycle.last_start.date() == now.date()
         )
-        scheduled_day = now.weekday() in cfg.weekdays
-
-        if cycle.state in (
-            LegionellaState.IDLE,
-            LegionellaState.DONE,
-            LegionellaState.FAILED,
+        if (
+            now.weekday() not in cfg.weekdays
+            or started_today
+            or inputs.heater_off
+            or self._already_hot(inputs)
         ):
-            if scheduled_day and not started_today and not inputs.heater_off:
-                windows = self._windows(now)
-                in_window = any(start <= now <= end for start, end in windows)
-                fallback_reached = cfg.fallback is not None and now >= windows[-1][0]
-                forecast_ok = inputs.forecast is not None and (
-                    inputs.forecast > cfg.forecast_threshold
-                    if cfg.forecast_above
-                    else inputs.forecast < cfg.forecast_threshold
-                )
-                if in_window and not already_hot and (forecast_ok or fallback_reached):
-                    cycle.state = LegionellaState.WAITING
-                    cycle.forced = False
-                elif (
-                    not already_hot
-                    and not started_today
-                    and now >= windows[-1][1] + timedelta(minutes=DEADLINE_GRACE_MIN)
-                    and cycle.failure is not LegionellaFailure.NOT_STARTED
-                    and (
-                        cycle.last_success is None
-                        or cycle.last_success.date() != now.date()
-                    )
-                ):
-                    cycle.state = LegionellaState.FAILED
-                    cycle.failure = LegionellaFailure.NOT_STARTED
             return
+        windows = self._windows(now)
+        in_window = any(start <= now <= end for start, end in windows)
+        fallback_reached = cfg.fallback is not None and now >= windows[-1][0]
+        if in_window and (self._forecast_ok(inputs.forecast) or fallback_reached):
+            cycle.state = LegionellaState.WAITING
+            cycle.forced = False
+        elif self._deadline_missed(now, windows):
+            self._fail(LegionellaFailure.NOT_STARTED)
 
-        if cycle.state is LegionellaState.WAITING:
-            if inputs.heater_off and not cycle.forced:
-                cycle.state = LegionellaState.IDLE
-                return
-            if (
-                inputs.target_c is not None
-                and inputs.target_c >= cfg.outlet_threshold_c
-            ):
-                cycle.state = LegionellaState.RUNNING
-                cycle.started = now
-                cycle.last_start = now
-                cycle.outlet_ok = False
-                cycle.return_ok = cfg.return_threshold_c is None
-                cycle.return_hot_since = None
-                return
+    def _step_waiting(self, inputs: LegionellaInputs) -> None:
+        """Target requested: running once the heater took it."""
+        cycle = self.cycle
+        now = inputs.now
+        if inputs.heater_off and not cycle.forced:
+            cycle.state = LegionellaState.IDLE
+        elif (
+            inputs.target_c is not None
+            and inputs.target_c >= self.config.outlet_threshold_c
+        ):
+            self._start_running(now)
+        elif not cycle.forced and not any(
+            start <= now <= end for start, end in self._windows(now)
+        ):
             # Not applied within the retry window (cloud down, say): give up.
-            if not cycle.forced and not any(
-                start <= now <= end for start, end in self._windows(now)
-            ):
-                cycle.state = LegionellaState.FAILED
-                cycle.failure = LegionellaFailure.NOT_STARTED
-            return
+            self._fail(LegionellaFailure.NOT_STARTED)
 
-        # RUNNING: outlet and return checked side by side; both stick.
-        if outlet is not None and outlet >= cfg.outlet_threshold_c:
+    def _step_running(self, inputs: LegionellaInputs) -> None:
+        """Outlet and return checked side by side; both stick."""
+        cfg = self.config
+        cycle = self.cycle
+        now = inputs.now
+        if inputs.outlet_c is not None and inputs.outlet_c >= cfg.outlet_threshold_c:
             cycle.outlet_ok = True
-        if not cycle.return_ok and cfg.return_threshold_c is not None:
-            if (
-                inputs.return_c is not None
-                and inputs.return_c >= cfg.return_threshold_c
-            ):
-                if cycle.return_hot_since is None:
-                    cycle.return_hot_since = now
-                if now - cycle.return_hot_since >= timedelta(minutes=cfg.hold_min):
-                    cycle.return_ok = True
-            else:
-                cycle.return_hot_since = None
+        if not cycle.return_ok:
+            self._check_return(inputs.return_c, now)
         if cycle.outlet_ok and cycle.return_ok:
             cycle.state = LegionellaState.DONE
             cycle.failure = None
@@ -194,12 +171,64 @@ class LegionellaController:
         elif cycle.started is not None and now - cycle.started >= timedelta(
             minutes=cfg.verify_timeout_min
         ):
-            cycle.state = LegionellaState.FAILED
-            cycle.failure = (
-                LegionellaFailure.OUTLET
-                if not cycle.outlet_ok
-                else LegionellaFailure.RETURN
+            self._fail(
+                LegionellaFailure.RETURN
+                if cycle.outlet_ok
+                else LegionellaFailure.OUTLET
             )
+
+    def _check_return(self, return_c: float | None, now: datetime) -> None:
+        """The return counts once it held its threshold for the hold time."""
+        threshold_c = self.config.return_threshold_c
+        cycle = self.cycle
+        if threshold_c is None:
+            return
+        if return_c is None or return_c < threshold_c:
+            cycle.return_hot_since = None
+            return
+        if cycle.return_hot_since is None:
+            cycle.return_hot_since = now
+        if now - cycle.return_hot_since >= timedelta(minutes=self.config.hold_min):
+            cycle.return_ok = True
+
+    def _start_running(self, now: datetime) -> None:
+        cycle = self.cycle
+        cycle.state = LegionellaState.RUNNING
+        cycle.started = now
+        cycle.last_start = now
+        cycle.outlet_ok = False
+        cycle.return_ok = self.config.return_threshold_c is None
+        cycle.return_hot_since = None
+
+    def _fail(self, failure: LegionellaFailure) -> None:
+        self.cycle.state = LegionellaState.FAILED
+        self.cycle.failure = failure
+
+    def _already_hot(self, inputs: LegionellaInputs) -> bool:
+        outlet = inputs.outlet_c
+        return (
+            outlet is not None
+            and outlet >= self.config.outlet_threshold_c - ALREADY_HOT_MARGIN_K
+        )
+
+    def _forecast_ok(self, forecast: float | None) -> bool:
+        cfg = self.config
+        if forecast is None:
+            return False
+        if cfg.forecast_above:
+            return forecast > cfg.forecast_threshold
+        return forecast < cfg.forecast_threshold
+
+    def _deadline_missed(
+        self, now: datetime, windows: list[tuple[datetime, datetime]]
+    ) -> bool:
+        """The last window passed today without a start or a success."""
+        cycle = self.cycle
+        return (
+            now >= windows[-1][1] + timedelta(minutes=DEADLINE_GRACE_MIN)
+            and cycle.failure is not LegionellaFailure.NOT_STARTED
+            and (cycle.last_success is None or cycle.last_success.date() != now.date())
+        )
 
     def export(self) -> dict[str, Any]:
         c = self.cycle

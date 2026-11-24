@@ -188,6 +188,39 @@ def _mode_target_c(mpc_input: RoomMpcInput) -> float:
 
 
 @dataclass
+class _StretchIntegral:
+    """Sums over a heat-balance stretch, each weighted by its duration."""
+
+    start_ts: float
+    end_ts: float
+    heat_j: float = 0.0
+    saturated_s: float = 0.0
+    outdoor_ks: float = 0.0
+    room_ks: float = 0.0
+    flow_ks: float = 0.0
+    flow_s: float = 0.0
+
+    @property
+    def duration_s(self) -> float:
+        return self.end_ts - self.start_ts
+
+    @property
+    def temperature_difference_ks(self) -> float:
+        return self.room_ks - self.outdoor_ks
+
+    @property
+    def mean_temperature_difference_c(self) -> float:
+        return self.temperature_difference_ks / self.duration_s
+
+    def record_means(self, info: UaBalanceInfo) -> None:
+        """The stretch's means for diagnostics; a retry overwrites them."""
+        info.last_mean_outdoor_c = self.outdoor_ks / self.duration_s
+        info.last_mean_room_c = self.room_ks / self.duration_s
+        info.last_mean_flow_c = self.flow_ks / self.flow_s if self.flow_s > 0 else None
+        info.last_mean_heating_w = self.heat_j / self.duration_s
+
+
+@dataclass
 class LearnerHistoryEntry:
     timestamp: float
     room_temperature_c: float
@@ -869,34 +902,43 @@ class RoomMpcModelLearner:
                 history[start].timestamp, None, CapacityOutcome.TOO_SMALL
             )
 
-        target_c = history[start].target_temperature_c
-        end: int | None = None
-        for index in range(start, len(history)):
-            entry = history[index]
-            if self._invalid_entry_outcome(entry) is not None:
-                end = index - 1
-                break
-            if (
-                target_c is None
-                or entry.target_temperature_c is None
-                or abs(entry.target_temperature_c - target_c) >= JUMP_TARGET_CHANGE_C
-            ):
-                end = index - 1
-                break
-            if entry.room_temperature_c >= target_c - JUMP_SETTLED_C:
-                end = index
-                break
-            if entry.timestamp - history[start].timestamp >= JUMP_MAX_S:
-                end = index
-                break
+        end = self._recovery_end_index(start)
         if end is None:
             self._reset_vent_info(history[start].timestamp, None)
             info.outcome = CapacityOutcome.RUNNING
             return None
+        return self._learn_from_airing(history[start : end + 1], history[start])
 
-        stretch = history[start : end + 1]
+    def _recovery_end_index(self, start: int) -> int | None:
+        """Last sample of the recovery after an airing; None while it runs.
+
+        It ends at its setpoint, after the longest jump, or just before a
+        sample that is invalid or has another setpoint.
+        """
+        history = self._history
+        target_c = history[start].target_temperature_c
+        for index in range(start, len(history)):
+            entry = history[index]
+            if (
+                self._invalid_entry_outcome(entry) is not None
+                or target_c is None
+                or entry.target_temperature_c is None
+                or abs(entry.target_temperature_c - target_c) >= JUMP_TARGET_CHANGE_C
+            ):
+                return index - 1
+            if (
+                entry.room_temperature_c >= target_c - JUMP_SETTLED_C
+                or entry.timestamp - history[start].timestamp >= JUMP_MAX_S
+            ):
+                return index
+        return None
+
+    def _learn_from_airing(
+        self, stretch: list[LearnerHistoryEntry], first: LearnerHistoryEntry
+    ) -> CapacityOutcome:
+        info = self._vent_info
         self._reset_vent_info(
-            history[start].timestamp, stretch[-1].timestamp if stretch else None
+            first.timestamp, stretch[-1].timestamp if stretch else None
         )
         rejection = self._estimate_stretch(VENT, stretch, info)
         if rejection is not None:
@@ -1037,16 +1079,7 @@ class RoomMpcModelLearner:
             if start_ts < end_ts < closed_end_ts:
                 self._ua_balance_closed = (start_ts, end_ts)
             return
-        if (
-            not self._history
-            or self._learning_paused
-            or self._room_sensor_fallback
-            or self._valve_position_missing
-            or self._trv_adapting
-            or self._radiator_not_heating
-            or self._window_open
-            or self._outdoor_temperature_missing
-        ):
+        if not self._history or self._ua_blocker() is not None:
             return
         start_ts = self._ua_balance_start_ts()
         if end_ts <= start_ts or not self._has_sun_free_sample(start_ts, end_ts):
@@ -1083,23 +1116,34 @@ class RoomMpcModelLearner:
             start_ts, end_ts = self._ua_balance_closed
             self._ua_balance_closed = None
             return self._balance_stretch(start_ts, end_ts)
-        if self._learning_paused:
-            return UaBalanceOutcome.PAUSED
-        if self._outdoor_temperature_missing:
-            return UaBalanceOutcome.OUTDOOR_TEMPERATURE_MISSING
-        if self._room_sensor_fallback:
-            return UaBalanceOutcome.ROOM_SENSOR_FALLBACK
-        if self._valve_position_missing:
-            return UaBalanceOutcome.VALVE_POSITION_MISSING
-        if self._trv_adapting:
-            return UaBalanceOutcome.TRV_ADAPTING
-        if self._radiator_not_heating:
-            return UaBalanceOutcome.RADIATOR_NOT_HEATING
-        if self._window_open:
-            return UaBalanceOutcome.WINDOW_OPEN
+        blocker = self._ua_blocker()
+        if blocker is not None:
+            return blocker
         if not self._history:
             return UaBalanceOutcome.COLLECTING
+        return self._evaluate_open_stretch()
 
+    def _ua_blocker(self) -> UaBalanceOutcome | None:
+        """Why the room cannot be balanced right now; None if it can."""
+        for blocked, outcome in (
+            (self._learning_paused, UaBalanceOutcome.PAUSED),
+            (
+                self._outdoor_temperature_missing,
+                UaBalanceOutcome.OUTDOOR_TEMPERATURE_MISSING,
+            ),
+            (self._room_sensor_fallback, UaBalanceOutcome.ROOM_SENSOR_FALLBACK),
+            (self._valve_position_missing, UaBalanceOutcome.VALVE_POSITION_MISSING),
+            (self._trv_adapting, UaBalanceOutcome.TRV_ADAPTING),
+            (self._radiator_not_heating, UaBalanceOutcome.RADIATOR_NOT_HEATING),
+            (self._window_open, UaBalanceOutcome.WINDOW_OPEN),
+        ):
+            if blocked:
+                return outcome
+        return None
+
+    def _evaluate_open_stretch(self) -> UaBalanceOutcome:
+        """Balance the stretch since the last one once it is long enough."""
+        info = self._ua_balance_info
         # Checked before the room has to settle: after sunrise a room warming
         # up is no coasting room.
         if not self._has_sun_free_sample(
@@ -1131,135 +1175,152 @@ class RoomMpcModelLearner:
     def _balance_stretch(
         self, start_ts: float, end_ts: float, retried: bool = False
     ) -> UaBalanceOutcome:
-        info = self._ua_balance_info
         if self._loss_model.base_ua_w_per_k <= 0:
             return UaBalanceOutcome.COLLECTING
-
         settled_ts = self._settled_since_ts(start_ts)
         if settled_ts is None or settled_ts > end_ts:
             return UaBalanceOutcome.COASTING
-        start_ts = settled_ts
-
         window = [
             entry
             for entry in self._history
-            if start_ts <= entry.timestamp <= end_ts
+            if settled_ts <= entry.timestamp <= end_ts
             and self._sun_condition(entry.timestamp)
         ]
+        rejection = self._stretch_rejection(window)
+        if rejection is not None:
+            return rejection
+        stretch = self._integrate_stretch(window)
+        if stretch is None:
+            return UaBalanceOutcome.GAP
+        stretch.record_means(self._ua_balance_info)
+        if stretch.mean_temperature_difference_c < UA_BALANCE_MIN_MEAN_DELTA_C:
+            return UaBalanceOutcome.SMALL_TEMPERATURE_DIFFERENCE
+
+        drift_c = self._trend_drift_c(window)
+        if abs(drift_c) > UA_BALANCE_MAX_DRIFT_C:
+            retry_ts = None if retried else self._retry_start_ts(window)
+            if retry_ts is not None:
+                return self._balance_stretch(retry_ts, stretch.end_ts, retried=True)
+            # Kept for diagnostics, without a target: none was computed.
+            self._ua_balance_info.last_target_factor = None
+            self._ua_balance_info.last_drift_c = drift_c
+            return UaBalanceOutcome.DRIFT
+        return self._learn_from_stretch(stretch, drift_c)
+
+    def _stretch_rejection(
+        self, window: list[LearnerHistoryEntry]
+    ) -> UaBalanceOutcome | None:
+        """Why the stretch cannot be balanced; None if it can."""
         if (
             len(window) < MIN_HISTORY_SAMPLES
             or window[-1].timestamp - window[0].timestamp < UA_BALANCE_MIN_WINDOW_S
         ):
             return UaBalanceOutcome.TOO_SHORT
-        if any(entry.room_sensor_fallback for entry in window):
-            return UaBalanceOutcome.ROOM_SENSOR_FALLBACK
-        if any(entry.valve_position_missing for entry in window):
-            return UaBalanceOutcome.VALVE_POSITION_MISSING
-        if any(entry.trv_adapting for entry in window):
-            return UaBalanceOutcome.TRV_ADAPTING
-        if any(entry.radiator_not_heating for entry in window):
-            return UaBalanceOutcome.RADIATOR_NOT_HEATING
-        if any(entry.window_open for entry in window):
-            return UaBalanceOutcome.WINDOW_OPEN
-        end_ts = window[-1].timestamp
+        for flag, outcome in (
+            ("room_sensor_fallback", UaBalanceOutcome.ROOM_SENSOR_FALLBACK),
+            ("valve_position_missing", UaBalanceOutcome.VALVE_POSITION_MISSING),
+            ("trv_adapting", UaBalanceOutcome.TRV_ADAPTING),
+            ("radiator_not_heating", UaBalanceOutcome.RADIATOR_NOT_HEATING),
+            ("window_open", UaBalanceOutcome.WINDOW_OPEN),
+        ):
+            if any(getattr(entry, flag) for entry in window):
+                return outcome
+        return None
 
-        heat_j = 0.0
-        saturated_s = 0.0
-        outdoor_ks = 0.0
-        room_ks = 0.0
-        flow_ks = 0.0
-        flow_s = 0.0
+    def _integrate_stretch(
+        self, window: list[LearnerHistoryEntry]
+    ) -> _StretchIntegral | None:
+        """Heat and temperatures summed over the stretch; None on a gap."""
+        stretch = _StretchIntegral(
+            start_ts=window[0].timestamp, end_ts=window[-1].timestamp
+        )
         for previous, current in pairwise(window):
             duration_s = current.timestamp - previous.timestamp
             if duration_s > UA_BALANCE_MAX_GAP_S:
-                return UaBalanceOutcome.GAP
+                return None
             if previous.valve_saturated:
-                saturated_s += duration_s
-            heat_j += self._balance_heating_power_w(previous, current) * duration_s
-            outdoor_ks += _mean_outdoor_c(previous, current) * duration_s
-            room_ks += _mean_room_c(previous, current) * duration_s
-            if previous.flow_temperature_c is not None:
-                flow_ks += previous.flow_temperature_c * duration_s
-                flow_s += duration_s
-        temperature_difference_ks = room_ks - outdoor_ks
-
-        window_duration_s = end_ts - window[0].timestamp
-        # A retry below balances again and overwrites these with its stretch.
-        info.last_mean_outdoor_c = outdoor_ks / window_duration_s
-        info.last_mean_room_c = room_ks / window_duration_s
-        info.last_mean_flow_c = flow_ks / flow_s if flow_s > 0 else None
-        info.last_mean_heating_w = heat_j / window_duration_s
-
-        if temperature_difference_ks / window_duration_s < UA_BALANCE_MIN_MEAN_DELTA_C:
-            return UaBalanceOutcome.SMALL_TEMPERATURE_DIFFERENCE
-
-        drift_c = self._trend_drift_c(window)
-        if abs(drift_c) > UA_BALANCE_MAX_DRIFT_C and not retried:
-            # A room found holding still above or below its setpoint was
-            # sometimes only coasting slower than its sensor steps and then
-            # moved on. The same night counts from where it came near its
-            # setpoint, if enough of it is left.
-            near_ts = next(
-                (entry.timestamp for entry in window if self._near_setpoint(entry)),
-                None,
+                stretch.saturated_s += duration_s
+            stretch.heat_j += (
+                self._balance_heating_power_w(previous, current) * duration_s
             )
-            if (
-                not self._near_setpoint(window[0])
-                and near_ts is not None
-                and end_ts - near_ts >= UA_BALANCE_MIN_WINDOW_S
-            ):
-                return self._balance_stretch(near_ts, end_ts, retried=True)
-        if abs(drift_c) > UA_BALANCE_MAX_DRIFT_C:
-            # Kept for diagnostics, without a target: none was computed.
-            info.last_target_factor = None
-            info.last_drift_c = drift_c
-            return UaBalanceOutcome.DRIFT
+            stretch.outdoor_ks += _mean_outdoor_c(previous, current) * duration_s
+            stretch.room_ks += _mean_room_c(previous, current) * duration_s
+            if previous.flow_temperature_c is not None:
+                stretch.flow_ks += previous.flow_temperature_c * duration_s
+                stretch.flow_s += duration_s
+        return stretch
 
+    def _retry_start_ts(self, window: list[LearnerHistoryEntry]) -> float | None:
+        """Where a drifting stretch may count from instead.
+
+        A room found holding still above or below its setpoint was sometimes
+        only coasting slower than its sensor steps and then moved on. The
+        same night counts from where it came near its setpoint, if enough of
+        it is left.
+        """
+        if self._near_setpoint(window[0]):
+            return None
+        near_ts = next(
+            (entry.timestamp for entry in window if self._near_setpoint(entry)),
+            None,
+        )
+        if near_ts is None or window[-1].timestamp - near_ts < UA_BALANCE_MIN_WINDOW_S:
+            return None
+        return near_ts
+
+    def _learn_from_stretch(
+        self, stretch: _StretchIntegral, drift_c: float
+    ) -> UaBalanceOutcome:
+        info = self._ua_balance_info
         # Over hours the room's whole mass takes up or gives off heat, not
         # only the air and surfaces a setpoint jump shows: the base capacity
         # from area and construction, without the learned factor.
         stored_heat_j = self._capacity_model.base_capacity_j_per_k * drift_c
-        target_ua_w_per_k = (heat_j - stored_heat_j) / temperature_difference_ks
-        target_factor = target_ua_w_per_k / self._loss_model.base_ua_w_per_k
+        target_factor = (
+            (stretch.heat_j - stored_heat_j)
+            / stretch.temperature_difference_ks
+            / self._loss_model.base_ua_w_per_k
+        )
+        info.last_target_factor = target_factor
+        info.last_drift_c = drift_c
+        self._ua_balance_from_ts = max(self._ua_balance_from_ts, stretch.end_ts)
 
-        rejection = None
-        if saturated_s > UA_BALANCE_MAX_SATURATED_SHARE * window_duration_s:
-            rejection = UaBalanceOutcome.VALVE_SATURATED
-        elif abs(stored_heat_j) > UA_BALANCE_MAX_STORAGE_SHARE * heat_j:
-            rejection = UaBalanceOutcome.STORAGE_DOMINATED
-        elif target_factor > UA_BALANCE_MAX_TARGET_FACTOR:
-            rejection = UaBalanceOutcome.IMPLAUSIBLE_TARGET
+        rejection = self._target_rejection(stretch, stored_heat_j, target_factor)
         if rejection is not None:
             # Kept for diagnostics; the factor and the last learned time stay.
-            self._ua_balance_from_ts = max(self._ua_balance_from_ts, end_ts)
-            info.last_target_factor = target_factor
-            info.last_drift_c = drift_c
             return rejection
-
         if self._gain_model is not None:
             # A point for the night regression of heat-loss factor and steady
             # gain; a target below the floor is a valid balance as well -- the
             # room living off its neighbours is exactly such a gain.
             self._gain_model.add_night_point(
-                temperature_difference_ks / window_duration_s,
-                (heat_j - stored_heat_j) / window_duration_s,
-                window_duration_s / 3600,
+                stretch.mean_temperature_difference_c,
+                (stretch.heat_j - stored_heat_j) / stretch.duration_s,
+                stretch.duration_s / 3600,
                 self._loss_model.effective_ua_w_per_k,
             )
-
         learned_target_factor = max(target_factor, UA_BALANCE_MIN_TARGET_FACTOR)
         current_factor = self._loss_model.learned_ua_factor
         self._loss_model.learned_ua_factor = current_factor + ua_balance_weight(
-            window_duration_s
+            stretch.duration_s
         ) * (learned_target_factor - current_factor)
-        self._ua_balance_from_ts = max(self._ua_balance_from_ts, end_ts)
-        info.last_learned_ts = end_ts
-        info.last_target_factor = target_factor
-        info.last_drift_c = drift_c
-        info.last_window_s = window_duration_s
+        info.last_learned_ts = stretch.end_ts
+        info.last_window_s = stretch.duration_s
         if target_factor < UA_BALANCE_MIN_TARGET_FACTOR:
             return UaBalanceOutcome.LEARNED_AT_LIMIT
         return UaBalanceOutcome.LEARNED
+
+    @staticmethod
+    def _target_rejection(
+        stretch: _StretchIntegral, stored_heat_j: float, target_factor: float
+    ) -> UaBalanceOutcome | None:
+        if stretch.saturated_s > UA_BALANCE_MAX_SATURATED_SHARE * stretch.duration_s:
+            return UaBalanceOutcome.VALVE_SATURATED
+        if abs(stored_heat_j) > UA_BALANCE_MAX_STORAGE_SHARE * stretch.heat_j:
+            return UaBalanceOutcome.STORAGE_DOMINATED
+        if target_factor > UA_BALANCE_MAX_TARGET_FACTOR:
+            return UaBalanceOutcome.IMPLAUSIBLE_TARGET
+        return None
 
     def _has_sun_free_sample(self, start_ts: float, end_ts: float) -> bool:
         return any(

@@ -99,72 +99,84 @@ class CirculationController:
         return decision
 
     def _decide(self, inputs: CirculationInputs) -> CirculationDecision:
-        cfg = self.config
-        ret = inputs.return_c
-
         if not inputs.enabled:
             self._release_hot_since = None
             return CirculationDecision(False, CirculationReason.DISABLED)
-
         if inputs.continuous:
-            release = False
-            if (
-                cfg.release_enabled
-                and ret is not None
-                and ret >= cfg.release_temperature_c
-            ):
-                if self._release_hot_since is None:
-                    self._release_hot_since = inputs.now
-                release = (
-                    inputs.now - self._release_hot_since
-                ).total_seconds() >= cfg.release_min * 60
-            else:
-                self._release_hot_since = None
-            if release:
-                self._release_hot_since = None
-            return CirculationDecision(True, CirculationReason.CONTINUOUS, release)
+            return self._decide_continuous(inputs)
         self._release_hot_since = None
 
-        draw_only = not inputs.people_gates_open and cfg.draw_overrides_gates
+        draw_only = not inputs.people_gates_open and self.config.draw_overrides_gates
         if not inputs.heater_ok:
             return CirculationDecision(False, CirculationReason.BLOCKED)
         if not (inputs.people_gates_open or draw_only):
             return CirculationDecision(False, CirculationReason.GATES_CLOSED)
+        if inputs.return_c is None:
+            return self._decide_without_return(inputs, draw_only)
+        return self._decide_by_return(inputs, inputs.return_c, draw_only)
 
-        if ret is None:
-            if inputs.pump_on and inputs.pump_minutes >= cfg.fallback_on_min:
-                return CirculationDecision(False, CirculationReason.FALLBACK)
-            if not inputs.pump_on and (
-                (inputs.pump_minutes >= cfg.fallback_off_min and not draw_only)
-                or (inputs.draw and inputs.pump_minutes >= cfg.min_pause_min)
-            ):
-                return CirculationDecision(True, CirculationReason.FALLBACK)
-            return CirculationDecision(None, CirculationReason.FALLBACK)
+    def _decide_continuous(self, inputs: CirculationInputs) -> CirculationDecision:
+        """Run on; release once the return held hot for the release time."""
+        cfg = self.config
+        ret = inputs.return_c
+        hot = (
+            cfg.release_enabled and ret is not None and ret >= cfg.release_temperature_c
+        )
+        if not hot:
+            self._release_hot_since = None
+            return CirculationDecision(True, CirculationReason.CONTINUOUS, False)
+        if self._release_hot_since is None:
+            self._release_hot_since = inputs.now
+        held_s = (inputs.now - self._release_hot_since).total_seconds()
+        release = held_s >= cfg.release_min * 60
+        if release:
+            self._release_hot_since = None
+        return CirculationDecision(True, CirculationReason.CONTINUOUS, release)
 
+    def _decide_without_return(
+        self, inputs: CirculationInputs, draw_only: bool
+    ) -> CirculationDecision:
+        """No return reading: run and pause by the clock."""
+        cfg = self.config
+        if inputs.pump_on and inputs.pump_minutes >= cfg.fallback_on_min:
+            return CirculationDecision(False, CirculationReason.FALLBACK)
+        if not inputs.pump_on and (
+            (inputs.pump_minutes >= cfg.fallback_off_min and not draw_only)
+            or (inputs.draw and inputs.pump_minutes >= cfg.min_pause_min)
+        ):
+            return CirculationDecision(True, CirculationReason.FALLBACK)
+        return CirculationDecision(None, CirculationReason.FALLBACK)
+
+    def _decide_by_return(
+        self, inputs: CirculationInputs, return_c: float, draw_only: bool
+    ) -> CirculationDecision:
+        cfg = self.config
         stop_target = (
             inputs.outlet_c - cfg.stop_delta_k
             if inputs.outlet_c is not None
             else cfg.stop_temperature_c
         )
-        clock = inputs.now.time()
-        in_peak = in_window(clock, cfg.peak1_start, cfg.peak1_end) or in_window(
-            clock, cfg.peak2_start, cfg.peak2_end
-        )
-        start_below = min(
-            cfg.peak_start_below_c if in_peak else cfg.offpeak_start_below_c,
-            stop_target - 2,
-        )
-
         if inputs.pump_on:
-            if ret >= stop_target:
+            if return_c >= stop_target:
                 return CirculationDecision(False, CirculationReason.HOT)
             if inputs.pump_minutes >= cfg.max_run_min:
                 return CirculationDecision(False, CirculationReason.MAX_RUN)
             return CirculationDecision(None, CirculationReason.IDLE)
-
         if inputs.pump_minutes >= cfg.min_pause_min:
-            if ret < start_below and not draw_only:
+            if return_c < self._start_below(inputs, stop_target) and not draw_only:
                 return CirculationDecision(True, CirculationReason.COOLED)
-            if inputs.draw and ret < stop_target - 1:
+            if inputs.draw and return_c < stop_target - 1:
                 return CirculationDecision(True, CirculationReason.DRAW)
         return CirculationDecision(None, CirculationReason.IDLE)
+
+    def _start_below(self, inputs: CirculationInputs, stop_target: float) -> float:
+        """The return below which the pump starts; higher in the peak hours."""
+        cfg = self.config
+        clock = inputs.now.time()
+        in_peak = in_window(clock, cfg.peak1_start, cfg.peak1_end) or in_window(
+            clock, cfg.peak2_start, cfg.peak2_end
+        )
+        return min(
+            cfg.peak_start_below_c if in_peak else cfg.offpeak_start_below_c,
+            stop_target - 2,
+        )

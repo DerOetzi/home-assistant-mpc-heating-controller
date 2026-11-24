@@ -12,6 +12,7 @@ from heating_controller.control.flow_feedback import (
     DemandSample,
     FeedbackFreeze,
     FlowFeedback,
+    TargetLimit,
 )
 
 T0 = 1_800_000_000.0
@@ -28,12 +29,13 @@ def _run(
     start: float,
     seconds: float,
     frozen: FeedbackFreeze | None = None,
-    **limits: bool,
+    limit: TargetLimit | None = None,
+    night: bool = False,
 ) -> float:
     """Update once a minute from start for seconds; returns the end time."""
     ts = start
     while ts <= start + seconds:
-        feedback.update(samples, STEP, frozen, ts, **limits)
+        feedback.update(samples, STEP, frozen, ts, limit=limit, night=night)
         ts += 60
     return ts - 60
 
@@ -238,11 +240,15 @@ def test_clamped_to_limit() -> None:
 
 def test_no_step_against_a_target_limit() -> None:
     feedback = _ready()
-    _run(feedback, [_sample(99)], T0, 3 * UP_AFTER_S, at_upper_limit=True)
+    _run(feedback, [_sample(99)], T0, 3 * UP_AFTER_S, limit=TargetLimit.UPPER)
     assert feedback.feedback_k == 0.0
 
     _run(
-        feedback, [_sample(60, deficit=0.0)], T0, DOWN_AFTER_S + 60, at_lower_limit=True
+        feedback,
+        [_sample(60, deficit=0.0)],
+        T0,
+        DOWN_AFTER_S + 60,
+        limit=TargetLimit.LOWER,
     )
     assert feedback.feedback_k == 0.0
 
