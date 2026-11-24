@@ -328,7 +328,7 @@ class FlowFeedback:
     def restore(self, data: dict[str, Any]) -> None:
         try:
             value = float(data.get("feedback_k", 0.0))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             value = 0.0
         self.feedback_k = max(-FEEDBACK_LIMIT_K, min(FEEDBACK_LIMIT_K, value))
         last = data.get("last_change_ts")

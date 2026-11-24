@@ -702,7 +702,7 @@ def _actuator_limits(state: State | None) -> dict[str, float]:
     ):
         try:
             limits[conf] = float(attrs[key])
-        except (KeyError, TypeError, ValueError):
+        except KeyError, TypeError, ValueError:
             continue
     return limits
 

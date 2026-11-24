@@ -311,6 +311,9 @@ last 24 h, the switch-on/off recommendation and a *Heat | Off* switch for the he
 
 ## Development
 
+Needs Python 3.14.2 or newer, like Home Assistant 2026.10, the oldest core the
+integration supports.
+
 ```bash
 pip install -e ".[test,lint]"
 pytest

@@ -2,7 +2,7 @@
 name = "heating-controller"
 version = "0.0.0"
 description = "Home Assistant custom integration for MPC-based room heating control"
-requires-python = ">=3.13"
+requires-python = ">=3.14.2"
 license = { text = "MIT" }
 dependencies = []
 
@@ -10,7 +10,8 @@ dependencies = []
 test = [
     "pytest",
     "pytest-asyncio",
-    "pytest-homeassistant-custom-component",
+    # 0.13.375 brings Home Assistant 2026.10, the oldest core this runs on.
+    "pytest-homeassistant-custom-component>=0.13.375",
     # The manifest depends on the frontend component (the integration ships a
     # Lovelace card), and setting that component up needs the real frontend
     # package — pytest-homeassistant-custom-component does not pull it in.
@@ -27,7 +28,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 line-length = 88
 
 [tool.ruff.lint]
@@ -56,7 +57,7 @@ max-returns = 9
 "tests/**" = ["PLR0913", "PLC0415", "E402", "RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 files = ["custom_components/heating_controller"]
 ignore_missing_imports = true
 warn_unused_ignores = true

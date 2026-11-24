@@ -68,7 +68,7 @@ def _flatten(source: str) -> str:
 
 
 @pytest.fixture(scope="module")
-def ctx() -> "quickjs.Context":
+def ctx() -> quickjs.Context:
     context = quickjs.Context()
     context.eval(_DOM_STUBS)
     for name in _MODULES:
