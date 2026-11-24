@@ -445,11 +445,11 @@ class FlowFeedbackSensor(FlowEntity, SensorEntity):
             "night": feedback.night,
             "locked_direction": feedback.locked_sign(time.time()),
             "locked_until": _iso(feedback.locked_until_ts(time.time())),
-            "catch_up_until": dt_util.utc_from_timestamp(
-                feedback.catch_up_until_ts
-            ).isoformat()
-            if catching_up
-            else None,
+            "catch_up_until": (
+                dt_util.utc_from_timestamp(feedback.catch_up_until_ts).isoformat()
+                if catching_up and feedback.catch_up_until_ts is not None
+                else None
+            ),
             "catch_up_reason": str(feedback.catch_up_reason) if catching_up else None,
             "room_variant_up": feedback.variant_up,
             "room_variant_down": feedback.variant_down,
@@ -1091,8 +1091,8 @@ class RoomTemperatureSensor(_DiagnosticSensor):
             "trv_temperatures": dict(
                 zip(
                     self._coordinator.trv_entity_ids,
-                    result.trv_temperatures,
-                    strict=True,
+                    result.trv_temperatures or [],
+                    strict=False,
                 )
             ),
         }

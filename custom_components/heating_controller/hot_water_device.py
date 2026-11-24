@@ -136,8 +136,12 @@ HOT_WATER_DEFAULTS: dict[str, Any] = {
 }
 
 
-def _time(value: str | None) -> time | None:
-    return time.fromisoformat(value) if value else None
+def _time(value: str) -> time:
+    return time.fromisoformat(value)
+
+
+def _optional_time(value: str | None) -> time | None:
+    return _time(value) if value else None
 
 
 class HotWaterDevice:
@@ -227,7 +231,7 @@ class HotWaterDevice:
         return LegionellaConfig(
             weekdays=frozenset(WEEKDAYS.index(day) for day in d["legionella_weekdays"]),
             start=_time(d["legionella_start"]),
-            fallback=_time(self._fallback),
+            fallback=_optional_time(self._fallback),
             retry_window_min=float(d["legionella_retry_min"]),
             forecast_above=bool(d["forecast_above"]),
             forecast_threshold=float(d["forecast_threshold"]),

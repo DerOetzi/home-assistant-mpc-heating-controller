@@ -227,11 +227,10 @@ class RoomGainModel:
                 sun.value_at(surface, mid_ts + offset_s)
                 for offset_s in (-HALF_HOUR_S, 0.0, HALF_HOUR_S)
             ]
-            if any(value is None for value in points):
+            before, mid, after = points
+            if before is None or mid is None or after is None:
                 return None
-            values.append(
-                (points[0] + 2 * points[1] + points[2]) / 4 / IRRADIANCE_SCALE_W_M2
-            )
+            values.append((before + 2 * mid + after) / 4 / IRRADIANCE_SCALE_W_M2)
         for surface in self.opaque_surfaces:
             value = sun.filtered_at(surface, mid_ts, OPAQUE_LAG_S)
             if value is None:

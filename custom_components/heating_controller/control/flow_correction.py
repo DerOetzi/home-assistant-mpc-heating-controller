@@ -60,7 +60,7 @@ class FlowCorrection:
         if frozen is None and (measured_c is None or effective_c is None):
             frozen = CorrectionFreeze.NO_MEASUREMENT
         self.frozen = frozen
-        if frozen is not None:
+        if frozen is not None or measured_c is None or effective_c is None:
             return
         gap = measured_c - effective_c
         share = 1 - math.exp(-dt / TIME_CONSTANT_S)

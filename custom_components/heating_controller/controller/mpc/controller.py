@@ -307,10 +307,10 @@ class RoomMpcController:
                 self._outdoor_temperature_missing, now_ts
             )
         input_result = self._sensors.create_input(target_temperature_c, now_ts)
-        if not input_result.valid:
+        mpc_input = input_result.input
+        if mpc_input is None:
             return RoomMpcComputeResult(valid=False, error=input_result.error)
 
-        mpc_input = input_result.input
         mpc_input.mode_target_temp_c = mode_target_temperature_c
         if apply_side_effects:
             self._hot_water.update(
@@ -375,7 +375,9 @@ class RoomMpcController:
         demand_unknown = any(
             configured and opening is None
             for configured, opening in zip(
-                self._valve_position_configured, mpc_input.valve_positions_pct
+                self._valve_position_configured,
+                mpc_input.valve_positions_pct,
+                strict=True,
             )
         )
         flow_gate_closed = (
@@ -611,6 +613,7 @@ class RoomMpcController:
             self._radiator_monitors,
             mpc_input.valve_positions_pct or [None] * len(self._radiator_monitors),
             self._emitter_model.full_output_fractions(mpc_input.flow_temp_c, room_c),
+            strict=True,
         ):
             monitor.update(
                 RadiatorCheckSample(

@@ -1052,7 +1052,7 @@ def test_drift_weights_samples_by_the_time_they_stand_for():
     mean_t = sum(times) / len(times)
     mean_c = sum(temps) / len(temps)
     per_sample_drift = (
-        sum((t - mean_t) * (c - mean_c) for t, c in zip(times, temps))
+        sum((t - mean_t) * (c - mean_c) for t, c in zip(times, temps, strict=True))
         / sum((t - mean_t) ** 2 for t in times)
         * (times[-1] - times[0])
     )

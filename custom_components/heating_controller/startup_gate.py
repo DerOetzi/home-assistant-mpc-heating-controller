@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Callable, Coroutine, Iterable
 from typing import Any
 
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
@@ -42,7 +42,9 @@ class StartupGate:
     """Opens once the needed entities are there and quiet, or on timeout."""
 
     def __init__(
-        self, hass: HomeAssistant, on_open: Callable[[], Awaitable[None]]
+        self,
+        hass: HomeAssistant,
+        on_open: Callable[[], Coroutine[Any, Any, None]],
     ) -> None:
         self._hass = hass
         self._on_open = on_open

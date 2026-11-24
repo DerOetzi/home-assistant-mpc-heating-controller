@@ -89,12 +89,14 @@ class HeatingSeason:
         """
         alive_ts = data.get("alive_ts")
         periods: list[tuple[float, float | None]] = []
-        for start, end in data.get("periods", []):
-            if end is None:
+        for start, saved_end in data.get("periods", []):
+            if saved_end is None:
                 if alive_ts is None:
                     continue
                 end = max(float(start), float(alive_ts))
-            periods.append((float(start), float(end)))
+            else:
+                end = float(saved_end)
+            periods.append((float(start), end))
         self._periods = periods
         last = data.get("last_demand_ts")
         self.last_demand_ts = None if last is None else float(last)

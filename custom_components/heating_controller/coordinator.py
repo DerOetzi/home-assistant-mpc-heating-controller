@@ -767,8 +767,8 @@ class HeatingRoomCoordinator:
         if state is None:
             return None
         try:
-            return float(state.attributes.get("current_temperature"))
-        except (TypeError, ValueError):
+            return float(state.attributes["current_temperature"])
+        except (KeyError, TypeError, ValueError):
             return None
 
     @staticmethod
@@ -776,8 +776,8 @@ class HeatingRoomCoordinator:
         if state is None:
             return None
         try:
-            return float(state.attributes.get("temperature"))
-        except (TypeError, ValueError):
+            return float(state.attributes["temperature"])
+        except (KeyError, TypeError, ValueError):
             return None
 
     @callback
@@ -1101,7 +1101,8 @@ class HeatingRoomCoordinator:
             for index, entity_id in enumerate(self._valve_position_entities)
             if entity_id
         ]
-        if not demands or any(demand is None for demand in demands):
+        known = [demand for demand in demands if demand is not None]
+        if not known or len(known) < len(demands):
             return None, SupplyReason.DEMAND_UNKNOWN
         # Only the room sensor says how far the room is short: the TRVs sit at
         # the radiator and read warm while it heats. Without a fresh reading
@@ -1111,7 +1112,7 @@ class HeatingRoomCoordinator:
         deficit_c = (
             None if target_c is None or room_c is None else round(target_c - room_c, 2)
         )
-        return DemandSample(self.room_name, max(demands), deficit_c), None
+        return DemandSample(self.room_name, max(known), deficit_c), None
 
     def _room_sensor_temperature_c(self) -> float | None:
         """The room sensor's reading; None without one or while it is stale."""
@@ -1205,22 +1206,27 @@ class HeatingRoomCoordinator:
         if not balance:
             self.load_room_mean = None
             return
+        sharing_entities = [
+            (trv, entities)
+            for trv in sharing
+            if (entities := trv.load_sharing) is not None
+        ]
         mean = load_room_mean(
             [
                 (
                     self._float_from_state(state),
                     state.last_reported.timestamp() if state is not None else None,
                 )
-                for trv in sharing
-                for state in (self.hass.states.get(trv.load_estimate_entity),)
+                for _, entities in sharing_entities
+                for state in (self.hass.states.get(entities.estimate),)
             ],
             now_ts,
         )
         self.load_room_mean = mean
         if mean is None:
             return
-        for trv in sharing:
-            entity_id = trv.load_room_mean_entity
+        for trv, entities in sharing_entities:
+            entity_id = entities.room_mean
             if self._adaptation_running(trv, now_ts):
                 continue
             state = self.hass.states.get(entity_id)
@@ -1332,7 +1338,7 @@ class HeatingRoomCoordinator:
         return [
             entity_id
             for entity_id, not_heating in zip(
-                self._trv_entity_ids, self.mpc.radiators_not_heating
+                self._trv_entity_ids, self.mpc.radiators_not_heating, strict=True
             )
             if not_heating
         ]

@@ -1144,7 +1144,9 @@ def test_season_card_shows_the_automatic_switch(ctx) -> None:
     ctx.eval(_FLOW_RENDER_SETUP)
     ctx.eval(_SEASON_RENDER_SETUP)
     ctx.eval("sadd('switch.auto', 'heating_season_auto', 'on');")
-    ctx.eval("sadd('binary_sensor.aus', 'heating_season_switch_off', 'on', SEASON_ATTRS);")
+    ctx.eval(
+        "sadd('binary_sensor.aus', 'heating_season_switch_off', 'on', SEASON_ATTRS);"
+    )
     html = ctx.eval("renderSeason()")
     for broken in ("undefined", "NaN", "null", "season_"):
         assert broken not in html

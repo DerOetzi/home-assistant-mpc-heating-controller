@@ -312,8 +312,10 @@ last 24 h, the switch-on/off recommendation and a *Heat | Off* switch for the he
 ## Development
 
 ```bash
-pip install -e ".[test]"
+pip install -e ".[test,lint]"
 pytest
+ruff check . && ruff format --check .
+mypy
 ```
 
 `pytest` runs against a real Home Assistant test harness

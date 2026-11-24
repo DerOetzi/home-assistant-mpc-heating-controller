@@ -208,7 +208,11 @@ class FlowController:
 
         needs_curve = cfg.mode is ActuatorMode.OFFSET
         bounds = self.bounds(inputs, curve)
-        if inputs.feedforward_flow_c is None or bounds is None:
+        if (
+            inputs.feedforward_flow_c is None
+            or bounds is None
+            or (needs_curve and curve_flow is None)
+        ):
             self._charge_active = False
             target = (
                 None
@@ -256,7 +260,7 @@ class FlowController:
         if target < cfg.threshold_c:
             target, source = cfg.threshold_c, FlowSource.THRESHOLD
 
-        raw = target - curve_flow if needs_curve else target
+        raw = target - curve_flow if curve_flow is not None and needs_curve else target
         value = self._round(raw)
 
         charge_now = source is FlowSource.CHARGE

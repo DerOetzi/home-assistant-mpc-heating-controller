@@ -278,7 +278,10 @@ class RoomMpcSensors:
         room_temperature_result = self.get_room_temperature(now_ts)
         outdoor_temp_c = self._outdoor_temperature_sensor.get_fresh_value(now_ts)
 
-        if not room_temperature_result.valid:
+        room_temp_c = room_temperature_result.temperature_c
+        used_strategy = room_temperature_result.used_strategy
+        trv_temperatures = room_temperature_result.trv_temperatures
+        if room_temp_c is None or used_strategy is None or trv_temperatures is None:
             return RoomMpcInputResult(valid=False, error=room_temperature_result.error)
 
         if outdoor_temp_c is None:
@@ -300,7 +303,9 @@ class RoomMpcSensors:
             entry is None for entry in self._valve_positions
         ) or any(
             entry is not None and position is None
-            for entry, position in zip(self._valve_positions, valve_positions_pct)
+            for entry, position in zip(
+                self._valve_positions, valve_positions_pct, strict=True
+            )
         )
 
         return RoomMpcInputResult(
@@ -308,11 +313,11 @@ class RoomMpcSensors:
             input=RoomMpcInput(
                 now_ts=now_ts,
                 target_temp_c=target_temp_c,
-                room_temp_c=room_temperature_result.temperature_c,
+                room_temp_c=room_temp_c,
                 outdoor_temp_c=outdoor_temp_c,
                 flow_temp_c=self._flow_temperature_sensor.get_fresh_value(now_ts),
-                used_room_sensor_strategy=room_temperature_result.used_strategy,
-                trv_temperatures=room_temperature_result.trv_temperatures,
+                used_room_sensor_strategy=used_strategy,
+                trv_temperatures=trv_temperatures,
                 room_sensor_temp_c=room_temperature_result.room_sensor_temp_c,
                 room_sensor_fallback=room_temperature_result.room_sensor_fallback,
                 valve_positions_pct=valve_positions_pct,

@@ -152,6 +152,8 @@ class FlowDevice:
             if self.actuator_entity.startswith("climate.")
             else state.state
         )
+        if raw is None:
+            return None
         try:
             return float(raw)
         except (TypeError, ValueError):
@@ -200,19 +202,19 @@ class FlowDevice:
             else 0.0,
         )
         bounds = self.controller.bounds(inputs, self.curve)
-        lifted = (
-            None
-            if bounds is None or inputs.feedforward_flow_c is None
-            else inputs.feedforward_flow_c + inputs.feedback_k
-        )
+        at_lower_limit = at_upper_limit = False
+        if bounds is not None and inputs.feedforward_flow_c is not None:
+            lifted = inputs.feedforward_flow_c + inputs.feedback_k
+            at_lower_limit = lifted <= bounds.lower_c
+            at_upper_limit = lifted >= bounds.upper_c
         freeze = self._freeze_reason(inputs, bounds is None)
         feedback.update(
             hub.feedback_samples(),
             self._step,
             freeze,
             now_ts,
-            at_lower_limit=lifted is not None and lifted <= bounds.lower_c,
-            at_upper_limit=lifted is not None and lifted >= bounds.upper_c,
+            at_lower_limit=at_lower_limit,
+            at_upper_limit=at_upper_limit,
             night=self._night.is_night(now_ts),
         )
         if self.mode is ActuatorMode.OFFSET:

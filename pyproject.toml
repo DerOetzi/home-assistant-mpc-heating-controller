@@ -20,10 +20,44 @@ test = [
     # would otherwise only show up as "custom element not found" in a browser.
     "quickjs",
 ]
+lint = ["ruff", "mypy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "UP", "B", "SIM", "RET", "RUF",
+    "C90",      # cyclomatic complexity
+    "PLR0911",  # too many returns
+    "PLR0912",  # too many branches
+    "PLR0913",  # too many arguments
+    "PLR0915",  # too many statements
+    "PLW",
+]
+# Long strings and comments: the formatter owns line length.
+ignore = ["E501"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+# Test helpers build fixtures with many keyword arguments and import late on
+# purpose (after the HA test harness is patched); card texts use real dashes.
+"tests/**" = ["PLR0913", "PLC0415", "E402", "RUF001", "RUF002", "RUF003"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["custom_components/heating_controller"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
 
 [build-system]
 requires = ["setuptools>=68"]

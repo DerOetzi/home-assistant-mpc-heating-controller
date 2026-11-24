@@ -112,7 +112,9 @@ _WINDOW_DEVICE_CLASSES = ["window", "door", "garage_door", "opening"]
 _FLOW_THRESHOLD_DOMAINS = ["input_number", "number", "sensor"]
 
 
-def _marker(key: type[vol.Marker], name: str, defaults: dict[str, Any]) -> vol.Marker:
+def _marker(
+    key: type[vol.Required] | type[vol.Optional], name: str, defaults: dict[str, Any]
+) -> vol.Marker:
     if name in defaults and defaults[name] is not None:
         return key(name, default=defaults[name])
     return key(name)

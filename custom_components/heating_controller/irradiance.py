@@ -112,7 +112,7 @@ class SunSeries:
         intervals: Mapping[Surface, list[IrradianceInterval]],
         fetched_ts: float | None,
     ) -> None:
-        self._intervals = {
+        self._intervals: dict[str, list[IrradianceInterval]] = {
             surface: sorted(values, key=lambda interval: interval.start_ts)
             for surface, values in intervals.items()
         }
@@ -120,18 +120,20 @@ class SunSeries:
 
     @property
     def surfaces(self) -> list[Surface]:
-        return list(self._intervals)
+        return [Surface(surface) for surface in self._intervals]
 
     def fresh(self, now_ts: float) -> bool:
         return (
             self.fetched_ts is not None and now_ts - self.fetched_ts <= MAX_SERIES_AGE_S
         )
 
-    def _covers(self, surface: Surface, ts: float) -> bool:
+    def _covers(self, surface: str, ts: float) -> bool:
         intervals = self._intervals.get(surface)
-        return bool(intervals) and intervals[0].start_ts <= ts <= intervals[-1].end_ts
+        if not intervals:
+            return False
+        return intervals[0].start_ts <= ts <= intervals[-1].end_ts
 
-    def value_at(self, surface: Surface, ts: float) -> float | None:
+    def value_at(self, surface: str, ts: float) -> float | None:
         """Irradiance at ts, linear between the hour midpoints."""
         if not self._covers(surface, ts):
             return None
@@ -146,7 +148,7 @@ class SunSeries:
                 return v0 + (v1 - v0) * (ts - t0) / (t1 - t0)
         return points[-1][1]
 
-    def filtered_at(self, surface: Surface, ts: float, tau_s: float) -> float | None:
+    def filtered_at(self, surface: str, ts: float, tau_s: float) -> float | None:
         """First-order lag of the hour means, what a wall passes on at ts.
 
         Starts from the first hour of the series (the past day reaches back

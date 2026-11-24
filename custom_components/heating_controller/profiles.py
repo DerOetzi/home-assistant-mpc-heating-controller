@@ -18,6 +18,7 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.selector import DeviceFilterSelectorConfig
 from homeassistant.util.yaml import load_yaml
 
 from .const import CONF_TRV_DEVICE_ID, DOMAIN
@@ -178,6 +179,15 @@ class DeviceProfile:
 
 
 @dataclass(frozen=True)
+class LoadSharingEntities:
+    """The three entities a TRV needs to share the load in its room."""
+
+    balancing: str
+    estimate: str
+    room_mean: str
+
+
+@dataclass(frozen=True)
 class TrvBinding:
     """A configured TRV with the entities its device profile resolved."""
 
@@ -199,13 +209,24 @@ class TrvBinding:
     load_room_mean_entity: str | None = None
 
     @property
-    def shares_load(self) -> bool:
-        """The TRV takes part in a room's load sharing."""
-        return bool(
+    def load_sharing(self) -> LoadSharingEntities | None:
+        """The load sharing entities; None unless the profile has all three."""
+        if (
             self.load_balancing_entity
             and self.load_estimate_entity
             and self.load_room_mean_entity
-        )
+        ):
+            return LoadSharingEntities(
+                self.load_balancing_entity,
+                self.load_estimate_entity,
+                self.load_room_mean_entity,
+            )
+        return None
+
+    @property
+    def shares_load(self) -> bool:
+        """The TRV takes part in a room's load sharing."""
+        return self.load_sharing is not None
 
     @property
     def entity_ids(self) -> list[str]:
@@ -271,7 +292,7 @@ def load_profiles(directory: Path = PROFILES_DIR) -> tuple[DeviceProfile, ...]:
 
 
 async def async_get_profiles(hass: HomeAssistant) -> tuple[DeviceProfile, ...]:
-    profiles = hass.data.get(DATA_PROFILES)
+    profiles: tuple[DeviceProfile, ...] | None = hass.data.get(DATA_PROFILES)
     if profiles is None:
         profiles = await hass.async_add_executor_job(load_profiles)
         hass.data[DATA_PROFILES] = profiles
@@ -280,17 +301,25 @@ async def async_get_profiles(hass: HomeAssistant) -> tuple[DeviceProfile, ...]:
 
 def device_selector_filters(
     profiles: tuple[DeviceProfile, ...],
-) -> list[dict[str, str]]:
+) -> list[DeviceFilterSelectorConfig]:
     """Device selector filters offering only devices a profile covers."""
-    filters: list[dict[str, str]] = []
+    filters: list[DeviceFilterSelectorConfig] = []
     for profile in profiles:
-        base = {
-            "integration": profile.integration,
-            "manufacturer": profile.manufacturer,
-        }
-        filters.extend({**base, "model": model} for model in sorted(profile.models))
         filters.extend(
-            {**base, "model_id": model_id} for model_id in sorted(profile.model_ids)
+            DeviceFilterSelectorConfig(
+                integration=profile.integration,
+                manufacturer=profile.manufacturer,
+                model=model,
+            )
+            for model in sorted(profile.models)
+        )
+        filters.extend(
+            DeviceFilterSelectorConfig(
+                integration=profile.integration,
+                manufacturer=profile.manufacturer,
+                model_id=model_id,
+            )
+            for model_id in sorted(profile.model_ids)
         )
     return filters
 

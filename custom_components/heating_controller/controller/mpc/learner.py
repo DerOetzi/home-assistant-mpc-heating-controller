@@ -446,6 +446,8 @@ class RoomMpcModelLearner:
 
     def _evaluate_gain_hour(self, start_ts: float, end_ts: float) -> HourOutcome:
         gains = self._gain_model
+        if gains is None:
+            return HourOutcome.TOO_SHORT
         window = [
             entry for entry in self._history if start_ts <= entry.timestamp <= end_ts
         ]
@@ -1104,14 +1106,14 @@ class RoomMpcModelLearner:
             self._ua_balance_start_ts(), self._history[-1].timestamp
         ):
             return UaBalanceOutcome.OUTSIDE_WINDOW
-        start_ts = self._settled_since_ts(self._ua_balance_start_ts())
-        if start_ts is None:
+        settled_ts = self._settled_since_ts(self._ua_balance_start_ts())
+        if settled_ts is None:
             return UaBalanceOutcome.COASTING
         end_ts = self._history[-1].timestamp
         sun_free_ts = [
             entry.timestamp
             for entry in self._history
-            if entry.timestamp >= start_ts and self._sun_condition(entry.timestamp)
+            if entry.timestamp >= settled_ts and self._sun_condition(entry.timestamp)
         ]
         if not sun_free_ts:
             return UaBalanceOutcome.OUTSIDE_WINDOW
@@ -1387,17 +1389,22 @@ class RoomMpcModelLearner:
         if total_weight <= 0:
             return 0.0
         temperatures = [entry.room_temperature_c for entry in window]
-        mean_time = sum(w * t for w, t in zip(weights, times)) / total_weight
-        mean_temperature = (
-            sum(w * c for w, c in zip(weights, temperatures)) / total_weight
+        mean_time = (
+            sum(w * t for w, t in zip(weights, times, strict=True)) / total_weight
         )
-        spread = sum(w * (t - mean_time) ** 2 for w, t in zip(weights, times))
+        mean_temperature = (
+            sum(w * c for w, c in zip(weights, temperatures, strict=True))
+            / total_weight
+        )
+        spread = sum(
+            w * (t - mean_time) ** 2 for w, t in zip(weights, times, strict=True)
+        )
         if spread <= 0:
             return 0.0
         slope = (
             sum(
                 w * (t - mean_time) * (c - mean_temperature)
-                for w, t, c in zip(weights, times, temperatures)
+                for w, t, c in zip(weights, times, temperatures, strict=True)
             )
             / spread
         )
