@@ -583,15 +583,9 @@ class RoomMpcModelLearner:
     ) -> UaBalanceOutcome:
         if self._ctx.loss_model.base_ua_w_per_k <= 0:
             return UaBalanceOutcome.COLLECTING
-        settled_ts = self._settled_since_ts(start_ts)
-        if settled_ts is None or settled_ts > end_ts:
+        window = self._settled_window(start_ts, end_ts)
+        if window is None:
             return UaBalanceOutcome.COASTING
-        window = [
-            entry
-            for entry in self._ctx.history
-            if settled_ts <= entry.timestamp <= end_ts
-            and self._ctx.sun_condition(entry.timestamp)
-        ]
         rejection = self._stretch_rejection(window)
         if rejection is not None:
             return rejection
@@ -612,6 +606,21 @@ class RoomMpcModelLearner:
             self._ua_balance_info.last_drift_c = drift_c
             return UaBalanceOutcome.DRIFT
         return self._learn_from_stretch(stretch, drift_c)
+
+    def _settled_window(
+        self, start_ts: float, end_ts: float
+    ) -> list[LearnerHistoryEntry] | None:
+        """Sun-free samples from the settled start to end; None while the
+        room still coasts at end."""
+        settled_ts = self._settled_since_ts(start_ts)
+        if settled_ts is None or settled_ts > end_ts:
+            return None
+        return [
+            entry
+            for entry in self._ctx.history
+            if settled_ts <= entry.timestamp <= end_ts
+            and self._ctx.sun_condition(entry.timestamp)
+        ]
 
     def _stretch_rejection(
         self, window: list[LearnerHistoryEntry]

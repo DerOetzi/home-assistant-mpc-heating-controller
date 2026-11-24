@@ -70,7 +70,6 @@ class AiringLearner:
         self, opened_ts: float, closed_ts: float
     ) -> CapacityOutcome | None:
         """Judge the stretch after one airing; None while it is still running."""
-        info = self.info
         history = self._ctx.history
         before = next(
             (entry for entry in reversed(history) if entry.timestamp <= opened_ts),
@@ -87,8 +86,7 @@ class AiringLearner:
             if history and history[-1].timestamp - closed_ts >= JUMP_MAX_S:
                 # The room kept warming faster than its model the whole time.
                 return self._end_airing(closed_ts, None, CapacityOutcome.IMPLAUSIBLE)
-            self.info.begin(VENT, closed_ts, None)
-            info.outcome = CapacityOutcome.RUNNING
+            self._set_running(closed_ts)
             return None
         if start < 0:
             # A flag ended the airing before the rebound was over.
@@ -97,22 +95,31 @@ class AiringLearner:
             assert outcome is not None
             return self._end_airing(entry.timestamp, None, outcome)
 
-        coolest_c = min(
-            entry.room_temperature_c
-            for entry in history[: start + 1]
-            if entry.timestamp >= opened_ts
-        )
-        if before.room_temperature_c - coolest_c < VENT_MIN_COOLING_C:
+        if not self._cooled_enough(before, opened_ts, start):
             return self._end_airing(
                 history[start].timestamp, None, CapacityOutcome.TOO_SMALL
             )
 
         end = self._recovery_end_index(start)
         if end is None:
-            self.info.begin(VENT, history[start].timestamp, None)
-            info.outcome = CapacityOutcome.RUNNING
+            self._set_running(history[start].timestamp)
             return None
         return self._learn_from_airing(history[start : end + 1], history[start])
+
+    def _set_running(self, start_ts: float) -> None:
+        self.info.begin(VENT, start_ts, None)
+        self.info.outcome = CapacityOutcome.RUNNING
+
+    def _cooled_enough(
+        self, before: LearnerHistoryEntry, opened_ts: float, start: int
+    ) -> bool:
+        """The airing cooled the room by enough to measure the recovery."""
+        coolest_c = min(
+            entry.room_temperature_c
+            for entry in self._ctx.history[: start + 1]
+            if entry.timestamp >= opened_ts
+        )
+        return before.room_temperature_c - coolest_c >= VENT_MIN_COOLING_C
 
     def _recovery_end_index(self, start: int) -> int | None:
         """Last sample of the recovery after an airing; None while it runs.
@@ -168,8 +175,6 @@ class AiringLearner:
         the airing first.
         """
         history = self._ctx.history
-        ua_w_per_k = self._ctx.loss_model.effective_ua_w_per_k
-        capacity_j_per_k = self._ctx.capacity_model.base_capacity_j_per_k * self.factor
         for index, entry in enumerate(history):
             if entry.timestamp <= closed_ts:
                 continue
@@ -184,28 +189,36 @@ class AiringLearner:
             ):
                 # Back at the setpoint already: the stretch is too short.
                 return index
-            first = bisect_left(
-                history,
-                max(closed_ts, entry.timestamp - VENT_REBOUND_WINDOW_S),
-                hi=index + 1,
-                key=lambda sample: sample.timestamp,
-            )
-            window = history[first : index + 1]
-            if (
-                len(window) < 2
-                or window[-1].timestamp - window[0].timestamp
-                < VENT_REBOUND_WINDOW_S / 2
-            ):
-                continue
-            duration_s = window[-1].timestamp - window[0].timestamp
-            observed_c_per_s = trend_drift_c(window) / duration_s
-            expected_c_per_s = (
-                self._ctx.balance_point_power_w(entry)
-                - ua_w_per_k * (entry.room_temperature_c - entry.outdoor_temperature_c)
-            ) / capacity_j_per_k
-            if observed_c_per_s <= expected_c_per_s:
+            if self._warming_no_faster_than_model(index, closed_ts):
                 return index
         return None
+
+    def _warming_no_faster_than_model(self, index: int, closed_ts: float) -> bool:
+        """The trend up to index no longer outruns the model: the air warmed
+        by the walls after the airing is through."""
+        history = self._ctx.history
+        entry = history[index]
+        first = bisect_left(
+            history,
+            max(closed_ts, entry.timestamp - VENT_REBOUND_WINDOW_S),
+            hi=index + 1,
+            key=lambda sample: sample.timestamp,
+        )
+        window = history[first : index + 1]
+        if (
+            len(window) < 2
+            or window[-1].timestamp - window[0].timestamp < VENT_REBOUND_WINDOW_S / 2
+        ):
+            return False
+        duration_s = window[-1].timestamp - window[0].timestamp
+        observed_c_per_s = trend_drift_c(window) / duration_s
+        ua_w_per_k = self._ctx.loss_model.effective_ua_w_per_k
+        capacity_j_per_k = self._ctx.capacity_model.base_capacity_j_per_k * self.factor
+        expected_c_per_s = (
+            self._ctx.balance_point_power_w(entry)
+            - ua_w_per_k * (entry.room_temperature_c - entry.outdoor_temperature_c)
+        ) / capacity_j_per_k
+        return observed_c_per_s <= expected_c_per_s
 
     def _end_airing(
         self, start_ts: float, end_ts: float | None, outcome: CapacityOutcome

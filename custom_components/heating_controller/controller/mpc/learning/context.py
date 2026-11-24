@@ -89,15 +89,23 @@ class LearningContext:
 
         if sun is None:
             return fallback()
-        sample_ts = [start_ts - JUMP_SUN_LOOKBACK_S]
-        while sample_ts[-1] + JUMP_SUN_SAMPLE_S < end_ts:
-            sample_ts.append(sample_ts[-1] + JUMP_SUN_SAMPLE_S)
-        sample_ts.append(end_ts)
-        for surface in self.gain_model.window_surfaces:
-            for ts in sample_ts:
-                value = sun.value_at(surface, ts)
-                if value is None:
-                    return fallback()
-                if value > JUMP_SUN_LIMIT_W_M2:
-                    return False
+        sample_ts = _sun_sample_times(start_ts, end_ts)
+        for value in (
+            sun.value_at(surface, ts)
+            for surface in self.gain_model.window_surfaces
+            for ts in sample_ts
+        ):
+            if value is None:
+                return fallback()
+            if value > JUMP_SUN_LIMIT_W_M2:
+                return False
         return True
+
+
+def _sun_sample_times(start_ts: float, end_ts: float) -> list[float]:
+    """Sample times from the lookback before start up to end, end included."""
+    sample_ts = [start_ts - JUMP_SUN_LOOKBACK_S]
+    while sample_ts[-1] + JUMP_SUN_SAMPLE_S < end_ts:
+        sample_ts.append(sample_ts[-1] + JUMP_SUN_SAMPLE_S)
+    sample_ts.append(end_ts)
+    return sample_ts

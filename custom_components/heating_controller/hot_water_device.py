@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigSubentry
@@ -21,6 +21,7 @@ from homeassistant.core import (
     Event,
     EventStateChangedData,
     HomeAssistant,
+    State,
     callback,
 )
 from homeassistant.exceptions import HomeAssistantError
@@ -235,29 +236,7 @@ class HotWaterDevice(Observable):
             self.boost_on = False
 
         if self.legionella_enabled or self.legionella.cycle.forced:
-            before = self.legionella.cycle.state
-            self.legionella.step(
-                LegionellaInputs(
-                    now=now,
-                    outlet_c=(
-                        entity_float(self.hass, outlet)
-                        if (outlet := self.settings.entity(K.OUTLET_ENTITY))
-                        else self.tank_c
-                    ),
-                    return_c=self._reading(K.RETURN_ENTITY),
-                    heater_off=self.heater_off,
-                    forecast=self._reading(K.FORECAST_ENTITY),
-                    target_c=self.current_target_c,
-                )
-            )
-            after = self.legionella.cycle.state
-            if after is not before:
-                _LOGGER.info("Legionella cycle %s -> %s", before, after)
-                if after is LegionellaState.RUNNING:
-                    self.continuous_request = True
-                elif after is LegionellaState.FAILED:
-                    self.continuous_request = False
-                self._store.async_delay_save(self._export, 10)
+            self._step_legionella(now)
 
         decision = self.controller.decide(
             HotWaterInputs(
@@ -284,6 +263,33 @@ class HotWaterDevice(Observable):
         self.hub.update_charge()
         self._store.async_delay_save(self._export, 300)
         self._notify_listeners()
+
+    def _step_legionella(self, now: datetime) -> None:
+        """Advance the legionella cycle; its start and failure set the
+        continuous request."""
+        before = self.legionella.cycle.state
+        self.legionella.step(
+            LegionellaInputs(
+                now=now,
+                outlet_c=(
+                    entity_float(self.hass, outlet)
+                    if (outlet := self.settings.entity(K.OUTLET_ENTITY))
+                    else self.tank_c
+                ),
+                return_c=self._reading(K.RETURN_ENTITY),
+                heater_off=self.heater_off,
+                forecast=self._reading(K.FORECAST_ENTITY),
+                target_c=self.current_target_c,
+            )
+        )
+        after = self.legionella.cycle.state
+        if after is not before:
+            _LOGGER.info("Legionella cycle %s -> %s", before, after)
+            if after is LegionellaState.RUNNING:
+                self.continuous_request = True
+            elif after is LegionellaState.FAILED:
+                self.continuous_request = False
+            self._store.async_delay_save(self._export, 10)
 
     def _recently_written(self, value: float, now_ts: float) -> bool:
         return (
@@ -360,8 +366,25 @@ class HotWaterDevice(Observable):
         pump = available_state(self.hass, settings.entity(K.PUMP_ENTITY))
         if pump is None:
             return
-        now = dt_util.now()
         pump_on = pump.state == STATE_ON
+        decision = self.circulation.decide(self._circulation_inputs(pump, draw))
+        changed = decision != self.circulation_decision
+        self.circulation_decision = decision
+        if decision.release:
+            await self._async_release_continuous()
+        if decision.pump_on is not None and decision.pump_on != pump_on:
+            await self._async_call(
+                "switch",
+                "turn_on" if decision.pump_on else "turn_off",
+                [pump.entity_id],
+            )
+            changed = True
+        if changed:
+            self._notify_listeners()
+
+    def _circulation_inputs(self, pump: State, draw: bool) -> CirculationInputs:
+        settings = self.settings
+        now = dt_util.now()
         heater = self.hass.states.get(self.water_heater)
         heater_ok = heater is not None and heater.state not in [
             *settings.blocked_states,
@@ -377,43 +400,32 @@ class HotWaterDevice(Observable):
             )
             if entity
         )
-        decision = self.circulation.decide(
-            CirculationInputs(
-                now=now,
-                enabled=self.circulation_main,
-                pump_on=pump_on,
-                pump_minutes=(now - pump.last_changed).total_seconds() / 60,
-                return_c=self._reading(K.CIRC_RETURN_ENTITY),
-                outlet_c=self._reading(K.CIRC_OUTLET_ENTITY),
-                continuous=self.continuous,
-                heater_ok=heater_ok,
-                people_gates_open=gates,
-                draw=draw,
-            )
+        return CirculationInputs(
+            now=now,
+            enabled=self.circulation_main,
+            pump_on=pump.state == STATE_ON,
+            pump_minutes=(now - pump.last_changed).total_seconds() / 60,
+            return_c=self._reading(K.CIRC_RETURN_ENTITY),
+            outlet_c=self._reading(K.CIRC_OUTLET_ENTITY),
+            continuous=self.continuous,
+            heater_ok=heater_ok,
+            people_gates_open=gates,
+            draw=draw,
         )
-        changed = decision != self.circulation_decision
-        self.circulation_decision = decision
-        if decision.release:
-            _LOGGER.info("Circulation loop hot: continuous run released")
-            self.continuous_request = False
-            on = [
-                entity
-                for entity in settings.entities(K.CONTINUOUS_ENTITIES)
-                if (state := self.hass.states.get(entity)) is not None
-                and state.state == STATE_ON
-            ]
-            if on:
-                await self._async_call("homeassistant", "turn_off", on)
-            self._store.async_delay_save(self._export, 10)
-        if decision.pump_on is not None and decision.pump_on != pump_on:
-            await self._async_call(
-                "switch",
-                "turn_on" if decision.pump_on else "turn_off",
-                [pump.entity_id],
-            )
-            changed = True
-        if changed:
-            self._notify_listeners()
+
+    async def _async_release_continuous(self) -> None:
+        """The loop is hot: drop the continuous request and its switches."""
+        _LOGGER.info("Circulation loop hot: continuous run released")
+        self.continuous_request = False
+        on = [
+            entity
+            for entity in self.settings.entities(K.CONTINUOUS_ENTITIES)
+            if (state := self.hass.states.get(entity)) is not None
+            and state.state == STATE_ON
+        ]
+        if on:
+            await self._async_call("homeassistant", "turn_off", on)
+        self._store.async_delay_save(self._export, 10)
 
     async def _async_call(self, domain: str, service: str, entities: list[str]) -> None:
         try:

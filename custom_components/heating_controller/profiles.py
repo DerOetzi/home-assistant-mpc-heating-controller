@@ -367,21 +367,7 @@ def resolve_trv(
             "unsupported_device", f"{_device_label(device)} has no device profile"
         )
 
-    registry_entries = er.async_entries_for_device(er.async_get(hass), device_id)
-    entity_ids: dict[str, str] = {}
-    for role, match in profile.entities.items():
-        candidates = [
-            entry.entity_id for entry in registry_entries if match.matches(entry)
-        ]
-        if len(candidates) == 1:
-            entity_ids[role] = candidates[0]
-        elif role != ROLE_CLIMATE:
-            _LOGGER.warning(
-                "%s: no single enabled entity for %s, running without it",
-                _device_label(device),
-                role,
-            )
-
+    entity_ids = _profile_entity_ids(hass, device, profile)
     if ROLE_CLIMATE not in entity_ids:
         raise TrvResolveError(
             "climate_missing",
@@ -410,3 +396,24 @@ def resolve_trv(
         load_estimate_entity=entity_ids.get(ROLE_LOAD_ESTIMATE),
         load_room_mean_entity=entity_ids.get(ROLE_LOAD_ROOM_MEAN),
     )
+
+
+def _profile_entity_ids(
+    hass: HomeAssistant, device: dr.DeviceEntry, profile: DeviceProfile
+) -> dict[str, str]:
+    """Entity per profile role, for each role the device has exactly one of."""
+    registry_entries = er.async_entries_for_device(er.async_get(hass), device.id)
+    entity_ids: dict[str, str] = {}
+    for role, match in profile.entities.items():
+        candidates = [
+            entry.entity_id for entry in registry_entries if match.matches(entry)
+        ]
+        if len(candidates) == 1:
+            entity_ids[role] = candidates[0]
+        elif role != ROLE_CLIMATE:
+            _LOGGER.warning(
+                "%s: no single enabled entity for %s, running without it",
+                _device_label(device),
+                role,
+            )
+    return entity_ids

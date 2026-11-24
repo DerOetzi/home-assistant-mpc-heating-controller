@@ -373,13 +373,7 @@ class FlowChargeDetector:
         tank_charging: bool,
         now_ts: float,
     ) -> None:
-        tank_started = tank_charging and not self._tank_was_charging
-        self._tank_was_charging = tank_charging
-        if (
-            self._flow_end_ts is not None
-            and now_ts - self._flow_end_ts < FLOW_CHARGE_TANK_QUIET_S
-        ):
-            tank_started = False
+        tank_started = self._tank_started(tank_charging, now_ts)
         if flow_c is None or aim_c is None:
             self.decisive = False
             return
@@ -390,10 +384,28 @@ class FlowChargeDetector:
                 self.charging = True
                 self._flow_high = high
             return
+        self._follow_charge(
+            high, flow_c < aim_c + FLOW_CHARGE_END_K, tank_charging, now_ts
+        )
+
+    def _tank_started(self, tank_charging: bool, now_ts: float) -> bool:
+        """The tank detector just started a charge the flow has not ended
+        shortly before."""
+        started = tank_charging and not self._tank_was_charging
+        self._tank_was_charging = tank_charging
+        return started and not (
+            self._flow_end_ts is not None
+            and now_ts - self._flow_end_ts < FLOW_CHARGE_TANK_QUIET_S
+        )
+
+    def _follow_charge(
+        self, high: bool, back_low: bool, tank_charging: bool, now_ts: float
+    ) -> None:
+        """End a running charge: by the flow once it was high, else by the tank."""
         if high:
             self._flow_high = True
         elif self._flow_high:
-            if flow_c < aim_c + FLOW_CHARGE_END_K:
+            if back_low:
                 self.charging = False
                 self._flow_end_ts = now_ts
         elif not tank_charging:

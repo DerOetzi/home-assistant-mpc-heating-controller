@@ -126,24 +126,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingConfigEntry) -> b
 
     profiles = await async_get_profiles(hass)
     hub = HeatingHub(hass, entry)
-    rooms: dict[str, HeatingRoomCoordinator] = hass.data.setdefault(DOMAIN, {})
-    for subentry in entry.subentries.values():
-        if subentry.subentry_type != SUBENTRY_TYPE_ROOM:
-            continue
-        if _room_device_disabled(hass, entry, subentry.subentry_id):
-            hub.disabled_rooms[subentry.subentry_id] = subentry.data[CONF_ROOM_NAME]
-            continue
-        coordinator = await _async_setup_room(hass, entry, subentry, profiles)
-        if coordinator is not None:
-            rooms[subentry.subentry_id] = coordinator
-            hub.add_room(coordinator)
-    for subentry in entry.subentries.values():
-        if subentry.subentry_type == SUBENTRY_TYPE_FLOW:
-            hub.set_flow(FlowDevice(hass, hub, subentry))
-        elif subentry.subentry_type == SUBENTRY_TYPE_HOT_WATER:
-            hot_water = HotWaterDevice(hass, hub, subentry)
-            await hot_water.async_setup()
-            hub.set_hot_water(hot_water)
+    await _async_setup_rooms(hass, entry, hub, profiles)
+    await _async_setup_house_devices(hass, entry, hub)
     await hub.async_setup()
     entry.runtime_data = hub
 
@@ -155,6 +139,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: HeatingConfigEntry) -> b
     _async_register_services(hass)
 
     return True
+
+
+async def _async_setup_rooms(
+    hass: HomeAssistant,
+    entry: HeatingConfigEntry,
+    hub: HeatingHub,
+    profiles: tuple[DeviceProfile, ...],
+) -> None:
+    """One coordinator per enabled room; disabled rooms only by name."""
+    rooms: dict[str, HeatingRoomCoordinator] = hass.data.setdefault(DOMAIN, {})
+    for subentry in entry.subentries.values():
+        if subentry.subentry_type != SUBENTRY_TYPE_ROOM:
+            continue
+        if _room_device_disabled(hass, entry, subentry.subentry_id):
+            hub.disabled_rooms[subentry.subentry_id] = subentry.data[CONF_ROOM_NAME]
+            continue
+        coordinator = await _async_setup_room(hass, entry, subentry, profiles)
+        if coordinator is not None:
+            rooms[subentry.subentry_id] = coordinator
+            hub.add_room(coordinator)
+
+
+async def _async_setup_house_devices(
+    hass: HomeAssistant, entry: HeatingConfigEntry, hub: HeatingHub
+) -> None:
+    """The flow and hot-water devices, at most one each."""
+    for subentry in entry.subentries.values():
+        if subentry.subentry_type == SUBENTRY_TYPE_FLOW:
+            hub.set_flow(FlowDevice(hass, hub, subentry))
+        elif subentry.subentry_type == SUBENTRY_TYPE_HOT_WATER:
+            hot_water = HotWaterDevice(hass, hub, subentry)
+            await hot_water.async_setup()
+            hub.set_hot_water(hot_water)
 
 
 def _room_device_disabled(

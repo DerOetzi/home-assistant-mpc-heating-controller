@@ -22,6 +22,7 @@ from .const import (
 )
 from .control.flow import (
     ActuatorMode,
+    FeedbackBounds,
     FlowControlConfig,
     FlowController,
     FlowDecision,
@@ -176,28 +177,9 @@ class FlowDevice(Observable):
         hub = self.hub
         feedback = hub.flow_feedback
         correction = hub.flow_correction
-        inputs = FlowInputs(
-            outdoor_c=hub.outdoor_temperature_c,
-            feedforward_flow_c=hub.lead_feedforward_flow.value_c,
-            charge_flow_c=hub.charge_flow_c,
-            actual=actual,
-            heating_on=hub.heating_on,
-            reachable=hub.heat_source_reachable,
-            feedback_k=feedback.feedback_k,
-            boost_flow_c=hub.lead_boost_flow.value_c,
-            design_flow_c=hub.design_flow_c,
-            correction_k=correction.correction_k
-            if self.mode is ActuatorMode.OFFSET
-            else 0.0,
-        )
+        inputs = self._inputs(actual)
         bounds = self.controller.bounds(inputs, self.curve)
-        limit: TargetLimit | None = None
-        if bounds is not None and inputs.feedforward_flow_c is not None:
-            lifted = inputs.feedforward_flow_c + inputs.feedback_k
-            if lifted <= bounds.lower_c:
-                limit = TargetLimit.LOWER
-            elif lifted >= bounds.upper_c:
-                limit = TargetLimit.UPPER
+        limit = _target_limit(inputs, bounds)
         freeze = self._freeze_reason(inputs, bounds is None)
         feedback.update(
             hub.feedback_samples(),
@@ -232,6 +214,23 @@ class FlowDevice(Observable):
             decision.write is not None and not written
         )
         self._notify_listeners()
+
+    def _inputs(self, actual: float | None) -> FlowInputs:
+        hub = self.hub
+        return FlowInputs(
+            outdoor_c=hub.outdoor_temperature_c,
+            feedforward_flow_c=hub.lead_feedforward_flow.value_c,
+            charge_flow_c=hub.charge_flow_c,
+            actual=actual,
+            heating_on=hub.heating_on,
+            reachable=hub.heat_source_reachable,
+            feedback_k=hub.flow_feedback.feedback_k,
+            boost_flow_c=hub.lead_boost_flow.value_c,
+            design_flow_c=hub.design_flow_c,
+            correction_k=hub.flow_correction.correction_k
+            if self.mode is ActuatorMode.OFFSET
+            else 0.0,
+        )
 
     def _freeze_reason(
         self, inputs: FlowInputs, no_feedforward: bool
@@ -305,3 +304,17 @@ class FlowDevice(Observable):
         return True
 
     # --- Listeners ---------------------------------------------------------
+
+
+def _target_limit(
+    inputs: FlowInputs, bounds: FeedbackBounds | None
+) -> TargetLimit | None:
+    """Which bound the feedforward plus feedback already reaches, if any."""
+    if bounds is None or inputs.feedforward_flow_c is None:
+        return None
+    lifted = inputs.feedforward_flow_c + inputs.feedback_k
+    if lifted <= bounds.lower_c:
+        return TargetLimit.LOWER
+    if lifted >= bounds.upper_c:
+        return TargetLimit.UPPER
+    return None

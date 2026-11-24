@@ -45,6 +45,29 @@ def estimate_stretch(
     info: CapacityStretchInfo,
 ) -> CapacityOutcome | None:
     """Capacity factor the stretch showed, into info; a rejection or None."""
+    rejection = _stretch_rejection(ctx, stretch)
+    if rejection is not None:
+        return rejection
+    room_delta_c = stretch[-1].room_temperature_c - stretch[0].room_temperature_c
+    net_j, saturated_s = _net_energy_j(ctx, stretch)
+    info.room_delta_c = room_delta_c
+    # Heating up mostly runs with the valve fully open; the share is kept
+    # for diagnostics rather than discarding those stretches, which would
+    # leave almost nothing to learn from.
+    info.saturated_share = saturated_s / (stretch[-1].timestamp - stretch[0].timestamp)
+    if net_j == 0 or (net_j > 0) != (room_delta_c > 0):
+        return CapacityOutcome.IMPLAUSIBLE
+    estimate = (net_j / room_delta_c) / ctx.capacity_model.base_capacity_j_per_k
+    info.estimate_factor = estimate
+    if not JUMP_MIN_ESTIMATE_FACTOR <= estimate <= JUMP_MAX_ESTIMATE_FACTOR:
+        return CapacityOutcome.IMPLAUSIBLE
+    return None
+
+
+def _stretch_rejection(
+    ctx: LearningContext, stretch: list[LearnerHistoryEntry]
+) -> CapacityOutcome | None:
+    """Why the stretch cannot be balanced at all; None if it can."""
     if len(stretch) < 2 or stretch[-1].timestamp - stretch[0].timestamp < JUMP_MIN_S:
         return CapacityOutcome.TOO_SHORT
     if any(
@@ -61,7 +84,13 @@ def estimate_stretch(
         return CapacityOutcome.TOO_SMALL
     if not ctx.sun_free(stretch[0].timestamp, stretch[-1].timestamp):
         return CapacityOutcome.OUTSIDE_WINDOW
+    return None
 
+
+def _net_energy_j(
+    ctx: LearningContext, stretch: list[LearnerHistoryEntry]
+) -> tuple[float, float]:
+    """Heat stored over the stretch and the seconds with a saturated valve."""
     ua_w_per_k = ctx.loss_model.effective_ua_w_per_k
     net_j = 0.0
     saturated_s = 0.0
@@ -74,18 +103,13 @@ def estimate_stretch(
         ) * duration_s
         if previous.valve_saturated:
             saturated_s += duration_s
-    info.room_delta_c = room_delta_c
-    # Heating up mostly runs with the valve fully open; the share is kept
-    # for diagnostics rather than discarding those stretches, which would
-    # leave almost nothing to learn from.
-    info.saturated_share = saturated_s / (stretch[-1].timestamp - stretch[0].timestamp)
-    if net_j == 0 or (net_j > 0) != (room_delta_c > 0):
-        return CapacityOutcome.IMPLAUSIBLE
-    estimate = (net_j / room_delta_c) / ctx.capacity_model.base_capacity_j_per_k
-    info.estimate_factor = estimate
-    if not JUMP_MIN_ESTIMATE_FACTOR <= estimate <= JUMP_MAX_ESTIMATE_FACTOR:
-        return CapacityOutcome.IMPLAUSIBLE
-    return None
+    return net_j, saturated_s
+
+
+def _settled(kind: str, room_c: float, target_c: float) -> bool:
+    if kind == HEAT_UP:
+        return room_c >= target_c - JUMP_SETTLED_C
+    return room_c <= target_c + JUMP_SETTLED_C
 
 
 class JumpLearner:
@@ -148,52 +172,46 @@ class JumpLearner:
             self._set_running(kind, start_ts)
             return None
 
-        end: int | None = None
-        for index in range(start, len(history)):
-            entry = history[index]
-            flag_outcome = invalid_entry_outcome(entry)
-            if flag_outcome is not None:
-                if index == start:
-                    self.done_ts = jump.timestamp
-                    self.info.begin(kind, entry.timestamp, None)
-                    info.outcome = flag_outcome
-                    return flag_outcome
-                end = index - 1
-                break
-            if (
-                entry.target_temperature_c is None
-                or abs(entry.target_temperature_c - target_c) >= JUMP_TARGET_CHANGE_C
-            ):
-                end = index - 1
-                break
-            if (
-                kind == HEAT_UP
-                and entry.room_temperature_c >= target_c - JUMP_SETTLED_C
-            ):
-                end = index
-                break
-            if (
-                kind == COOL_DOWN
-                and entry.room_temperature_c <= target_c + JUMP_SETTLED_C
-            ):
-                end = index
-                break
-            if entry.timestamp - history[start].timestamp >= JUMP_MAX_S:
-                end = index
-                break
+        flag_outcome = invalid_entry_outcome(history[start])
+        if flag_outcome is not None:
+            self.done_ts = jump.timestamp
+            info.begin(kind, history[start].timestamp, None)
+            info.outcome = flag_outcome
+            return flag_outcome
+
+        end = self._stretch_end_index(kind, target_c, start)
         if end is None:
             self._set_running(kind, history[start].timestamp)
             return None
 
         self.done_ts = jump.timestamp
         stretch = history[start : end + 1]
-        self.info.begin(
+        info.begin(
             kind,
             history[start].timestamp,
             stretch[-1].timestamp if stretch else None,
         )
         info.outcome = self._judge_stretch(kind, stretch)
         return info.outcome
+
+    def _stretch_end_index(self, kind: str, target_c: float, start: int) -> int | None:
+        """Last entry of the stretch from start; None while it still runs."""
+        history = self._ctx.history
+        start_ts = history[start].timestamp
+        for index in range(start, len(history)):
+            entry = history[index]
+            if (
+                invalid_entry_outcome(entry) is not None
+                or entry.target_temperature_c is None
+                or abs(entry.target_temperature_c - target_c) >= JUMP_TARGET_CHANGE_C
+            ):
+                return index - 1
+            if (
+                _settled(kind, entry.room_temperature_c, target_c)
+                or entry.timestamp - start_ts >= JUMP_MAX_S
+            ):
+                return index
+        return None
 
     def _set_running(self, kind: str, start_ts: float) -> None:
         self.info.begin(kind, start_ts, None)
