@@ -216,7 +216,7 @@ translation key.
   **feedback**: a bar from the step down (left, blue) to the step up (right, red; the night's
   times at night, then a moon beside the heading) with the count. A step's lock hatches
   its own side of the bar and shows a lock with the time left in place of the step. Then
-  the room with the widest open valve and its deficit, freeze and catch-up, the last change, the would-be steps per room, and a
+  the room with the widest open valve and its deficit, freeze and catch-up, the last change, the time towards the next step back to zero (while the feedback is off zero, against its 4 h or at night 6 h), the would-be steps per room, and a
   reset button (asks first). Under **control**: curve + measured correction = base (what the
   heat source gives without offset), target − base = need, rounded up to the offset. The
   offset is green when the heat source has it, else yellow with the actual offset in its

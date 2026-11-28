@@ -154,6 +154,8 @@ class FlowFeedbackSensor(FlowEntity, SensorEntity):
                 else None
             ),
             "catch_up_reason": str(feedback.catch_up_reason) if catching_up else None,
+            "leak_min": round(feedback.leak_s / 60),
+            "leak_at_min": round(feedback.leak_after_s / 60),
             "room_variant_up": feedback.variant_up,
             "room_variant_down": feedback.variant_down,
             "last_change": None

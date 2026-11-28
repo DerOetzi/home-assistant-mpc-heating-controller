@@ -618,8 +618,8 @@ rooms in their surplus buffer).
 `sensor.<room>_supply` judges the flow on the room's valves with the same rules as the
 flow feedback: **short** (`undersupplied`) when the feedback would step up for this room
 (highest valve ≥ 98 % and the room at least 0.2 K short, or > 90 % and at least 0.3 K
-short), **at limit** (`supplied`) when it holds the flow (≥ 80 % and at most 0.1 K
-above target; deficits rounded to 0.1 K as for the feedback), **headroom** (`oversupplied`) otherwise: this room would get by on less
+short), **at limit** (`supplied`) when it holds the flow (≥ 90 % and at most at its
+target; deficits rounded to 0.1 K as for the feedback), **headroom** (`oversupplied`) otherwise: this room would get by on less
 flow. The flow follows the neediest lead room, so headroom is the usual state of most
 rooms, not a fault. It is **not rated** while the valves say nothing about the
 flow; the `reason` attribute names why: window open, frost protection, no heat (heat
@@ -677,9 +677,10 @@ works out:
       still the TRV's own control band. The deficit is compared rounded half up to
       0.1 K, the room sensors' resolution: 0.14 K short counts as 0.1, 0.15 K as 0.2. The room value is the room sensor only; while it is
       stale the TRVs' reading does not stand in, the deficit is unknown.
-    - else a room **holds** the flow (80 % or more open, rounded at most 0.1 K above its
-      target): back towards 0. A room rounded 0.2 K or more above its target does not hold: its
-      valve is open on the TRV's own, colder reading, more flow would not help it.
+    - else a room **holds** the flow (90 % or more open, rounded at most at its
+      target): back towards 0. A room rounded 0.1 K or more above its target does not hold:
+      its valve is open on the TRV's own reading, more flow would not help it; nor does one
+      below 90 %, which still has valve to spare.
     - else a room below 80 % open and at its target (rounded at most 0.1 K above
       it and less than 0.1 K below): up. A room 0.1 K or more short with its valve shut does not count
       down: an exposed TRV on its own, warmer reading closes while the room is
@@ -697,6 +698,13 @@ works out:
       decides. A short want after a long surplus only takes minutes off, a
       long surplus first has to be worked off before a step up. Without any usable room
       the count waits. It starts at 0 after a restart.
+  - **Return to zero**: a count ratchets — one room wanting more steps up, one room holding
+    blocks every step down, and a TRV that keeps its valve open for reasons of its own does
+    either. So after 4 hours (at night 6) without any room wanting more, a positive value
+    takes one step down; a negative one takes one step up after as long without a room
+    that says the flow can drop. A room wanting more (or, below 0, one saying lower)
+    pauses that time, any step starts it over; a freeze stops it. A room really short pulls
+    the value back up through the count. Not stored: it starts at 0 after a restart.
   - Limited to ±3 K. No step that the target limits would cut off anyway.
   - **Frozen** (no step, no counting, what the count has towards up is dropped: after a
     hot-water charge or defrost the valves first catch up on the pause) while *Write
@@ -726,6 +734,8 @@ works out:
   `night`, `locked_direction` (+1 / −1 while a step's lock holds that direction back, else 0),
   `locked_until` (when that lock ends),
   `catch_up_until` / `catch_up_reason` (end and cause of a running catch-up, else empty),
+  `leak_min` / `leak_at_min` (time run towards the next step back to zero, and where it
+  steps, the night's value at night),
   `room_variant_up` / `room_variant_down` (steps a count per room would have taken: up when
   one room's count reaches −30, down when every rated lead room's count is at +60; kept across restarts),
   `last_change`. The lead is the room

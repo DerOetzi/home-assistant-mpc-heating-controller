@@ -974,7 +974,8 @@ fadd('sensor.soll', 'flow_target', 41.5, {source: 'lead', room: 'Rebekka', feedf
   boost_flow_c: null, reason: ''});
 fadd('sensor.fb', 'flow_feedback', 3.0, {flow_timer_min: -22, step_up_at_min: -30, step_down_at_min: 60,
   lead_room: 'Rebekka', lead_demand_pct: 100, lead_deficit_c: 0.29, locked_direction: 1, night: false,
-  frozen: false, last_change: '2026-11-22T10:41:11+00:00', room_variant_up: 59, room_variant_down: 8});
+  frozen: false, last_change: '2026-11-22T10:41:11+00:00', room_variant_up: 59, room_variant_down: 8,
+  leak_min: 35, leak_at_min: 240});
 fadd('sensor.kurve', 'flow_curve', 39.1);
 fadd('sensor.ist', 'flow_actuator_actual', 2);
 fadd('sensor.stell', 'flow_actuator_target', 3, {last_error: null});
@@ -1013,6 +1014,11 @@ def test_flow_card_renders(ctx) -> None:
     ctx.eval("delete " + FS + ".rooms")
     assert "Korrektur pausiert: Wärmeerzeuger stellt ein" in html
     assert "0.29 K unter Soll" in html
+    # The return to zero shows while the feedback is off zero.
+    assert ">Rückkehr zu 0</span> 35 von 240 min" in html
+    ctx.eval("FLOW_HASS.states['sensor.fb'].state = '0'")
+    assert "Rückkehr zu 0" not in ctx.eval("renderFlow()")
+    ctx.eval("FLOW_HASS.states['sensor.fb'].state = '3'")
     # The lock up hatches the right side and replaces its step text.
     assert (
         '<span class="lock" style="left:' + str(60 / 90 * 100) + '%;right:0">' in html

@@ -430,6 +430,19 @@ export class HeatingControllerFlowCard extends HTMLElement {
       );
     }
     facts.push(this._fact(feedback, t(hass, "flow_last_change"), this._ago(attrs.last_change)));
+    // Time without a room against it towards the next step back to zero.
+    if (attrs.leak_at_min != null && Number(feedback.state) !== 0) {
+      facts.push(
+        this._fact(
+          feedback,
+          t(hass, "flow_leak"),
+          t(hass, "flow_leak_value", {
+            value: this._n(attrs.leak_min ?? 0, 0),
+            at: this._n(attrs.leak_at_min, 0),
+          })
+        )
+      );
+    }
     if (attrs.room_variant_up != null) {
       facts.push(
         this._fact(

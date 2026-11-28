@@ -3,7 +3,9 @@ from heating_controller.control.flow_feedback import (
     CATCH_UP_MAX_S,
     DOWN_AFTER_S,
     FEEDBACK_LIMIT_K,
+    LEAK_AFTER_S,
     NIGHT_DOWN_AFTER_S,
+    NIGHT_LEAK_AFTER_S,
     NIGHT_STEP_LOCK_DOWN_S,
     NIGHT_STEP_LOCK_UP_S,
     STEP_LOCK_DOWN_S,
@@ -160,7 +162,7 @@ def test_a_holding_room_brings_the_count_back_to_zero() -> None:
         end = _run(feedback, [_sample(demand, deficit=deficit)], T0, 600)
         assert feedback.count_s != 0.0
 
-        _run(feedback, [_sample(85, deficit=0.0)], end + 60, 3600)
+        _run(feedback, [_sample(92, deficit=0.0)], end + 60, 3600)
         assert feedback.count_s == 0.0
         assert feedback.feedback_k == 0.0
 
@@ -177,7 +179,7 @@ def test_down_uses_the_highest_room() -> None:
     feedback = _ready()
     _run(
         feedback,
-        [_sample(60, deficit=0.0), _sample(85, room="B")],
+        [_sample(60, deficit=0.0), _sample(92, deficit=0.0, room="B")],
         T0,
         DOWN_AFTER_S + 60,
     )
@@ -198,12 +200,42 @@ def test_open_valve_above_target_does_not_hold_the_flow() -> None:
     assert feedback.feedback_k == -1.0
 
 
-def test_open_valve_up_to_a_tenth_above_target_holds_the_flow() -> None:
-    for deficit in (-0.05, -0.1, -0.14):
+def test_open_valve_at_most_at_target_holds_the_flow() -> None:
+    for deficit in (0.0, 0.04, 0.1):
         feedback = _ready()
-        _run(feedback, [_sample(91, deficit=deficit)], T0, DOWN_AFTER_S + 60)
+        _run(
+            feedback,
+            [_sample(91, deficit=deficit), _sample(60, deficit=0.0, room="B")],
+            T0,
+            DOWN_AFTER_S + 60,
+        )
 
         assert feedback.feedback_k == 0.0
+
+
+def test_open_valve_a_tenth_above_target_does_not_hold() -> None:
+    for deficit in (-0.05, -0.1, -0.14):
+        feedback = _ready()
+        _run(
+            feedback,
+            [_sample(91, deficit=deficit), _sample(60, deficit=0.0, room="B")],
+            T0,
+            DOWN_AFTER_S,
+        )
+
+        assert feedback.feedback_k == -1.0
+
+
+def test_a_valve_below_ninety_does_not_hold_the_flow() -> None:
+    feedback = _ready()
+    _run(
+        feedback,
+        [_sample(85, deficit=0.0), _sample(60, deficit=0.0, room="B")],
+        T0,
+        DOWN_AFTER_S,
+    )
+
+    assert feedback.feedback_k == -1.0
 
 
 def test_open_valve_rounded_beyond_a_tenth_above_target_does_not_hold() -> None:
@@ -346,7 +378,7 @@ def _want(room: str) -> DemandSample:
 
 
 def _hold(room: str) -> DemandSample:
-    return _sample(85, 0.0, room)
+    return _sample(92, 0.0, room)
 
 
 def _reserve(room: str) -> DemandSample:
@@ -647,3 +679,86 @@ def test_at_night_a_step_up_is_not_held_back_by_a_day_step_down() -> None:
 
     _run(feedback, [_sample(99)], end + 60, UP_AFTER_S, night=True)
     assert feedback.feedback_k == 0.0
+
+
+def _raised(value: float = 3.0) -> FlowFeedback:
+    feedback = _ready()
+    feedback.restore({"feedback_k": value})
+    return feedback
+
+
+def test_without_a_room_wanting_more_it_returns_to_zero() -> None:
+    feedback = _raised()
+    # The first tick counts the minute since the idle run before it.
+    end = _run(feedback, [_hold("A")], T0, LEAK_AFTER_S - 120)
+    assert feedback.feedback_k == 3.0
+    assert feedback.leak_s == LEAK_AFTER_S - 60
+
+    feedback.update([_hold("A")], STEP, None, end + 60)
+    assert feedback.feedback_k == 2.0
+    assert feedback.leak_s == 0.0
+    assert feedback.last_step_sign == -1
+
+
+def test_return_to_zero_takes_longer_at_night() -> None:
+    feedback = _raised()
+    _run(feedback, [_hold("A")], T0, LEAK_AFTER_S, night=True)
+    assert feedback.feedback_k == 3.0
+
+    _run(
+        feedback,
+        [_hold("A")],
+        T0 + LEAK_AFTER_S + 60,
+        NIGHT_LEAK_AFTER_S - LEAK_AFTER_S - 60,
+        night=True,
+    )
+    assert feedback.feedback_k == 2.0
+
+
+def test_a_room_wanting_more_pauses_the_return() -> None:
+    feedback = _raised()
+    end = _run(feedback, [_hold("A")], T0, LEAK_AFTER_S - 600)
+    end = _run(feedback, [_sample(95, deficit=0.3)], end + 60, 10 * 60)
+    assert feedback.leak_s == LEAK_AFTER_S - 540
+    assert feedback.feedback_k == 3.0
+
+    _run(feedback, [_hold("A")], end + 60, 600)
+    assert feedback.feedback_k == 2.0
+
+
+def test_a_step_starts_the_return_over() -> None:
+    feedback = _raised(1.0)
+    end = _run(feedback, [_hold("A")], T0, LEAK_AFTER_S - 600)
+    _run(feedback, [_sample(99, deficit=0.5)], end + 60, UP_AFTER_S)
+    assert feedback.feedback_k == 2.0
+    assert feedback.leak_s < UP_AFTER_S
+
+
+def test_the_return_stops_at_zero() -> None:
+    feedback = _raised(0.5)
+    _run(feedback, [_hold("A")], T0, 3 * LEAK_AFTER_S)
+    assert feedback.feedback_k == 0.0
+    assert feedback.leak_s == 0.0
+
+
+def test_a_negative_value_returns_up_unless_a_room_says_lower() -> None:
+    feedback = _raised(-2.0)
+    _run(feedback, [_reserve("A")], T0, LEAK_AFTER_S + 60)
+    assert feedback.feedback_k <= -2.0
+
+    feedback = _raised(-2.0)
+    _run(feedback, [_hold("A")], T0, LEAK_AFTER_S)
+    assert feedback.feedback_k == -1.0
+
+
+def test_no_return_against_a_target_limit() -> None:
+    feedback = _raised()
+    _run(feedback, [_hold("A")], T0, LEAK_AFTER_S, limit=TargetLimit.LOWER)
+    assert feedback.feedback_k == 3.0
+
+
+def test_frozen_does_not_return() -> None:
+    feedback = _raised()
+    _run(feedback, [_hold("A")], T0, 2 * LEAK_AFTER_S, frozen=FeedbackFreeze.HOT_WATER)
+    assert feedback.feedback_k == 3.0
+    assert feedback.leak_s == 0.0

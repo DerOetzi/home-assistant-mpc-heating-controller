@@ -1726,7 +1726,9 @@ async def test_feedback_sample_needs_a_known_demand(hass: HomeAssistant) -> None
     ("valve_pct", "room_c", "expected"),
     [
         ("100", "18.5", RoomSupply.UNDERSUPPLIED),
-        ("85", "22.0", RoomSupply.SUPPLIED),
+        ("92", "22.0", RoomSupply.SUPPLIED),
+        # Open, but below ninety: not at the limit.
+        ("85", "22.0", RoomSupply.OVERSUPPLIED),
         # Open, but well above the target: the TRV's own reading, not the flow.
         ("95", "22.5", RoomSupply.OVERSUPPLIED),
         ("30", "22.0", RoomSupply.OVERSUPPLIED),

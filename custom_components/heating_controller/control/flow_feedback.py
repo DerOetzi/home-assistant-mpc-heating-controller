@@ -4,8 +4,9 @@ The feedforward (hold flow from the learned room model) says what the rooms
 should need; the valves say what they do need. One count adds up what they
 say: a room near fully open and clearly below its target counts it down,
 the faster the further it is short; a room well below open and at its target
-(at most a tenth above, less than a tenth below) counts it up; a room that holds the flow
-brings it back towards zero. A room above its target (cooking, sun) or short
+(at most a tenth above, less than a tenth below) counts it up; a room nearly
+fully open and at most at its target holds the flow and brings the count back
+towards zero. A room above its target (cooking, sun) or short
 of it with a shut valve counts neither way. Half an
 hour down means too little flow: one step up; an hour up (at night an hour
 and a half) means the flow can drop: one step down. The radiators and rooms
@@ -16,6 +17,14 @@ longer down: a room short at night cools further until the morning, a step
 down at night has little use. The sum of the steps,
 feedback_k, is added to the feedforward. It only moves while what was
 decided also reaches the heat source and the heat source heats.
+
+A count ratchets: one room wanting more is enough to step up, one room
+holding is enough to block every step down, and a TRV that keeps its valve
+open for reasons of its own does either. So feedback_k also returns to zero
+on its own: after LEAK_AFTER_S (at night NIGHT_LEAK_AFTER_S) in which no room
+wanted more, a positive value takes one step down; a negative one takes a
+step up after as long without a room that says the flow can drop. A room
+really short pulls it back up through the count.
 
 After a pause of the room heating (hot water charge, defrost) the rooms
 catch up on what cooled off: for as long as the pause lasted, at most
@@ -53,9 +62,11 @@ UP_RATE_DEFICIT_C = 0.2
 UP_RATE_MAX = 3.0
 # Down: no lead room holds the flow and one is below this and at its target;
 # the count goes up, a step at DOWN_AFTER_S (at night
-# NIGHT_DOWN_AFTER_S). A room this far open holds it: the count goes back to
-# zero.
+# NIGHT_DOWN_AFTER_S).
 DEMAND_DOWN_PCT = 80.0
+# A room this far open and at most at its target (rounded) holds the flow:
+# the count goes back to zero.
+DEMAND_HOLD_PCT = 90.0
 # A room this far short of its target or further does not count down, however
 # far its valve is shut: a TRV on its own reading can close while the room
 # is still short.
@@ -68,9 +79,12 @@ STEP_LOCK_UP_S = 60 * 60
 STEP_LOCK_DOWN_S = 90 * 60
 NIGHT_STEP_LOCK_UP_S = 45 * 60
 NIGHT_STEP_LOCK_DOWN_S = 120 * 60
-# A room more than this above its target holds the flow neither up nor down:
-# its open valve comes from the TRV's own reading, more flow would not help it.
+# A room with a low valve more than this above its target does not count
+# down: gains (cooking, sun) would lower the flow.
 OVER_TARGET_C = 0.1
+# Return to zero: this long without a room against it, one step towards zero.
+LEAK_AFTER_S = 4 * 3600
+NIGHT_LEAK_AFTER_S = 6 * 3600
 # A longer gap between two updates (restart, stalled loop) counts as this.
 MAX_TICK_S = 300.0
 
@@ -127,6 +141,9 @@ class FlowFeedback:
         # towards up: the valves first answer the flow that runs now. While
         # a step's lock runs it stays at zero on that step's side.
         self._count_s = 0.0
+        # Time towards the next step back to zero. Not stored, like the
+        # count; any step starts it over.
+        self._leak_s = 0.0
         # Comparison only: the count per room, its would-be steps up, and
         # the steps a count per room would have taken. Not stored: like the
         # count it starts over at a start; the step tallies are stored.
@@ -215,6 +232,41 @@ class FlowFeedback:
             self._room_count_s.clear()
             if limit is not TargetLimit.LOWER:
                 self._step(-step_k, now_ts)
+        self._advance_leak(bool(wanting), bool(lowering), step_k, dt, now_ts, limit)
+
+    def _advance_leak(  # noqa: PLR0913
+        self,
+        wanting: bool,
+        lowering: bool,
+        step_k: float,
+        dt: float,
+        now_ts: float,
+        limit: TargetLimit | None,
+    ) -> None:
+        """Run the return to zero; a room against it pauses it."""
+        if self.feedback_k == 0.0:
+            self._leak_s = 0.0
+            return
+        sign = -1 if self.feedback_k > 0 else 1
+        if wanting if sign < 0 else lowering:
+            return
+        self._leak_s += dt
+        if self._leak_s < self.leak_after_s:
+            return
+        self._leak_s = 0.0
+        if limit is (TargetLimit.LOWER if sign < 0 else TargetLimit.UPPER):
+            return
+        self._step(sign * min(step_k, abs(self.feedback_k)), now_ts)
+
+    @property
+    def leak_after_s(self) -> float:
+        """How long without a room against it until a step back to zero."""
+        return float(NIGHT_LEAK_AFTER_S if self.night else LEAK_AFTER_S)
+
+    @property
+    def leak_s(self) -> float:
+        """Time run towards the next step back to zero."""
+        return self._leak_s
 
     @property
     def down_after_s(self) -> float:
@@ -295,6 +347,7 @@ class FlowFeedback:
         )
         if value == self.feedback_k:
             return
+        self._leak_s = 0.0
         self.feedback_k = value
         self.last_change_ts = now_ts
         self.last_step_sign = 1 if delta_k > 0 else -1
@@ -308,6 +361,7 @@ class FlowFeedback:
         self.last_step_ts = None
         self._last_ts = now_ts
         self._count_s = 0.0
+        self._leak_s = 0.0
         self._room_count_s.clear()
         self._pause_since_ts = None
         self._pause_reason = None
@@ -425,7 +479,7 @@ def lowers(sample: DemandSample) -> bool:
 
 
 def holds(sample: DemandSample) -> bool:
-    """Open enough to keep the flow from going down."""
-    if sample.demand_pct < DEMAND_DOWN_PCT:
+    """Nearly fully open and at most at its target: keeps the flow up."""
+    if sample.demand_pct < DEMAND_HOLD_PCT:
         return False
-    return _not_above_target(sample)
+    return sample.deficit_c is None or rounded_deficit_c(sample.deficit_c) >= 0.0

@@ -77,6 +77,8 @@ Ergebnis: Tabelle je Raum (bestimmt ja/nein je Term, Wert, auffällig) + Empfehl
 
 Offen: Vor Neustart A stieg die Nacht-Heizleistung kaum mit der Temperaturdifferenz (kälteste Nächte mit der niedrigsten Leistung), danach etwa doppelt so viel je K. Klären, ob Ventilfahrweise der alten Ansteuerung oder Leistungsschätzung aus Ventilöffnung. Betrifft auch UA-Faktor vor A.
 
+Offen: UA-Ziel hängt an ΔT. Nacht-Heizleistung je Raum ≈ `k · (ΔT − ΔT0)`, ΔT0 3–9 K (Gewinne im Faktor): Ziel steigt mit Kälte, Faktor läuft Witterung hinterher, Haltevorlauf bei Kälte zu tief, Rückkopplung trägt Rest. Nacht 24.11. (−5 °C) fällt heraus: gleiche Leistung wie bei +0,8 °C, Ventile weiter zu; macht Regression unbrauchbar (G negativ und „bestimmt“ u. a. Esszimmer, Flur EG, Schlafzimmer). Vor 4b: Ausreißer aus Nacht-Regression halten. Befund 24.11.: Vorlauf-Mittel, Abtauen, WW-Ladungen wie 23.11.; Außen fiel in der Nacht von −2 auf −6 °C (Daikin, Netatmo +1 → −3,4) nach mildem Sonnentag, 23.11. Nacht konstant 0…+1. Vermutung: Hülle hinkt Außentemperatur Stunden hinterher, Bilanz mit momentaner Außentemperatur überschätzt Verlust bei fallender Außentemperatur → Ziel zu tief. Kandidaten: Nächte mit Außen-Trend > ~3 K aus UA-Schritt und Regression nehmen, oder gedämpfte Außentemperatur (Zeitkonstante Hülle) in Bilanz.
+
 ### 4b. Gewinne im Lerner
 
 Vorher `MPC/models/gains.py` absichern:
